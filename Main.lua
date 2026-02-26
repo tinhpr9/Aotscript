@@ -67,7 +67,7 @@ else
 	cg("Interface.Missions.Missions.Main.Info.Main.Buttons.Creation_Missions",2)
 	cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",1)
 	local mb="Interface.Missions.Info.Main.Info.Modifiers.Options."
-	for _,m in ipairs({"Nightmare","Injury Prone","Fog","Chronic Injuries","No Talents","No Skills","No Perks"}) do
+	for _,m in ipairs({"Nightmare","Injury Prone","Fog","Chronic Injuries","Oddball","No Talents","No Skills","No Perks"}) do
 		cg(mb..m..".Selected",1)
 	end
 	cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",2)
