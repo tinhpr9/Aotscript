@@ -40,7 +40,7 @@ cg("Interface.Topbar.Main.Categories.Equipment",2)
 
 local lvl=tonumber(wfc("Interface","Gear_Up","HUD","Level","Title").Text:match("%d+")) or 0
 local rk=(wfc("Interface","Equipment","Categories","Upgrades","Main","Title").Text:match("%[(%a)") or ""):upper()
-local fw=({E=0,D=1,C=2,B=3,A=4})[rk] or 4
+local fw=({E=0,D=1,C=2,B=3})[rk] or 4
 print("📊 Lvl:",lvl,"Rank:",rk,"Fw:",fw)
 
 if lvl>=100 and pid==14916516914 then
