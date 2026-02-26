@@ -41,9 +41,18 @@ cg("Interface.Topbar.Main.Categories.Equipment",2)
 local lvl=tonumber(wfc("Interface","Gear_Up","HUD","Level","Title").Text:match("%d+")) or 0
 local rk=(wfc("Interface","Equipment","Categories","Upgrades","Main","Title").Text:match("%[(%a)") or ""):upper()
 local fw=({E=0,D=1,C=2,B=3})[rk] or 3
+local xptext=wfc("Interface","Equipment","Prestige","Progress","XP").Text or ""
+print("XP text:", xptext)
+
+local curRaw = xptext:match("^([%d, ]+)")
+local maxRaw = xptext:match("/ ([%d, ]+)$")
+
+local curxp = curRaw and tonumber(curRaw:gsub(",","")) or 0
+local maxXP = maxRaw and tonumber(maxRaw:gsub(",","")) or 1
+
 print("📊 Lvl:",lvl,"Rank:",rk,"Fw:",fw)
 
-if lvl==100 and pid==14916516914 then
+if curxp>=maxXP and pid==14916516914 then
         cg("Interface.Equipment.Categories.Prestige.Main.Title",2)
         cg("Interface.Equipment.Prestige.B_Prestige.Title",2)
         cg("Interface.Warning.Prompt.Main.Yes.Title",60)
