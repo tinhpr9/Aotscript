@@ -68,9 +68,9 @@ else
 	cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",1)
 	local mb="Interface.Missions.Info.Main.Info.Modifiers.Options."
 	for _,m in ipairs({"Nightmare","Injury Prone","Fog","Chronic Injuries","No Talents","No Skills","No Perks"}) do
-		cg(mb..m..".Selected",0.8)
+		cg(mb..m..".Selected",1)
 	end
-	cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",1)
+	cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",2)
 	cg("Interface.Missions.Info.Main.Info.Main.Info_Buttons.Begin",2)
 	print("🍯 Mission!")
 end
