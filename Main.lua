@@ -35,13 +35,14 @@ end
 local function wfc(...) local t=Gui for _,n in ipairs({...}) do t=t:WaitForChild(n,10) if not t then return nil end end return t end
 
 if pid==13379208636 then cg("Interface.Title_Screen.Slots.A.Select_A",10) cg("Interface.Title_Screen.Buttons.Play",3) cg("Fullscreen.Lobbies.Main.Lobby",5) end
+
 task.wait(10)
 cg("Interface.Topbar.Main.Categories.Equipment",2)
+cg("Interface.Equipment.Categories.Prestige.Main.Title",2)
 
 local lvl=tonumber(wfc("Interface","Gear_Up","HUD","Level","Title").Text:match("%d+")) or 0
 local rk=(wfc("Interface","Equipment","Categories","Upgrades","Main","Title").Text:match("%[(%a)") or ""):upper()
 local fw=({E=0,D=1,C=2,B=3})[rk] or 3
-
 local xptext = wfc("Interface","Equipment","Prestige","Progress","XP").Text or ""
 print("XP text:", xptext)
 
@@ -56,9 +57,7 @@ print("num tìm được:", table.unpack(num))
 
 local curxp = num[1] or 0
 local maxXP = num[2] or 1
-
 print("curxp", curxp, "maxXP:", maxXP)
-
 print("📊 Lvl:",lvl,"Rank:",rk,"Fw:",fw)
 
 if curxp>=maxXP and pid==14916516914 then
@@ -78,6 +77,7 @@ if curxp>=maxXP and pid==14916516914 then
         cg("Interface.Memories_Buttons.M_Confirm.Title",5)
         print("🍯 Prestige!")
 else
+cg("Interface.Equipment.Categories.Upgrades", 2)
         for _,s in ipairs({"ODM_Speed","ODM_Range","ODM_Gas","ODM_Damage","ODM_Crit_Damage","ODM_Crit_Chance","ODM_Control","Blade_Durability"}) do
                 cg("Interface.Equipment.Stats.Blades."..s,0.8) cg("Interface.Equipment.Stat.Upgrade",1)
         end
@@ -91,9 +91,25 @@ else
         cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",1)
         local mb="Interface.Missions.Info.Main.Info.Modifiers.Options."
         for _,m in ipairs({"Nightmare","Injury Prone","Fog","Chronic Injuries","Oddball","No Talents","No Skills","No Perks"}) do
-                cg(mb..m..".Selected",1)
+                cg(mb..m..".Selected",1.5)
         end
         cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",2)
         cg("Interface.Missions.Info.Main.Info.Main.Info_Buttons.Begin",2)
         print("🍯 Mission!")
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
