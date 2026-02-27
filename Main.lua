@@ -41,14 +41,23 @@ cg("Interface.Topbar.Main.Categories.Equipment",2)
 local lvl=tonumber(wfc("Interface","Gear_Up","HUD","Level","Title").Text:match("%d+")) or 0
 local rk=(wfc("Interface","Equipment","Categories","Upgrades","Main","Title").Text:match("%[(%a)") or ""):upper()
 local fw=({E=0,D=1,C=2,B=3})[rk] or 3
-local xptext=wfc("Interface","Equipment","Prestige","Progress","XP").Text or ""
+
+local xptext = wfc("Interface","Equipment","Prestige","Progress","XP").Text or ""
 print("XP text:", xptext)
 
-local curRaw = xptext:match("^([%d, ]+)")
-local maxRaw = xptext:match("/ ([%d, ]+)$")
+local num = {}
+for n in xptext:gmatch("[%d,]+") do
+local v = tonumber((n:gsub(",","")))
+if v and v > 100 then
+table.insert(num, v)
+end
+end
+print("num tìm được:", table.unpack(num))
 
-local curxp = curRaw and tonumber(curRaw:gsub(",","")) or 0
-local maxXP = maxRaw and tonumber(maxRaw:gsub(",","")) or 1
+local curxp = num[1] or 0
+local maxXP = num[2] or 1
+
+print("curxp", curxp, "maxXP:", maxXP)
 
 print("📊 Lvl:",lvl,"Rank:",rk,"Fw:",fw)
 
@@ -59,7 +68,13 @@ if curxp>=maxXP and pid==14916516914 then
         cp(workspace.Objects.Blackout.Memories["Luck Boost"],5)
         cg("Interface.Memories_Buttons.M_Confirm.Title",5)
         local c=workspace.Objects.Blackout.Memories:GetChildren()
-        cp(c[math.random(#c)],1)
+        local filtered={}
+        for _, part in ipairs(c) do
+        if not part.Name:lower():find("roll") then
+        table.insert(filtered,part)
+        end
+      end
+      cp(filtered[math.random(#filtered)],1)
         cg("Interface.Memories_Buttons.M_Confirm.Title",5)
         print("🍯 Prestige!")
 else
