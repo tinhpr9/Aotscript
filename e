@@ -627,3 +627,163 @@ _call501:AddToggle('ufo_coin', {
     Default = false,
 })
 _call501:AddToggle('ufo_spin', {
+    Callback = function(_638) end,
+    Title = '\u{1f6f8} UFO SPIN',
+    Default = false,
+})
+_call501:AddSection('\u{2622}\u{fe0f} Event Radioactive')
+_call501:AddToggle('event', {
+    Title = '\u{2622}\u{fe0f}Radioactive Cion Event',
+    Callback = function(_643, _643_2, _643_3, _643_4, _643_5, _643_6) end,
+})
+_call501:AddToggle('radiospin', {
+    Callback = function(_646, _646_2, _646_3, _646_4, _646_5, _646_6) end,
+    Title = '\u{2622}\u{fe0f}Radioactive Spin notwork',
+    Default = false,
+})
+_call501:AddToggle('radio_lucky', {
+    Callback = function(_649) end,
+    Title = '\u{2622}\u{fe0f} Radioactive Lucky Blox',
+    Default = false,
+})
+_call503:AddDropdown('fire_ice_mode', {
+    Callback = function(_652, _652_2, _652_3, _652_4, _652_5) end,
+    Default = 'Fire',
+    Title = 'Select Side',
+    Values = {
+        [1] = 'Fire',
+        [2] = 'Ice',
+    },
+})
+_call503:AddDropdown('fire_ice_rarity', {
+    Title = 'Select Rarity',
+    Default = {},
+    Multi = true,
+    Callback = function(_655) end,
+    Values = {
+        [1] = 'Common',
+        [2] = 'Uncommon',
+        [3] = 'Rare',
+        [4] = 'Epic',
+        [5] = 'Legendary',
+        [6] = 'Mythical',
+        [7] = 'Cosmic',
+        [8] = 'Secret',
+        [9] = 'Celestial',
+        [10] = 'Divine',
+    },
+})
+_call503:AddDropdown('fire_ice_carry_limit', {
+    Callback = function(_658) end,
+    Default = '2',
+    Title = 'Carry Limit',
+    Values = {
+        [1] = '1',
+        [2] = '2',
+        [3] = '3',
+        [4] = '4',
+        [5] = '5',
+        [6] = '6',
+    },
+})
+_call503:AddToggle('auto_fire_ice', {
+    Callback = function(_661) end,
+    Title = 'Auto Farm Fire / Ice',
+    Default = false,
+})
+_call505:AddSection('Auto money / speed / rebirth')
+_call505:AddToggle('money', {
+    Callback = function(_666, _666_2) end,
+    Title = 'Auto Collect Money',
+    Description = '\u{2b50}New update',
+})
+_call505:AddToggle('speed', {
+    Title = 'Auto Speed +1',
+    Callback = function(_669) end,
+})
+_call505:AddToggle('rebirth', {
+    Title = 'Auto Rebirth',
+    Callback = function(_672, _672_2, _672_3, _672_4, _672_5, _672_6) end,
+})
+task.spawn(function() end)
+task.spawn(function(_678, _678_2, _678_3, _678_4, _678_5) end)
+_call505:AddSection('Playier')
+_call505:AddToggle('HitboxExpand', {
+    Callback = function(_683) end,
+    Title = 'Player Hitbox',
+    Default = false,
+})
+_call505:AddSlider('WaveSize', {
+    Min = 1,
+    Title = 'Player Hitbox Size',
+    Max = 50,
+    Default = 1,
+    Callback = function(_686, _686_2, _686_3, _686_4, _686_5) end,
+    Rounding = 1,
+})
+_call505:AddSection('\u{1f47b}Weapon Hitbox')
+_call505:AddToggle('WeaponScale', {
+    Callback = function(_691, _691_2, _691_3, _691_4, _691_5) end,
+    Title = 'ON/OFF',
+    Default = false,
+})
+_call505:AddSlider('WeaponScaleSize', {
+    Min = 1,
+    Title = 'Size',
+    Max = 50,
+    Default = 1,
+    Callback = function(_694, _694_2, _694_3, _694_4, _694_5) end,
+    Rounding = 1,
+})
+_call505:AddButton({
+    Title = 'Reset',
+    Callback = function() end,
+})
+
+local _call699 = _call493:AddTab({
+    Title = 'Settings',
+    Icon = 'settings',
+})
+
+_9:SetLibrary(_5)
+_13:SetLibrary(_5)
+_9:IgnoreThemeSettings()
+_9:SetIgnoreIndexes({})
+_13:SetFolder('FluentScriptHub')
+_9:SetFolder('FluentScriptHub/specific-game')
+_13:BuildInterfaceSection(_call699)
+_9:BuildConfigSection(_call699)
+_call493:SelectTab(1)
+_5:Notify({
+    Duration = 8,
+    Title = 'OsakaTP2',
+    Content = 'The script has been loaded.',
+})
+_9:LoadAutoloadConfig()
+
+local _call725 = Instance.new('ScreenGui')
+
+_call725.Name = 'BananaToggle'
+_call725.ResetOnSpawn = false
+_call725.Parent = _LocalPlayer24:WaitForChild('PlayerGui')
+
+local _call727 = Instance.new('ImageButton')
+
+_call727.Parent = _call725
+_call727.Size = UDim2.fromScale(0.062, 0.12)
+_call727.Position = UDim2.fromScale(0.02, 0.1)
+_call727.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+_call727.BackgroundTransparency = 0.1
+_call727.BorderSizePixel = 0
+_call727.Image = 'rbxassetid://77426758441841'
+_call727.ScaleType = Enum.ScaleType.Fit
+_call727.Active = true
+_call727.Draggable = true
+_call727.AutoButtonColor = true
+
+local _call737 = Instance.new('UICorner')
+
+_call737.CornerRadius = UDim.new(1, 1)
+_call737.Parent = _call727
+
+_call727.MouseButton1Click:Connect(function(_743, _743_2) end)
