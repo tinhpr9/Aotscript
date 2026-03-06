@@ -626,4 +626,4 @@ _call501:AddToggle('ufo_coin', {
     Title = '\u{1f6f8} UFO COIN',
     Default = false,
 })
-_call5
+_call501:AddToggle('ufo_spin', {
