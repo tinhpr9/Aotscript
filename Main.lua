@@ -1,4 +1,4 @@
-task.wait(15)
+task.wait(15) -- Sửa 'Task' thành 'task' cho chuẩn syntax Lua nhé
 local P=game.Players.LocalPlayer
 local VIM=game:GetService("VirtualInputManager")
 local GS=game:GetService("GuiService")
@@ -38,78 +38,35 @@ if pid==13379208636 then cg("Interface.Title_Screen.Slots.A.Select_A",10) cg("In
 
 task.wait(10)
 cg("Interface.Topbar.Main.Categories.Equipment",2)
-cg("Interface.Equipment.Categories.Prestige.Main.Title",2)
 
 local lvl=tonumber(wfc("Interface","Gear_Up","HUD","Level","Title").Text:match("%d+")) or 0
 local rk=(wfc("Interface","Equipment","Categories","Upgrades","Main","Title").Text:match("%[(%a)") or ""):upper()
 local fw=({E=0,D=1,C=2,B=3})[rk] or 3
-local xptext = wfc("Interface","Equipment","Prestige","Progress","XP").Text or ""
-print("XP text:", xptext)
 
-local num = {}
-for n in xptext:gmatch("[%d,]+") do
-local v = tonumber((n:gsub(",","")))
-if v and v > 100 then
-table.insert(num, v)
-end
-end
-print("num tìm được:", table.unpack(num))
-
-local curxp = num[1] or 0
-local maxXP = num[2] or 1
-print("curxp", curxp, "maxXP:", maxXP)
 print("📊 Lvl:",lvl,"Rank:",rk,"Fw:",fw)
 
-if curxp>=maxXP and pid==14916516914 then
-        cg("Interface.Equipment.Categories.Prestige.Main.Title",2)
-        cg("Interface.Equipment.Prestige.B_Prestige.Title",2)
-        cg("Interface.Warning.Prompt.Main.Yes.Title",60)
-        cp(workspace.Objects.Blackout.Memories["Luck Boost"],5)
-        cg("Interface.Memories_Buttons.M_Confirm.Title",5)
-        local c=workspace.Objects.Blackout.Memories:GetChildren()
-        local filtered={}
-        for _, part in ipairs(c) do
-        if not part.Name:lower():find("roll") then
-        table.insert(filtered,part)
-        end
-      end
-      cp(filtered[math.random(#filtered)],1)
-        cg("Interface.Memories_Buttons.M_Confirm.Title",5)
-        print("🍯 Prestige!")
-else
+-- Tiến thẳng vào phần nâng cấp và nhận Mission
 cg("Interface.Equipment.Categories.Upgrades", 2)
-        for _,s in ipairs({"ODM_Speed","ODM_Range","ODM_Gas","ODM_Damage","ODM_Crit_Damage","ODM_Crit_Chance","ODM_Control","Blade_Durability"}) do
-                cg("Interface.Equipment.Stats.Blades."..s,0.8) cg("Interface.Equipment.Stat.Upgrade",1)
-        end
-        cg("Interface.Topbar.Main.Categories.Gear_Up.Title",2,10)
-        cg("Interface.Topbar.Main.Categories.Gear_Up.Title",2,10)
-        cg("Interface.Gear_Up.Mission.Main",1)
-        cg("Interface.Missions.Prompt.Main.Selection.Missions",1)
-        cg("Interface.Missions.Missions.Main.Maps.Maps.Outskirts_Missions",1)
-        for i=1,fw do cg("Interface.Missions.Missions.Main.Info.Main.Difficulty.Forward_Missions",1) end
-        cg("Interface.Missions.Missions.Main.Info.Main.Buttons.Creation_Missions",2)
-        cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",1)
-        local mb="Interface.Missions.Info.Main.Info.Modifiers.Options."
-        for _,m in ipairs({"Nightmare","Injury Prone","Fog","Chronic Injuries","Oddball","No Talents","No Skills","No Perks"}) do
-                cg(mb..m..".Selected",1.5)
-        end
-        cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",2)
-        cg("Interface.Missions.Info.Main.Info.Main.Info_Buttons.Begin",2)
-        print("🍯 Mission!")
+for _,s in ipairs({"ODM_Speed","ODM_Range","ODM_Gas","ODM_Damage","ODM_Crit_Damage","ODM_Crit_Chance","ODM_Control","Blade_Durability"}) do
+        cg("Interface.Equipment.Stats.Blades."..s,0.8) cg("Interface.Equipment.Stat.Upgrade",1)
 end
 
+cg("Interface.Topbar.Main.Categories.Gear_Up.Title",2,10)
+cg("Interface.Topbar.Main.Categories.Gear_Up.Title",2,10)
+cg("Interface.Gear_Up.Mission.Main",1)
+cg("Interface.Missions.Prompt.Main.Selection.Missions",1)
+cg("Interface.Missions.Missions.Main.Maps.Maps.Outskirts_Missions",1)
 
+for i=1,fw do cg("Interface.Missions.Missions.Main.Info.Main.Difficulty.Forward_Missions",1) end
 
+cg("Interface.Missions.Missions.Main.Info.Main.Buttons.Creation_Missions",2)
+cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",1)
 
+local mb="Interface.Missions.Info.Main.Info.Modifiers.Options."
+for _,m in ipairs({"Nightmare","Injury Prone","Fog","Chronic Injuries","Oddball","No Talents","No Skills","No Perks"}) do
+        cg(mb..m..".Selected",1.5)
+end
 
-
-
-
-
-
-
-
-
-
-
-
+cg("Interface.Missions.Info.Main.Info.Modifiers.Modifiers_Buttons",2)
+cg("Interface.Missions.Info.Main.Info.Main.Info_Buttons.Begin",2)
+print("🍯 Mission Started!")
