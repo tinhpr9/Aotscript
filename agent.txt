@@ -15,7 +15,7 @@ COMMAND_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh.txt"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
 
-LAST_CMD = ""
+LAST_CMD_TEXT = ""
 
 # Hàm 1: Tự động quét Github, tải và cài đặt Delta
 def auto_update_system():
@@ -66,7 +66,7 @@ def auto_update_system():
     except Exception as e:
         print(f"[!] Lỗi Update: {e}")
 
-# Hàm 2: Tự động đổi link Solver API (ĐÃ BỎ TỰ ĐỘNG REBOOT)
+# Hàm 2: Tự động đổi link Solver API
 def update_solver_url(new_url):
     print(f"\n[*] ĐANG TIẾN HÀNH TRÁO LINK SOLVER...")
     if not os.path.exists(CONFIG_PATH):
@@ -83,76 +83,69 @@ def update_solver_url(new_url):
             f.write(updated_content)
             
         print(f"[+] Thành công! Đã cấy link solver mới vào config.json")
-        print(f"[*] Xong việc. (Tính năng tự động reboot đã được gỡ bỏ theo lệnh)")
+        print(f"[*] Xong việc.")
         
     except Exception as e:
         print(f"[!] Lỗi khi ghi đè file config: {e}")
 
 # Hàm 3: Tạo file Autoexecute qhtrack cho Delta
 def install_qhtrack():
-    print(f"\n[*] ĐANG TIẾN HÀNH CÀI ĐẶT SCRIPT TRACK VÀO DELTA...")
-    # Sử dụng multi-line string để giữ nguyên định dạng EOF
+    print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT TRACK VÀO DELTA...")
     cmd = """
     cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/qhtrack
 loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Track"))()
 EOF
     """
-    try:
-        os.system(cmd)
-        print("[+] Thành công! Đã tạo file qhtrack trong thư mục Autoexecute của Delta.")
-    except Exception as e:
-        print(f"[!] Lỗi khi tạo file qhtrack: {e}")
+    os.system(cmd)
+    print("[+] Xong file qhtrack!")
 
 # ==========================================
-# HỆ THỐNG LẮNG NGHE LỆNH (LOOP)
+# HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
 # ==========================================
 print("="*50)
-print("  📡 HỆ THỐNG COMMAND & CONTROL ĐÃ KHỞI ĐỘNG  ")
+print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN CHUẨN)  ")
 print("="*50)
-print("[*] Đang chờ tín hiệu từ GitHub...")
 
 while True:
     try:
         url_no_cache = f"{COMMAND_URL}?t={int(time.time())}"
         req = urllib.request.Request(url_no_cache, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req) as response:
-            current_cmd = response.read().decode('utf-8').strip()
+            full_text = response.read().decode('utf-8').strip()
         
-        if current_cmd and current_cmd != LAST_CMD:
-            LAST_CMD = current_cmd
+        if full_text and full_text != LAST_CMD_TEXT:
+            LAST_CMD_TEXT = full_text
             
-            # --- LỆNH 1: UPDATE DELTA ---
-            if current_cmd == "UPDATE_DELTA":
-                print("\n[🚀] ĐÃ NHẬN LỆNH: UPDATE_DELTA")
-                auto_update_system()
-                print("\n[*] Xong việc. Đưa máy về chế độ chờ...\n")
+            # Tách riêng từng dòng lệnh ra để xử lý (chống lỗi enter)
+            commands = full_text.splitlines()
             
-            # --- LỆNH 2: ĐỔI LINK SOLVER TÙY CHỈNH ---
-            elif current_cmd.startswith("UPDATE_SOLVER"):
-                print("\n[🔧] ĐÃ NHẬN LỆNH: UPDATE_SOLVER")
-                parts = current_cmd.split(" ", 1)
-                if len(parts) > 1:
-                    new_link = parts[1].strip()
-                    update_solver_url(new_link)
-                else:
-                    print("[!] Lỗi: Thiếu link đính kèm. Cú pháp chuẩn: UPDATE_SOLVER <link>")
-
-            # --- LỆNH 3: CÀI ĐẶT SCRIPT TRACK VÀO DELTA ---
-            elif current_cmd == "INSTALL_TRACK":
-                print("\n[📂] ĐÃ NHẬN LỆNH: INSTALL_TRACK")
-                install_qhtrack()
-                print("\n[*] Xong việc. Đưa máy về chế độ chờ...\n")
+            print(f"\n[!] PHÁT HIỆN {len(commands)} LỆNH MỚI TỪ GITHUB!")
             
-            # --- LỆNH 4: KHỞI ĐỘNG LẠI TOÀN BỘ (Thủ công) ---
-            elif current_cmd == "REBOOT":
-                print("\n[🔥] ĐÃ NHẬN LỆNH: REBOOT")
-                print("[*] Đang ép khởi động lại thiết bị...")
-                time.sleep(2)
-                os.system("su -c 'reboot'")
-            
-            # --- LỆNH 5: NẰM IM ---
-            elif current_cmd == "IDLE":
-                print("\n[💤] ĐÃ NHẬN LỆNH: IDLE. Tạm nghỉ chờ việc.")
+            for cmd in commands:
+                cmd = cmd.strip()
+                if not cmd:
+                    continue
+                    
+                if cmd == "UPDATE_DELTA":
+                    auto_update_system()
+                
+                elif cmd.startswith("UPDATE_SOLVER"):
+                    parts = cmd.split(" ", 1)
+                    if len(parts) > 1:
+                        update_solver_url(parts[1].strip())
+                        
+                elif cmd == "INSTALL_TRACK":
+                    install_qhtrack()
+                    
+                elif cmd == "REBOOT":
+                    print("[*] Đang ép khởi động lại thiết bị...")
+                    time.sleep(2)
+                    os.system("su -c 'reboot'")
+                    
+                elif cmd == "IDLE":
+                    print("[💤] Đã nhận lệnh nghỉ ngơi.")
+                    
+            print("\n[*] ĐÃ THỰC THI XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\n")
                 
     except Exception as e:
         pass
