@@ -99,6 +99,17 @@ EOF
     os.system(cmd)
     print("[+] Xong file qhtrack!")
 
+# Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta
+def install_marmotgag2():
+    print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT MARMOTGAG2 VÀO DELTA...")
+    cmd = """
+    cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/marmotgag2
+loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Script"))()
+EOF
+    """
+    os.system(cmd)
+    print("[+] Xong file marmotgag2!")
+
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
 # ==========================================
@@ -136,6 +147,9 @@ while True:
                         
                 elif cmd == "INSTALL_TRACK":
                     install_qhtrack()
+                    
+                elif cmd == "INSTALL_MARMOT":
+                    install_marmotgag2()
                     
                 elif cmd == "REBOOT":
                     print("[*] Đang ép khởi động lại thiết bị...")
