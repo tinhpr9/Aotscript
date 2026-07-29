@@ -1,0 +1,175 @@
+
+local keys = {  -- Add as many key
+    "DPFXpRuyWNCxFLGLPmvdRnzsQndQJWwL", 
+    "vKikIrEFNKdjIvRnDnItQPEsaJiXBerK", 
+}
+
+math.randomseed(os.time())
+script_key = keys[math.random(#keys)];
+
+getgenv().GAG2Config = {
+    FPS_CAP = 5,  -- PHẢI dùng FPS từ 5 trở lên
+    ADD_FRIEND = true,
+    AUTO_UPDATE_RESTART = true,
+    COLLECT_FRUIT_DELAY = 20,
+
+    -- Cấu Hình Pet
+    MAX_PET_EQUIP = 6,
+    BUY_PET = {  -- ["Tên Pet"] = Mua đến đủ số lượng
+        ["Firefly"] = 99,
+        ["BlackDragon"] = 99, 
+        ["GoldenDragonfly"] = 99, 
+        ["Unicorn"] = 99,
+        ["Raccoon"] = 99, 
+        ["IceSerpent"] = 99,
+        ["Bunny"] = 5,
+        ["Robin"] = 5,
+        ["Deer"] = 5,
+    },
+    EQUIP_PET = {  -- {"Tên Pet", Số Lượng Trang Bị, Độ Ưu Tiên}
+        {"Bunny", 4, 1}, 
+        {"Unicorn", 1, 2}, 
+        {"GoldenDragonfly", 1, 3},
+        {"Robin", 6, 4},
+        {"Deer", 6, 5},
+    },
+
+     -- Cấu Hình Trồng Cây
+    PLANT_SEED = {  -- ["Tên Hạt Giống"] = Trồng đến đủ số lượng
+        ["Carrot"] = 1, 
+        ["Strawberry"] = 1,
+        ["Blueberry"] = 1,
+        ["Tulip"] = 1,
+        ["Tomato"] = 1,
+        ["Apple"] = 1,
+        ["Bamboo"] = 1,
+        ["Corn"] = 1,
+        ["Cactus"] = 1,
+        ["Pineapple"] = 1,
+        ["Mushroom"] = 1,
+        ["Green Bean"] = 1,
+        ["Banana"] = 1,
+        ["Grape"] = 1,
+        ["Coconut"] = 1,
+        ["Mango"] = 1,
+        ["Dragon Fruit"] = 1,
+        ["Acorn"] = 1,
+        ["Cherry"] = 1,
+        ["Sunflower"] = 1,
+        ["Venus Fly Trap"] = 1,
+        ["Pomegranate"] = 1,
+        ["Poison Apple"] = 1,
+        ["Venom Spitter"] = 30,
+        ["Moon Bloom"] = 1,
+        ["Dragon's Breath"] = 2,
+        ["Sun Bloom"] = 1,
+    },
+
+
+    -- Cấu Hình Mua
+    BUY_SEED = {  -- ["Tên Hạt Giống"] = Mua đến đủ số lượng   
+        ["Rocket Pop"] = 9999, 
+        ["Carrot"] = 5, 
+        ["Strawberry"] = 5,
+        ["Blueberry"] = 5,
+        ["Tulip"] = 5,
+        ["Tomato"] = 5,
+        ["Apple"] = 5,
+        ["Bamboo"] = 9999,
+        ["Corn"] = 1,
+        ["Cactus"] = 2,
+        ["Pineapple"] = 3,
+        ["Mushroom"] = 9999,
+        ["Green Bean"] = 2,
+        ["Banana"] = 1,
+        ["Grape"] = 1,
+        ["Coconut"] = 1,
+        ["Mango"] = 1,
+        ["Dragon Fruit"] = 1,
+        ["Acorn"] = 9999,
+        ["Cherry"] = 1,
+        ["Sunflower"] = 1,
+        ["Fire Fern"] = 1,
+        ["Venus Fly Trap"] = 1,
+        ["Pomegranate"] = 1,
+        ["Poison Apple"] = 1,
+        ["Venom Spitter"] = 9999,
+        ["Moon Bloom"] = 9999,
+        ["Sun Bloom"] = 9999,
+        ["Hypno Bloom"] = 9999,
+        ["Dragon's Breath"] = 9999,
+        ["Star Fruit"] = 9999,
+    },
+    BUY_AUCTION = {},  -- ["Tên Vật Phẩm"] = { Giá Sheckle Tối Đa, Mua đến đủ số lượng }
+    BUY_CRATE = {},  -- ["Tên Thùng"] = Mua đến đủ số lượng 
+    BUY_GEAR_MIN_SHECKLE = 1500000, 
+    BUY_GEAR = {  -- ["Tên Trang Bị"] = Mua đến đủ số lượng   
+        ["Common Sprinkler"] = 8,
+        ["Uncommon Sprinkler"] = 8,
+        ["Rare Sprinkler"] = 8,
+        ["Legendary Sprinkler"] = 9999,
+        ["Common Watering Can"] = 8,
+        ["Super Watering Can"] = 9999,
+        ["Super Sprinkler"] = 9999,
+    },  
+    
+    -- Cấu Hình Bán
+    -- Cấu Hình Bán
+    SELL_FRUIT_MULTIPLIER = { 
+        ["Bamboo"] = 1, 
+        ["Mushroom"] = 4,
+        ["Venom Spitter"] = 4,
+        ["Moon Bloom"] = 4,
+        ["Sun Bloom"] = 4,
+        ["Hypno Bloom"] = 4,
+        ["Dragon's Breath"] = 4,
+        ["Star Fruit"] = 4
+    },
+    SELL_ALL_DAILY_DEAL = 5000000,  -- Giá trị tối thiểu để kích hoạt "bán tất cả" hằng ngày 
+    SELL_ALL_DELAY = 20,  -- Giây
+
+    -- Cấu Hình Vật Phẩm Tiêu Hao
+    USE_SPRINKLER = {
+        "Common Sprinkler",
+        "Uncommon Sprinkler",
+        "Rare Sprinkler",
+        "Legendary Sprinkler"
+    },  -- "Tên Sprinkler" (chỉ có thể dùng 1 sprinkler cùng lúc) 
+    USE_WATERING_CAN = {
+        "Common Watering Can"
+    },  -- "Tên Bình Tưới"    
+    USE_WATERING_CAN_DELAY = 60,  -- Giây
+
+    -- Cấu Hình Khác
+    COLLECT_PLANT_IF_MUTATED = { 
+        "Bamboo", 
+        "Mushroom", 
+        "Venom Spitter", 
+        "Moon Bloom", 
+        "Sun Bloom", 
+        "Hypno Bloom", 
+        "Dragon's Breath", 
+        "Star Fruit" 
+    },  -- Chỉ thu hoạch trái cây khi có BẤT KỲ mutation nào  
+    FAVOURITE_FRUIT = {},  -- ["Tên Trái Cây"] = {} ... hoặc ... ["Tên Trái Cây"] = { "Gold", "Rainbow" }
+    FOCUS_COLLECT_DROPPED_SEED = true,  -- Đặt true nếu dùng server công khai (nhặt ngay lập tức), false để nhặt chậm hơn một chút
+    EXPAND_PLOT = 3,  -- 0 = Không mở rộng, 3 = Mở rộng đất 3 lần
+
+    -- Cấu Hình Auto Mail
+    AUTO_MAIL = {},  -- ["Tên Người Dùng"] = { ["Tên Vật Phẩm"] = Số Lượng } 
+    AUTO_MAIL_DELAY = 60,  -- Giây
+    COLLECT_MAIL = true,
+
+    -- Cấu Hình Discord
+    WEBHOOK_PET_NAME = {},
+    WEBHOOK_PET_RARITY = { "Mythic", "Super", "Secret" },
+    WEBHOOK_URL = "",
+    DISCORD_ID = "",
+    WEBHOOK_NOTE = "",  -- Webhook Cá Nhân
+    SHOW_PUBLIC_DISCORD_ID = true,
+    SHOW_WEBHOOK_USERNAME = true,  -- Webhook Cá Nhân
+    SHOW_WEBHOOK_JOBID = true,  -- Webhook Cá Nhân
+}
+
+loadstring(game:HttpGet("https://api.luarmor.net/files/v4/loaders/c9ea3aa6c782de82dee4bcf6b9a9d03e.lua"))()
+
