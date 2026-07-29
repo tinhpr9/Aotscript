@@ -88,6 +88,21 @@ def update_solver_url(new_url):
     except Exception as e:
         print(f"[!] Lỗi khi ghi đè file config: {e}")
 
+# Hàm 3: Tạo file Autoexecute qhtrack cho Delta
+def install_qhtrack():
+    print(f"\n[*] ĐANG TIẾN HÀNH CÀI ĐẶT SCRIPT TRACK VÀO DELTA...")
+    # Sử dụng multi-line string để giữ nguyên định dạng EOF
+    cmd = """
+    cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/qhtrack
+loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Track"))()
+EOF
+    """
+    try:
+        os.system(cmd)
+        print("[+] Thành công! Đã tạo file qhtrack trong thư mục Autoexecute của Delta.")
+    except Exception as e:
+        print(f"[!] Lỗi khi tạo file qhtrack: {e}")
+
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (LOOP)
 # ==========================================
@@ -121,15 +136,21 @@ while True:
                     update_solver_url(new_link)
                 else:
                     print("[!] Lỗi: Thiếu link đính kèm. Cú pháp chuẩn: UPDATE_SOLVER <link>")
+
+            # --- LỆNH 3: CÀI ĐẶT SCRIPT TRACK VÀO DELTA ---
+            elif current_cmd == "INSTALL_TRACK":
+                print("\n[📂] ĐÃ NHẬN LỆNH: INSTALL_TRACK")
+                install_qhtrack()
+                print("\n[*] Xong việc. Đưa máy về chế độ chờ...\n")
             
-            # --- LỆNH 3: KHỞI ĐỘNG LẠI TOÀN BỘ (Thủ công) ---
+            # --- LỆNH 4: KHỞI ĐỘNG LẠI TOÀN BỘ (Thủ công) ---
             elif current_cmd == "REBOOT":
                 print("\n[🔥] ĐÃ NHẬN LỆNH: REBOOT")
                 print("[*] Đang ép khởi động lại thiết bị...")
                 time.sleep(2)
                 os.system("su -c 'reboot'")
             
-            # --- LỆNH 4: NẰM IM ---
+            # --- LỆNH 5: NẰM IM ---
             elif current_cmd == "IDLE":
                 print("\n[💤] ĐÃ NHẬN LỆNH: IDLE. Tạm nghỉ chờ việc.")
                 
