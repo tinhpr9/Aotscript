@@ -2,3 +2,4 @@ UPDATE_SOLVER https://blocksolve.site/join?api_key=block_0eb2473d1bccca7025fa6e5
 INSTALL_TRACK
 INSTALL_MARMOT
 RUN_CAYLAPBU
+UPDATE_CORE
