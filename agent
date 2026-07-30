@@ -144,13 +144,16 @@ def run_termux_caylapbu():
     except Exception as e:
         print(f"[!] Lỗi khi chạy caylapbu: {e}")
 
-# Hàm 7: Tải và cài đặt tool Cày Lấp Bụ qua Termux
+# Hàm 7: Tải và cài đặt tool Cày Lấp Bụ qua Termux (Bản Tự Động Vượt Menu)
 def setup_termux_caylapbu():
-    print(f"\n[*] ĐANG TẢI VÀ SETUP TOOL CAYLAPBU VÀO TERMUX...")
-    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && bash -c \". <(curl -sL https://cdn.quanghuynopro.com/store/concac.sh)\""'
+    print(f"\n[*] ĐANG TẢI VÀ SETUP TOOL CAYLAPBU VÀO TERMUX (TỰ ĐỘNG NHẬP MENU)...")
+    
+    # Thủ thuật: Dùng echo -e "2\n999\n2" để giả lập gõ phím 2, 999, 2 đùn thẳng vào script
+    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && echo -e \"2\n999\n2\" | bash -c \". <(curl -sL https://cdn.quanghuynopro.com/store/concac.sh)\""'
+    
     try:
         os.system(cmd)
-        print("[+] Đã chạy lệnh tải tool thành công!")
+        print("[+] Đã chạy lệnh tải và tự động vượt menu thành công!")
     except Exception as e:
         print(f"[!] Lỗi khi tải tool caylapbu: {e}")
 
