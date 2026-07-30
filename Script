@@ -156,7 +156,24 @@ getgenv().GAG2Config = {
     EXPAND_PLOT = 3,  -- 0 = Không mở rộng, 3 = Mở rộng đất 3 lần
 
     -- Cấu Hình Auto Mail
-    AUTO_MAIL = {},  -- ["Tên Người Dùng"] = { ["Tên Vật Phẩm"] = Số Lượng } 
+    AUTO_MAIL = {
+        ["Cullen_Master68746"] = {
+            ["Super Watering Can"] = "All",
+            ["Super Sprinkler"] = "All",
+            ["Legendary Sprinkler"] = "All",
+            ["Venom Spitter"] = "All",
+            ["Moon Bloom"] = "All",
+            ["Sun Bloom"] = "All",
+            ["Hypno Bloom"] = "All",
+            ["Dragon's Breath"] = "All",
+            ["Star Fruit"] = "All",
+            ["BlackDragon"] = "All", 
+            ["GoldenDragonfly"] = "All", 
+            ["Unicorn"] = "All",
+            ["Raccoon"] = "All", 
+            ["IceSerpent"] = "All"
+        }
+    },
     AUTO_MAIL_DELAY = 60,  -- Giây
     COLLECT_MAIL = true,
 
