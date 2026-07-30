@@ -1,0 +1,579 @@
+cat << 'EOF' > /storage/emulated/0/Download/Shouko/ZeroPoint_AIO.py
+import requests
+import os
+import time
+import sys
+import re
+
+# ==========================================
+# CẤU HÌNH HỆ THỐNG
+# ==========================================
+BASE_DIR = "/storage/emulated/0/Download/Shouko"
+FACE_ACC_FILE = os.path.join(BASE_DIR, "Listacc.txt")
+COOKIE_FILE = os.path.join(BASE_DIR, "Cookies.txt")
+FACE_PRIORITY_FILE = os.path.join(BASE_DIR, "Face_Priority.txt") 
+FACE_TARGET_CONFIG = os.path.join(BASE_DIR, "Face_Target_File.txt")
+
+DB_COOKIES_FILE = os.path.join(BASE_DIR, "Data_Tong_Cookies.txt") 
+FOUND_RESULT_FILE = os.path.join(BASE_DIR, "Ket_Qua_Tim_Duoc.txt") 
+
+FACE_API_KEY = "ZP_FaceUnlock_0DLuB8BEqFpLM0bssjSPFqGwnRkgXm7p"
+COOKIE_API_KEY = "ZP_CookieChecker_gCvFnk1LOTPh2ysCcTcZhjCwuYVnwoYT"
+
+# LINK WEBHOOK MỚI CỦA BẠN ĐÃ ĐƯỢC DÁN VÀO ĐÂY
+SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbzA6mgOH2EYopubDRIZKxFNn_WJJXKAFq4ESonltsV3h8Xv_l9wc3YW_OTywKYvv11bZQ/exec"
+
+FACE_URL = "https://zeropoint.to/api/faceunlock-api"
+COOKIE_URL = "https://zeropoint.to/api/cookie-checker-api"
+
+def check_env():
+    if not os.path.exists(BASE_DIR):
+        try: os.makedirs(BASE_DIR)
+        except: sys.exit()
+    for path in [FACE_ACC_FILE, COOKIE_FILE, FOUND_RESULT_FILE]:
+        if not os.path.exists(path):
+            try: open(path, "w", encoding="utf-8").close()
+            except: pass
+    if not os.path.exists(FACE_PRIORITY_FILE):
+        try: open(FACE_PRIORITY_FILE, "w", encoding="utf-8").write("False")
+        except: pass
+
+def get_priority_state():
+    try: return open(FACE_PRIORITY_FILE, "r", encoding="utf-8").read().strip() == "True"
+    except: return False
+
+def toggle_priority():
+    new_state = "False" if get_priority_state() else "True"
+    try:
+        open(FACE_PRIORITY_FILE, "w", encoding="utf-8").write(new_state)
+        txt = "BẬT (Ưu tiên giải nhanh - Tốn phí $0.03/acc)" if new_state == "True" else "TẮT (Xếp hàng chờ - Free nếu đúng nguồn)"
+        print(f"\n[+] Đã chuyển trạng thái Luồng Ưu Tiên thành: {txt}")
+    except Exception as e: print(f"\n[!] LỖI LƯU TRẠNG THÁI: {e}")
+
+def face_balance():
+    try:
+        res = requests.get(f"{FACE_URL}/balance", headers={"X-API-Key": FACE_API_KEY})
+        if res.status_code == 200: print(f"\n[+] Số dư khả dụng Face Unlock: ${res.json().get('effective', 0)}")
+        else: print(f"[!] LỖI API: Mã {res.status_code}")
+    except Exception as e: print(f"[!] LỖI KẾT NỐI: {e}")
+
+def force_clear_jobs():
+    headers = {"X-API-Key": FACE_API_KEY, "Content-Type": "application/json"}
+    print("\n[*] Đang quét các Job treo trên server ZeroPoint...")
+    try:
+        res = requests.get(f"{FACE_URL}/active", headers=headers)
+        if res.status_code == 200:
+            jobs = res.json().get("jobs", [])
+            if not jobs:
+                print("[+] Không có job nào đang kẹt.")
+                return True
+            for job in jobs:
+                jid = job.get("job_id")
+                print(f"[*] Đang ép HỦY job: {jid}")
+                requests.post(f"{FACE_URL}/cancel/{jid}", headers=headers)
+            print("[*] Đang chờ 4 giây để server đồng bộ xóa dữ liệu...")
+            time.sleep(4)
+            return True
+        else:
+            print(f"[!] Lỗi quét job: {res.text}")
+            return False
+    except Exception as e:
+        print(f"[!] Lỗi hệ thống: {e}")
+        return False
+
+def face_unlock():
+    target_file = FACE_ACC_FILE 
+    if os.path.exists(FACE_TARGET_CONFIG):
+        try:
+            saved_path = open(FACE_TARGET_CONFIG, "r", encoding="utf-8").read().strip()
+            if saved_path and os.path.exists(saved_path) and os.path.getsize(saved_path) > 0: target_file = saved_path
+        except: pass
+
+    try:
+        acc_text = open(target_file, "r", encoding="utf-8").read().strip()
+        if not acc_text: return print(f"\n[!] LỖI: File đang trống ({target_file}).")
+
+        is_prio = get_priority_state()
+        print(f"\n[*] Đang nhắm mục tiêu vào file: {target_file}")
+        print(f"[*] Đang Submit lên Face Unlock (Luồng Ưu Tiên: {'BẬT' if is_prio else 'TẮT'})...")
+        
+        headers = {"X-API-Key": FACE_API_KEY, "Content-Type": "application/json"}
+        res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": is_prio})
+        
+        if res.status_code == 409:
+            print("[!] Phát hiện có job cũ ngáng đường. Đang gọi đội dọn dẹp...")
+            force_clear_jobs()
+            res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": is_prio})
+
+        if res.status_code != 200: return print(f"[!] LỖI SUBMIT: {res.status_code} - {res.text}")
+        
+        job_id = res.json().get("job_id")
+        print("[*] Đang tự động theo dõi (5s/lần)...")
+        
+        limit_7d_accounts = set()
+
+        while True:
+            time.sleep(5)
+            st_res = requests.get(f"{FACE_URL}/status/{job_id}", headers=headers)
+            if st_res.status_code != 200: continue
+            
+            st_data = st_res.json()
+            st = st_data.get("status", "unknown")
+            
+            for key in ["logs", "results", "accounts", "details", "messages"]:
+                items = st_data.get(key, [])
+                if isinstance(items, list):
+                    for item in items:
+                        item_str = str(item)
+                        if "7 days" in item_str.lower() or "rate limit" in item_str.lower():
+                            if isinstance(item, dict):
+                                acc = item.get("account") or item.get("username") or item.get("line")
+                                if acc: limit_7d_accounts.add(str(acc).strip())
+                            else:
+                                limit_7d_accounts.add(item_str)
+
+            if st in ["queued", "pending"] and ("queue_position" in st_data or "position" in st_data or "jobs_ahead" in st_data):
+                status_text = f"[{st.upper()}] Hàng chờ: #{st_data.get('queue_position', '?')} | Đợi {st_data.get('jobs_ahead', '?')} jobs"
+            else:
+                status_text = f"[{st.upper()}] Tiến độ: {st_data.get('processed', 0)}/{st_data.get('total_accounts', 0)}"
+            
+            print(f"\r   -> {status_text}" + " " * 15, end="", flush=True)
+            
+            if st in ["completed", "failed", "cancelled"]:
+                print() 
+                if st == "completed":
+                    total_acc = st_data.get("total_accounts", 0)
+                    unlocked = st_data.get("success_count", st_data.get("unlocked_count", st_data.get("unlocked", 0)))
+                    failed = st_data.get("failed_count", st_data.get("failed", 0))
+                    db_free = st_data.get("db_accounts_count", st_data.get("db_matches", st_data.get("free_count", 0)))
+                    cost = st_data.get("total_cost", st_data.get("cost", 0.0))
+
+                    if st_data.get("result_files"):
+                        print("\n[*] Đang tải file kết quả Face Unlock...")
+                        for file_info in st_data["result_files"]:
+                            fname = file_info["filename"]
+                            dl_res = requests.get(f"{FACE_URL}/download/{job_id}/{fname}", headers=headers)
+                            content = dl_res.text
+                            
+                            if "fail" in fname.lower() or "result" in fname.lower():
+                                for line in content.splitlines():
+                                    line_lower = line.lower()
+                                    if "7 days" in line_lower or "rate limit" in line_lower:
+                                        acc_part = line.split("-")[0].strip() if "-" in line else line.strip()
+                                        if acc_part: limit_7d_accounts.add(acc_part)
+
+                            save_path = os.path.join(BASE_DIR, f"Face_{fname}")
+                            open(save_path, "w", encoding="utf-8").write(content)
+                            print(f"[+] Thành công! Đã lưu: {save_path}")
+
+                    limit_7d_count = len(limit_7d_accounts)
+                    if limit_7d_count > 0:
+                        limit_file_path = os.path.join(BASE_DIR, "Face_7_day_limit.txt")
+                        open(limit_file_path, "w", encoding="utf-8").write("\n".join(sorted(limit_7d_accounts)) + "\n")
+                        print(f"[+] Đã lọc và lưu riêng {limit_7d_count} acc 7-day limit vào: {limit_file_path}")
+
+                    print("\n" + "="*50)
+                    print("         BẢNG TỔNG KẾT FACE UNLOCK (ZEROPOINT)      ")
+                    print("="*50)
+                    print(f" [>] TỔNG ACCOUNT     : {total_acc}")
+                    print(f" [v] MỞ KHOÁ THÀNH CÔNG: {unlocked}")
+                    print(f" [x] THẤT BẠI (LỖI)   : {failed}")
+                    print(f" [!] FREE (CÓ TRONG DB): {db_free}")
+                    print(f" [⏳] 7-DAY LIMIT       : {limit_7d_count}")
+                    print(f" [$] TỔNG THIỆT HẠI   : ${cost}")
+                    print("="*50)
+                
+                if target_file != FACE_ACC_FILE and os.path.exists(FACE_TARGET_CONFIG): os.remove(FACE_TARGET_CONFIG)
+                break
+    except Exception as e: print(f"\n[!] LỖI HỆ THỐNG: {e}")
+
+def check_zeropoint_db():
+    target_file = FACE_ACC_FILE 
+    if os.path.exists(FACE_TARGET_CONFIG):
+        try:
+            saved_path = open(FACE_TARGET_CONFIG, "r", encoding="utf-8").read().strip()
+            if saved_path and os.path.exists(saved_path) and os.path.getsize(saved_path) > 0: target_file = saved_path
+        except: pass
+
+    try:
+        acc_text = open(target_file, "r", encoding="utf-8").read().strip()
+        if not acc_text: return print(f"\n[!] LỖI: File trống.")
+
+        lines_count = len([line for line in acc_text.splitlines() if line.strip()])
+        print(f"\n[*] Đang gửi {lines_count} acc lên ZeroPoint để soi Database...")
+        
+        headers = {"X-API-Key": FACE_API_KEY, "Content-Type": "application/json"}
+        res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": False})
+        
+        if res.status_code == 409:
+            print("[!] Kẹt xe! Phát hiện job cũ đang treo. Đang gọi đội dọn dẹp...")
+            force_clear_jobs()
+            res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": False})
+
+        if res.status_code != 200: return print(f"[!] LỖI API: {res.status_code} - {res.text}")
+        
+        data = res.json()
+        job_id = data.get("job_id")
+        db_count = data.get("db_accounts_count", 0)
+        paid_count = data.get("paid_accounts_count", 0)
+        total = data.get("total_accounts", 0)
+        
+        cancel_res = requests.post(f"{FACE_URL}/cancel/{job_id}", headers=headers)
+        
+        print("\n" + "="*50)
+        print("      KẾT QUẢ CHECK DATABASE ZEROPOINT      ")
+        print("="*50)
+        print(f" - Tổng acc đã quét      : {total}")
+        print(f" - CÓ TRONG DATABASE     : {db_count} acc (Giải Free nếu Tắt Ưu Tiên)")
+        print(f" - KHÔNG CÓ (Tài Khoản Lạ): {paid_count} acc (Bị tính phí)")
+        print("="*50)
+        
+        if cancel_res.status_code == 200: print("[+] ĐÃ HỦY LỆNH AN TOÀN! Không mất đồng nào.")
+        else: print(f"[!] CẢNH BÁO: Hủy lệnh trả về mã {cancel_res.status_code}.")
+    except Exception as e: print(f"\n[!] LỖI HỆ THỐNG: {e}")
+
+def cookie_checker():
+    try:
+        cookies_text = open(COOKIE_FILE, "r", encoding="utf-8").read().strip()
+        if not cookies_text: return print(f"\n[!] LỖI: File trống.")
+
+        print("\n[*] Đang Submit lên Cookie Checker...")
+        headers = {"X-API-Key": COOKIE_API_KEY, "Content-Type": "application/json"}
+        res = requests.post(f"{COOKIE_URL}/submit", headers=headers, json={"cookies": cookies_text})
+        
+        if res.status_code in [401, 403]: return print(f"[!] LỖI API: Key không hợp lệ.")
+        elif res.status_code == 429: return print(f"[!] LỖI RATE LIMIT: Đợi {res.json().get('cooldown', 20)}s.")
+        elif res.status_code != 200: return print(f"[!] LỖI API: Mã {res.status_code}")
+        
+        session_id = res.json().get("session_id")
+        while True:
+            time.sleep(2)
+            st_res = requests.get(f"{COOKIE_URL}/status/{session_id}", headers=headers)
+            if st_res.status_code != 200: continue
+            st_data = st_res.json()
+            st = st_data.get("status")
+            print(f"\r   -> [{st.upper()}] Tiến độ: {st_data.get('checked', 0)}/{st_data.get('total', 0)}    ", end="", flush=True)
+            
+            if st in ["completed", "error"]:
+                print() 
+                if st == "completed" and st_data.get("download_files"):
+                    live_cookies_found = [] 
+                    
+                    for file_info in st_data["download_files"]:
+                        ftype = file_info["type"]
+                        save_path = os.path.join(BASE_DIR, f"Cookie_{ftype}_result.txt")
+                        dl_res = requests.get(f"{COOKIE_URL}/download/{session_id}/{ftype}", headers=headers)
+                        
+                        raw_lines = [c.strip() for c in dl_res.text.splitlines() if c.strip()]
+                        mapped_lines = []
+                        
+                        if os.path.exists(FOUND_RESULT_FILE):
+                            full_db = [line.strip() for line in open(FOUND_RESULT_FILE, "r", encoding="utf-8").readlines() if line.strip()]
+                            for cookie in raw_lines:
+                                found_match = False
+                                for db_line in full_db:
+                                    if cookie in db_line: 
+                                        mapped_lines.append(db_line)
+                                        found_match = True
+                                        break
+                                if not found_match:
+                                    mapped_lines.append(cookie) 
+                        else:
+                            mapped_lines = raw_lines
+
+                        final_content = "\n".join(mapped_lines) + "\n" if mapped_lines else ""
+                        open(save_path, "w", encoding="utf-8").write(final_content)
+                        print(f"[+] Đã lưu: {save_path}")
+
+                        # NẾU LÀ ACC LIVE SỐNG LẠI -> RA LỆNH GOOGLE SHEETS XÓA
+                        if "live" in ftype.lower() or "valid" in ftype.lower():
+                            live_cookies_found.extend(raw_lines)
+                            if SHEET_WEBHOOK and mapped_lines:
+                                try:
+                                    requests.post(SHEET_WEBHOOK, json={"delete_accounts": mapped_lines})
+                                    print(f"    -> [GOOGLE SHEETS] Đã lệnh cho Sheets XÓA {len(mapped_lines)} acc LIVE!")
+                                except Exception: pass
+
+                        # NẾU LÀ ACC LOCK -> BẮN LÊN GOOGLE SHEETS VÀ FACE UNLOCK
+                        if any(k in ftype.lower() for k in ["lock", "face", "checkpoint"]) and mapped_lines:
+                            open(FACE_TARGET_CONFIG, "w", encoding="utf-8").write(save_path)
+                            print(f"    -> [AUTO-LINK & FORWARD] Đã nạp {len(mapped_lines)} acc khoá sang Face Unlock!")
+                            if SHEET_WEBHOOK:
+                                try:
+                                    requests.post(SHEET_WEBHOOK, json={"accounts": mapped_lines})
+                                    print(f"    -> [GOOGLE SHEETS] Đã CẬP NHẬT {len(mapped_lines)} acc khoá lên bảng tính (Đã chống trùng)!")
+                                except Exception as e:
+                                    print(f"    -> [!] Lỗi bắn lên Sheets: {e}")
+
+                        elif mapped_lines and os.path.exists(FOUND_RESULT_FILE) and "live" not in ftype.lower():
+                            print(f"    -> [AUTO-LINK] Đã ghép thành công User:Pass cho file này!")
+                            
+                    # THỰC THI CHỨC NĂNG XÓA TRONG MÁY
+                    if live_cookies_found:
+                        print(f"\n[*] [AUTO-CLEAN] Phát hiện {len(live_cookies_found)} acc LIVE (đã mở Face xong).")
+                        print("    -> Đang tự động XÓA các acc này khỏi file gốc để list luôn sạch...")
+                        
+                        cleaned_status = False
+                        if os.path.exists(FOUND_RESULT_FILE):
+                            old_lines = open(FOUND_RESULT_FILE, "r", encoding="utf-8").read().splitlines()
+                            new_lines = [line for line in old_lines if not any(lc in line for lc in live_cookies_found)]
+                            open(FOUND_RESULT_FILE, "w", encoding="utf-8").write("\n".join(new_lines) + "\n" if new_lines else "")
+                            cleaned_status = True
+                            
+                        if os.path.exists(COOKIE_FILE):
+                            old_cookies = open(COOKIE_FILE, "r", encoding="utf-8").read().splitlines()
+                            new_cookies = [c for c in old_cookies if c not in live_cookies_found]
+                            open(COOKIE_FILE, "w", encoding="utf-8").write("\n".join(new_cookies) + "\n" if new_cookies else "")
+                            
+                        if cleaned_status:
+                            print("    -> [DONE] Quét dọn hoàn tất!")
+                break
+    except Exception as e: print(f"\n[!] LỖI HỆ THỐNG: {e}")
+
+def check_all_data_tong():
+    if not os.path.exists(DB_COOKIES_FILE):
+        return print(f"\n[!] LỖI: Không tìm thấy file Data Tổng. Hãy vào Mode 4 bấm 'y' để tải về trước!")
+        
+    try:
+        raw_lines = open(DB_COOKIES_FILE, "r", encoding="utf-8").readlines()
+        full_db = [line.strip() for line in raw_lines if line.strip()]
+        if not full_db: return print(f"\n[!] LỖI: File Data Tổng trống.")
+
+        cookies_to_check = []
+        for line in full_db:
+            parts = line.split(":")
+            if len(parts) >= 3:
+                cookies_to_check.append(":".join(parts[2:]))
+        
+        if not cookies_to_check:
+            return print("\n[!] Không tìm thấy định dạng Cookie hợp lệ trong Data Tổng!")
+
+        cookies_text = "\n".join(cookies_to_check)
+        print(f"\n[*] Đang Submit {len(cookies_to_check)} Cookies từ Data Tổng lên Cookie Checker...")
+        
+        headers = {"X-API-Key": COOKIE_API_KEY, "Content-Type": "application/json"}
+        res = requests.post(f"{COOKIE_URL}/submit", headers=headers, json={"cookies": cookies_text})
+        
+        if res.status_code in [401, 403]: return print(f"[!] LỖI API: Key không hợp lệ.")
+        elif res.status_code == 429: return print(f"[!] LỖI RATE LIMIT: Đợi {res.json().get('cooldown', 20)}s.")
+        elif res.status_code != 200: return print(f"[!] LỖI API: Mã {res.status_code}")
+        
+        session_id = res.json().get("session_id")
+        while True:
+            time.sleep(2)
+            st_res = requests.get(f"{COOKIE_URL}/status/{session_id}", headers=headers)
+            if st_res.status_code != 200: continue
+            st_data = st_res.json()
+            st = st_data.get("status")
+            print(f"\r   -> [{st.upper()}] Tiến độ: {st_data.get('checked', 0)}/{st_data.get('total', 0)}    ", end="", flush=True)
+            
+            if st in ["completed", "error"]:
+                print() 
+                if st == "completed" and st_data.get("download_files"):
+                    live_cookies_found = []
+                    
+                    for file_info in st_data["download_files"]:
+                        ftype = file_info["type"]
+                        save_path = os.path.join(BASE_DIR, f"Cookie_DataTong_{ftype}_result.txt")
+                        dl_res = requests.get(f"{COOKIE_URL}/download/{session_id}/{ftype}", headers=headers)
+                        
+                        result_cookies = [c.strip() for c in dl_res.text.splitlines() if c.strip()]
+                        mapped_lines = []
+                        
+                        for cookie in result_cookies:
+                            found_match = False
+                            for db_line in full_db:
+                                if cookie in db_line: 
+                                    mapped_lines.append(db_line)
+                                    found_match = True
+                                    break
+                            if not found_match:
+                                mapped_lines.append(cookie) 
+
+                        final_content = "\n".join(mapped_lines) + "\n" if mapped_lines else ""
+                        open(save_path, "w", encoding="utf-8").write(final_content)
+                        print(f"[+] Đã lưu: {save_path}")
+
+                        if "live" in ftype.lower() or "valid" in ftype.lower():
+                            live_cookies_found.extend(result_cookies)
+                            if SHEET_WEBHOOK and mapped_lines:
+                                try:
+                                    requests.post(SHEET_WEBHOOK, json={"delete_accounts": mapped_lines})
+                                    print(f"    -> [GOOGLE SHEETS] Đã lệnh cho Sheets XÓA {len(mapped_lines)} acc LIVE!")
+                                except Exception: pass
+
+                        if any(k in ftype.lower() for k in ["lock", "face", "checkpoint"]) and mapped_lines:
+                            open(FACE_TARGET_CONFIG, "w", encoding="utf-8").write(save_path)
+                            print(f"    -> [AUTO-LINK & FORWARD] Đã nạp {len(mapped_lines)} acc khoá sang Face Unlock!")
+                            if SHEET_WEBHOOK:
+                                try:
+                                    requests.post(SHEET_WEBHOOK, json={"accounts": mapped_lines})
+                                    print(f"    -> [GOOGLE SHEETS] Đã CẬP NHẬT {len(mapped_lines)} acc khoá lên bảng tính (Chống trùng)!")
+                                except Exception as e:
+                                    print(f"    -> [!] Lỗi bắn lên Sheets: {e}")
+
+                        elif mapped_lines and "live" not in ftype.lower():
+                            print(f"    -> [AUTO-LINK] Đã ghép thành công User:Pass cho file này từ Data Tổng!")
+
+                    if live_cookies_found:
+                        print(f"\n[*] [AUTO-CLEAN] Phát hiện {len(live_cookies_found)} acc LIVE trong Data Tổng.")
+                        print("    -> Đang tự động XÓA sạch các acc SỐNG khỏi file Data_Tong_Cookies.txt...")
+                        
+                        if os.path.exists(DB_COOKIES_FILE):
+                            old_lines = open(DB_COOKIES_FILE, "r", encoding="utf-8").read().splitlines()
+                            new_lines = [line for line in old_lines if not any(lc in line for lc in live_cookies_found)]
+                            open(DB_COOKIES_FILE, "w", encoding="utf-8").write("\n".join(new_lines) + "\n" if new_lines else "")
+                            print("    -> [DONE] Data Tổng đã được dọn dẹp sạch sẽ, tối ưu list!")
+                break
+    except Exception as e: print(f"\n[!] LỖI HỆ THỐNG: {e}")
+
+def find_cookies():
+    print("\n[?] Tùy chọn tải dữ liệu từ Google Drive:")
+    print(" - Bấm 'y' + Enter: Để tự động tải/cập nhật 2 file (Data Tổng + acc.txt)")
+    print(" - Bấm 'Enter' luôn: Để bỏ qua, dùng dữ liệu đang có sẵn trong máy")
+    choice = input("Lựa chọn của bạn: ").strip().lower()
+
+    ACC_FILE_PATH = os.path.join(BASE_DIR, "acc.txt")
+
+    if choice == 'y':
+        print("\n[*] Đang kết nối Google Drive...")
+        file_id_data = "1k8B2Vkdu-w3-K-O92vMeC1HQbKGaZb0B"
+        file_id_acc = "12oxXXlSPvHbB0YRUMQcHhLHiE4gemiVg"
+        url = "https://docs.google.com/uc?export=download"
+        session = requests.Session()
+        
+        def download_drive(fid, save_path, name):
+            try:
+                res = session.get(url, params={'id': fid}, stream=True)
+                token = None
+                for key, value in res.cookies.items():
+                    if key.startswith("download_warning"):
+                        token = value
+                        break
+                if token:
+                    res = session.get(url, params={'id': fid, 'confirm': token}, stream=True)
+                
+                with open(save_path, "wb") as f:
+                    for chunk in res.iter_content(32768):
+                        if chunk: f.write(chunk)
+                print(f"[+] Đã tải xong {name}: {save_path}")
+            except Exception as e:
+                print(f"[!] Lỗi khi tải {name}: {e}")
+
+        download_drive(file_id_data, DB_COOKIES_FILE, "Data Tổng")
+        download_drive(file_id_acc, ACC_FILE_PATH, "File acc.txt")
+
+    try: raw_data = open(DB_COOKIES_FILE, "r", encoding="utf-8").readlines()
+    except: raw_data = []
+    
+    if not raw_data: 
+        return print(f"\n[!] LỖI: Dữ liệu {DB_COOKIES_FILE} trống hoặc không tồn tại. Hãy chạy lại và bấm 'y' để tải về!")
+
+    db = {}
+    for line in raw_data:
+        parts = line.strip().split(":")
+        if len(parts) >= 3: db[parts[0].strip()] = line.strip()
+
+    print(f"\n ĐÃ TẢI {len(db)} ACCOUNT TỪ DATA TỔNG!")
+    
+    print("\n[?] NHẬP MÃ DÀN ACC ĐỂ QUÉT TỪ FILE acc.txt")
+    print(" - Ví dụ: m120, M69, m153,...")
+    print(" - Hoặc để TRỐNG và ấn Enter để tự dán list User:Pass thủ công.")
+    m_code = input("=> Nhập mã M: ").strip().lower()
+
+    targets = []
+    
+    if m_code:
+        if not os.path.exists(ACC_FILE_PATH):
+            return print(f"\n[!] LỖI: Không tìm thấy file {ACC_FILE_PATH}. Vui lòng chọn 'y' ở bước tải để hệ thống kéo file về!")
+        
+        try:
+            acc_lines = open(ACC_FILE_PATH, "r", encoding="utf-8").readlines()
+            found_section = False
+            
+            for line in acc_lines:
+                clean_line = line.strip()
+                if not clean_line: continue 
+                lower_line = clean_line.lower()
+
+                is_header = False
+                match = re.match(r'^m(\d+)([^a-z0-9]|$)', lower_line)
+                if match:
+                    is_header = True
+                    current_header_code = "m" + match.group(1)
+
+                if not found_section:
+                    if is_header and current_header_code == m_code:
+                        found_section = True
+                else:
+                    if is_header:
+                        break
+
+                    if ":" in clean_line:
+                        targets.append(clean_line)
+            
+            if targets:
+                print(f"\n[+] Đã vét thành công {len(targets)} acc từ dàn {m_code.upper()} trong acc.txt")
+            else:
+                return print(f"\n[-] Không tìm thấy dàn acc {m_code.upper()} hoặc dàn bị trống trong file acc.txt!")
+        except Exception as e:
+            return print(f"\n[!] LỖI đọc file acc.txt: {e}")
+    else:
+        print("\n[*] Chế độ dán thủ công: Dán list User:Pass -> gõ 'END' -> Enter")
+        while True:
+            try:
+                line = input()
+                if line.strip().upper() == "END": break
+                targets.append(line.strip())
+            except EOFError: break
+        if not targets: return
+
+    found_lines, found_cookies = [], []
+    for target in targets:
+        user = target.split(":")[0].strip() if target else ""
+        if user in db:
+            found_lines.append(db[user])
+            found_cookies.append(":".join(db[user].split(":")[2:]))
+
+    print("\n" + "="*50)
+    if found_lines:
+        open(FOUND_RESULT_FILE, "w", encoding="utf-8").write("\n".join(found_lines) + "\n")
+        open(COOKIE_FILE, "w", encoding="utf-8").write("\n".join(found_cookies) + "\n")
+        print(f" [THÀNH CÔNG] TÌM THẤY {len(found_lines)}/{len(targets)} TÀI KHOẢN!")
+    else: print("[-] XU CÀ NA: Không tìm thấy Cookie nào khớp!")
+
+def menu():
+    check_env()
+    while True:
+        prio_txt = "BẬT" if get_priority_state() else "TẮT"
+        print("\n" + "="*50)
+        print("      ZEROPOINT ALL-IN-ONE & COOKIE HUNTER      ")
+        print("="*50)
+        print("1. Kiểm tra số dư Face Unlock")
+        print("2. Chạy giải Face Unlock (Tự bắt link chuẩn form từ Mode 3)")
+        print("3. Quét Cookie Checker (Tự động LỌC & XÓA acc đã mở Face)")
+        print("4. CHẾ ĐỘ THỢ SĂN: Tìm Cookie từ List User:Pass (Quét theo M)")
+        print(f"5. Bật/Tắt Luồng Ưu Tiên Face Unlock (Đang: {prio_txt})")
+        print("6. MẸO: Check acc có trong Database ZeroPoint (Không mất tiền)")
+        print("7. Ép Hủy toàn bộ Job đang treo trên máy chủ ZeroPoint")
+        print("8. Check toàn bộ Cookie trong Data Tổng (Kèm Tự động Dọn dẹp)")
+        print("9. Thoát Tool")
+        print("="*50)
+        
+        choice = input("[?] Chọn Mode (1-9): ")
+        if choice == '1': face_balance()
+        elif choice == '2': face_unlock()
+        elif choice == '3': cookie_checker()
+        elif choice == '4': find_cookies()
+        elif choice == '5': toggle_priority()
+        elif choice == '6': check_zeropoint_db()
+        elif choice == '7': force_clear_jobs()
+        elif choice == '8': check_all_data_tong()
+        elif choice == '9': sys.exit()
+        else: print("[!] Nhập sai.")
+
+if __name__ == "__main__":
+    menu()
+EOF
+
+python /storage/emulated/0/Download/Shouko/ZeroPoint_AIO.py
