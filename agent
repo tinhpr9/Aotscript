@@ -5,15 +5,20 @@ import json
 import zipfile
 import subprocess
 import re
+import sys
 
 # ==========================================
-# CẤU HÌNH CLOUD
+# CẤU HÌNH CLOUD & HỆ THỐNG
 # ==========================================
 OWNER = "tinhpr9"
 REPO = "Aotscript"
 COMMAND_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh.txt"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
+
+# Cấu hình tự cập nhật (Self-Update)
+CORE_GITHUB_FILE = "Toolcookiechecker"  # Tên file Python trên nhánh main Github
+LOCAL_PYTHON_FILE = "/storage/emulated/0/Download/Shouko/ZeroPoint_AIO.py" # Đường dẫn file chạy trên máy ảo
 
 LAST_CMD_TEXT = ""
 
@@ -110,11 +115,30 @@ EOF
     os.system(cmd)
     print("[+] Xong file marmotgag2!")
 
+# Hàm 5: SIÊU NĂNG LỰC - TỰ UPDATE CORE PYTHON VÀ KHỞI ĐỘNG LẠI
+def update_core_script():
+    print(f"\n[*] ĐANG TẢI BẢN CORE PYTHON MỚI NHẤT TỪ GITHUB VÀ TỰ RESTART...")
+    core_url = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/{CORE_GITHUB_FILE}?t={int(time.time())}"
+    try:
+        req = urllib.request.Request(core_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as response:
+            new_code = response.read().decode('utf-8')
+        
+        with open(LOCAL_PYTHON_FILE, 'w', encoding='utf-8') as f:
+            f.write(new_code)
+            
+        print("[+] Tải Core thành công! Đang tự động tái sinh tiến trình...")
+        time.sleep(2)
+        # Sử dụng os.execv để ghi đè tiến trình Python hiện tại bằng bản mới
+        os.execv(sys.executable, ['python', LOCAL_PYTHON_FILE])
+    except Exception as e:
+        print(f"[!] Lỗi khi tự cập nhật Core: {e}")
+
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
 # ==========================================
 print("="*50)
-print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN CHUẨN)  ")
+print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN TỰ ĐỘNG TÁI SINH)  ")
 print("="*50)
 
 while True:
@@ -151,6 +175,9 @@ while True:
                     
                 elif cmd == "INSTALL_MARMOT":
                     install_marmotgag2()
+                    
+                elif cmd == "UPDATE_CORE":
+                    update_core_script()
                     
                 elif cmd == "REBOOT":
                     print("[*] Đang ép khởi động lại thiết bị...")
