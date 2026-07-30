@@ -93,18 +93,18 @@ def install_qhtrack():
     print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT TRACK VÀO DELTA...")
     cmd = """
     cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/qhtrack
-loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Track"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Track?t=" .. tostring(os.time())))()
 EOF
     """
     os.system(cmd)
     print("[+] Xong file qhtrack!")
 
-# Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta
+# Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta (Đã fix link & chèn lách cache)
 def install_marmotgag2():
     print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT MARMOTGAG2 VÀO DELTA...")
     cmd = """
     cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/marmotgag2
-loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Script"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2?t=" .. tostring(os.time())))()
 EOF
     """
     os.system(cmd)
@@ -119,6 +119,7 @@ print("="*50)
 
 while True:
     try:
+        # Lách cache ngay trên link lấy lệnh điều khiển
         url_no_cache = f"{COMMAND_URL}?t={int(time.time())}"
         req = urllib.request.Request(url_no_cache, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req) as response:
