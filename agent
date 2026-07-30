@@ -133,16 +133,20 @@ def update_core_script():
     except Exception as e:
         print(f"[!] Lỗi khi tự cập nhật Core: {e}")
 
-# Hàm 6: Chạy tool Cày Lấp Bụ qua Termux
+# Hàm 6: Chạy tool Cày Lấp Bụ qua Termux (Bản chạy ngầm + Xuất Log)
 def run_termux_caylapbu():
-    print(f"\n[*] ĐANG KÍCH HOẠT TOOL CAYLAPBU TRONG TERMUX...")
-    # Dùng r'' (raw string) để python không nhầm lẫn dấu \$ của bash
-    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /storage/emulated/0/Download && /data/data/com.termux/files/home/caylapbu/main"'
+    print(f"\n[*] ĐANG KÍCH HOẠT TOOL CAYLAPBU (CHẠY NGẦM)...")
+    
+    # Đã thêm > log_caylapbu.txt 2>&1 để ghi lịch sử chạy
+    # Đã thêm & ở cuối cùng để tách luồng, không làm đơ tool Python
+    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /storage/emulated/0/Download && nohup /data/data/com.termux/files/home/caylapbu/main > /storage/emulated/0/Download/log_caylapbu.txt 2>&1 &"'
+    
     try:
         os.system(cmd)
-        print("[+] Đã gửi lệnh chạy caylapbu thành công!")
+        print("[+] Đã gửi lệnh! Toàn bộ màn hình Termux đang được ghi vào file log_caylapbu.txt")
     except Exception as e:
         print(f"[!] Lỗi khi chạy caylapbu: {e}")
+
 
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
