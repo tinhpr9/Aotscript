@@ -1,0 +1,278 @@
+local keys = {  -- Add as many key
+    "DPFXpRuyWNCxFLGLPmvdRnzsQndQJWwL", 
+    "vKikIrEFNKdjIvRnDnItQPEsaJiXBerK", 
+}
+
+math.randomseed(os.time())
+script_key = keys[math.random(#keys)];
+
+getgenv().GAG2Config = {
+    FPS_CAP = 5,
+    ADD_FRIEND = true,
+    AUTO_UPDATE_RESTART = true,
+    COLLECT_FRUIT_DELAY = 20,
+
+    -- Cấu Hình Pet
+    MAX_PET_EQUIP = 6,
+    BUY_PET = {  
+        -- ===========================
+        -- 1. BẢN GỐC (NORMAL)
+        -- ===========================
+        ["BlackDragon"] = 99,
+        ["GoldenDragonfly"] = 99, 
+        ["Unicorn"] = 99,
+        ["Raccoon"] = 99, 
+        ["IceSerpent"] = 99,
+        ["Robin"] = 5,
+        ["Deer"] = 5,
+        ["Firefly"] = 99,
+        ["Butterfly"] = 99,               
+        ["Bunny"] = 4,
+
+        -- ===========================
+        -- 2. TẤT CẢ MUTATION (Đã set đồng loạt = 99)
+        -- ===========================
+
+        -- Bald Eagle
+        ["Mega Bald Eagle"] = 99,
+        ["Big Bald Eagle"] = 99,
+        ["Huge Bald Eagle"] = 99,
+        ["Rainbow Bald Eagle"] = 99,
+        ["Gold Bald Eagle"] = 99,
+
+        -- Turtle
+        ["Huge Turtle"] = 99,
+        ["Big Turtle"] = 99,
+        ["Mega Turtle"] = 99,
+        ["Rainbow Turtle"] = 99,
+        ["Gold Turtle"] = 99,
+
+        -- Monkey
+        ["Mega Monkey"] = 99,
+        ["Big Monkey"] = 99,
+        ["Huge Monkey"] = 99,
+        ["Rainbow Monkey"] = 99,
+        ["Gold Monkey"] = 99,
+
+        -- Raccoon
+        ["Mega Raccoon"] = 99,
+        ["Big Raccoon"] = 99, 
+        ["Rainbow Raccoon"] = 99,
+        ["Gold Raccoon"] = 99,
+
+        -- Deer
+        ["Huge Deer"] = 99,
+        ["Mega Deer"] = 99,
+        ["Rainbow Deer"] = 99,
+        ["Gold Deer"] = 99,
+        ["Big Deer"] = 99,
+
+        -- Unicorn
+        ["Mega Unicorn"] = 99,
+        ["Big Unicorn"] = 99,
+        ["Rainbow Unicorn"] = 99,
+        ["Gold Unicorn"] = 99,
+
+        -- BlackDragon
+        ["Rainbow BlackDragon"] = 99,
+        ["Mega BlackDragon"] = 99,
+        ["Gold BlackDragon"] = 99,
+        ["Big BlackDragon"] = 99,
+
+        -- GoldenDragonfly
+        ["Gold GoldenDragonfly"] = 99,
+        ["Mega GoldenDragonfly"] = 99,
+        ["Rainbow GoldenDragonfly"] = 99,
+        ["Big GoldenDragonfly"] = 99,
+
+        -- IceSerpent
+        ["Mega IceSerpent"] = 99,
+        ["Rainbow IceSerpent"] = 99,
+        ["Gold IceSerpent"] = 99,
+        ["Big IceSerpent"] = 99,
+
+        -- Firefly
+        ["Mega Firefly"] = 99,
+        ["Rainbow Firefly"] = 99,
+        ["Gold Firefly"] = 99,
+        ["Big Firefly"] = 99,
+
+        -- Robin
+        ["Mega Robin"] = 99,
+        ["Rainbow Robin"] = 99,
+        ["Gold Robin"] = 99,
+        ["Big Robin"] = 99,
+    },
+    EQUIP_PET = {  
+        {"Bunny", 4, 1},             -- Ưu tiên 1: Đeo tối đa 4 con thỏ
+        {"GoldenDragonfly", 1, 2},   -- Ưu tiên 2: Đeo đúng 1 con ruồi vàng
+        {"Unicorn", 1, 3},           -- Ưu tiên 3: Đeo đúng 1 con kỳ lân
+        
+        -- Các dòng dưới là dự phòng trong trường hợp nick clone chưa cày đủ 4 con thỏ
+        {"Robin", 6, 4},             
+        {"Deer", 6, 5},
+    },
+
+
+   -- Cấu Hình Trồng Cây
+    PLANT_SEED = {  
+        ["Carrot"] = 1,
+        ["Strawberry"] = 1,
+        ["Blueberry"] = 1,
+        ["Tulip"] = 1,
+        ["Tomato"] = 1,
+        ["Apple"] = 1,
+        ["Cactus"] = 1,
+        ["Pineapple"] = 1,
+        ["Banana"] = 1,
+        ["Grape"] = 1,
+        ["Coconut"] = 1,
+        ["Mango"] = 1,
+        ["Dragon Fruit"] = 1,
+        ["Cherry"] = 1,
+        ["Sunflower"] = 1,
+        ["Green Bean"] = 1,
+        ["Venus Fly Trap"] = 10,
+        ["Pomegranate"] = 10,
+        ["Poison Apple"] = 10,
+        ["Venom Spitter"] = 30,
+        ["Hypno Bloom"] = 1,
+        ["Moon Bloom"] = 1,
+        ["Dragon's Breath"] = 2,
+        ["Sun Bloom"] = 1,
+    },
+    
+    -- ĐÃ XÓA GIỚI HẠN CÂN NẶNG ĐỂ TRỊ LỖI KẸT ĐẤT VÀ ƯU TIÊN THU HOẠCH ĐỘT BIẾN
+    COLLECT_FRUIT_MIN_WEIGHT = {},
+
+    -- Cấu Hình Mua
+    BUY_SEED = {     
+        ["Rocket Pop"] = 9999,
+        ["Carrot"] = 5,
+        ["Strawberry"] = 5,
+        ["Blueberry"] = 5,
+        ["Tulip"] = 5,
+        ["Tomato"] = 5,
+        ["Apple"] = 5,
+        ["Bamboo"] = 9999,
+        ["Cactus"] = 2,
+        ["Pineapple"] = 3,
+        ["Mushroom"] = 9999,
+        ["Banana"] = 1,
+        ["Grape"] = 1,
+        ["Coconut"] = 1,
+        ["Mango"] = 1,
+        ["Dragon Fruit"] = 1,
+        ["Acorn"] = 9999,
+        ["Cherry"] = 1,
+        ["Sunflower"] = 1,
+        ["Venus Fly Trap"] = 1,
+        ["Venom Spitter"] = 9999,
+        ["Hypno Bloom"] = 9999,
+        ["Dragon's Breath"] = 9999,
+        ["Star Fruit"] = 9999,
+        ["Sun Bloom"] = 9999,
+        ["Moon Bloom"] = 9999, 
+    },
+    BUY_AUCTION = {  
+        ["Common Egg"] = { 1000000, 9999 },
+        ["Bamboo"] = { 60000, 99999 },
+        ["Moon Bloom"] = { 80000000, 9999 },
+        ["Hypno Bloom"] = { 100000000, 9999 },
+        ["Dragon's Breath"] = { 100000000, 9999 },
+        ["Super Watering Can"] = { 1100000, 9999 },
+        ["Super Sprinkler"] = { 1100000, 9999 },
+        ["Uncommon Seed Pack"] = { 150000, 9999 },
+    },
+    BUY_CRATE = {},  
+    BUY_GEAR_MIN_SHECKLE = 1500000,  
+    BUY_GEAR = {     
+        ["Common Sprinkler"] = 8,
+        ["Uncommon Sprinkler"] = 8,
+        ["Common Watering Can"] = 8,
+        ["Rare Sprinkler"] = 8,
+        ["Legendary Sprinkler"] = 9999,
+        ["Super Watering Can"] = 9999,
+        ["Super Sprinkler"] = 9999,
+    },
+
+    -- Cấu Hình Bán
+    SELL_FRUIT_MULTIPLIER = { ["Bamboo"] = 1, ["Mushroom"] = 4, ["Rocket Pop"] = 4, ["Dragon's Breath"] = 4, ["Moon Bloom"] = 4, ["Venom Spitter"] = 4, ["Star Fruit"] = 4, ["Sun Bloom"] = 4, ["Hypno Bloom"] = 4, }, 
+    SELL_ALL_DAILY_DEAL = 5000000,  
+    SELL_ALL_DELAY = 20,  
+
+    -- Cấu Hình Vật Phẩm Tiêu Hao
+    USE_SPRINKLER = { "Common Sprinkler", "Uncommon Sprinkler", "Rare Sprinkler", "Legendary Sprinkler" },  
+    USE_WATERING_CAN = { "Common Watering Can" },  
+    USE_WATERING_CAN_DELAY = 60,  
+
+    -- Cấu Hình Khác
+    COLLECT_PLANT_IF_MUTATED = { "Mushroom", "Rocket Pop", "Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sun Bloom", "Star Fruit", "Hypno Bloom" },  
+    FAVOURITE_FRUIT = {},  
+    FOCUS_COLLECT_DROPPED_SEED = true,  
+    EXPAND_PLOT = 3,  
+
+    -- Cấu Hình Auto Mail
+AUTO_MAIL = {  
+    ["Cullen_Master68746"] = {
+        ["Mega"] = "All",
+        ["Rainbow"] = "All",
+        ["Unicorn"] = 1,
+        ["GoldenDragonfly"] = 1,
+        ["Gold"] = "All",
+
+        ["Mega GoldenDragonfly"] = "All",
+        ["Rainbow GoldenDragonfly"] = "All",
+        ["Gold GoldenDragonfly"] = "All",
+        ["Big GoldenDragonfly"] = "All",
+
+        ["Mega Unicorn"] = "All",
+        ["Rainbow Unicorn"] = "All",
+        ["Gold Unicorn"] = "All",
+        ["Big Unicorn"] = "All",
+
+        ["Mega Deer"] = "All",
+        ["Rainbow Deer"] = "All",
+        ["Gold Deer"] = "All",
+        ["Big Deer"] = "All",
+
+        ["Mega Robin"] = "All",
+        ["Rainbow Robin"] = "All",
+        ["Gold Robin"] = "All",
+        ["Big Robin"] = "All",
+
+        ["BlackDragon"] = "All",
+        ["IceSerpent"] = "All",
+        ["Raccoon"] = "All",
+        ["Firefly"] = "All",
+        ["Turtle"] = "All",
+        ["Monkey"] = "All",
+        ["Bee"] = "All",
+        ["Bald Eagle"] = "All",
+
+        ["Dragon's Breath"] = "All",
+        ["Star Fruit"] = "All",
+        ["Sun Bloom"] = "All",
+        ["Venom Spitter"] = "All",
+        ["Hypno Bloom"] = "All",
+        ["Moon Bloom"] = "All",
+        ["Fire Fern"] = "All",
+        ["Super Sprinkler"] = "All",
+        ["Super Watering Can"] = "All",
+        ["Legendary Sprinkler"] = "All",
+    }
+},
+    AUTO_MAIL_DELAY = 60,  
+    COLLECT_MAIL = true,
+
+    -- Cấu Hình Discord
+    WEBHOOK_PET_NAME = {},
+    WEBHOOK_PET_RARITY = { "Mythic", "Super", "Secret" },
+    WEBHOOK_URL = "https://discord.com/api/webhooks/1519600308085587991/9ulkJWUsfMpRrtG-2MIeNOMci0JQk8FLOZcEiZ4Gstc5ByBMhGWPjQjzx_aK7NqUJS1Q",
+    DISCORD_ID = "",
+    WEBHOOK_NOTE = "",  
+    SHOW_PUBLIC_DISCORD_ID = true,
+    SHOW_WEBHOOK_USERNAME = true,  
+    SHOW_WEBHOOK_JOBID = true,  
+}
+loadstring(game:HttpGet("https://api.luarmor.net/files/v4/loaders/c9ea3aa6c782de82dee4bcf6b9a9d03e.lua"))()
