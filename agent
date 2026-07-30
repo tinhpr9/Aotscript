@@ -134,13 +134,16 @@ def update_core_script():
     except Exception as e:
         print(f"[!] Lỗi khi tự cập nhật Agent: {e}")
 
-# Hàm 6: Chạy tool Cày Lấp Bụ (Chạy ngầm & Xuất Log để không đơ hệ thống)
+# Hàm 6: Chạy tool Cày Lấp Bụ trực tiếp từ máy (Bỏ qua tải CDN, Tự động vượt menu)
 def run_termux_caylapbu():
-    print(f"\n[*] ĐANG KÍCH HOẠT TOOL CAYLAPBU (CHẠY NGẦM)...")
-    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /storage/emulated/0/Download && nohup /data/data/com.termux/files/home/caylapbu/main > /storage/emulated/0/Download/log_caylapbu.txt 2>&1 &"'
+    print(f"\n[*] ĐANG KÍCH HOẠT TOOL CAYLAPBU (CHẠY NGẦM & TỰ GÕ MENU)...")
+    
+    # Ép thẳng bàn phím ảo (2, 999, 2) vào lệnh chạy file main nội bộ
+    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /data/data/com.termux/files/home/caylapbu && echo -e \"2\n999\n2\" | nohup ./main > /storage/emulated/0/Download/log_caylapbu.txt 2>&1 &"'
+    
     try:
         os.system(cmd)
-        print("[+] Đã gửi lệnh chạy! Màn hình log được lưu tại: /Download/log_caylapbu.txt")
+        print("[+] Đã gửi lệnh ép chạy tool! Màn hình log được lưu tại: /Download/log_caylapbu.txt")
     except Exception as e:
         print(f"[!] Lỗi khi chạy caylapbu: {e}")
 
