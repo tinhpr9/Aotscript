@@ -16,9 +16,9 @@ COMMAND_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh.txt"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
 
-# Cấu hình tự cập nhật (Self-Update)
-CORE_GITHUB_FILE = "Toolcookiechecker"  
-LOCAL_PYTHON_FILE = "/storage/emulated/0/Download/Shouko/ZeroPoint_AIO.py" 
+# Cấu hình tự cập nhật (Self-Update CHO CHÍNH AGENT)
+CORE_GITHUB_FILE = "agent"  # Tên file agent trên kho GitHub của bác
+LOCAL_PYTHON_FILE = os.path.abspath(__file__) # Tự động bắt đường dẫn thật của file này trên máy ảo
 
 LAST_CMD_TEXT = ""
 
@@ -146,7 +146,6 @@ def run_termux_caylapbu():
 # Hàm 7: Tải và cài đặt tool Cày Lấp Bụ qua Termux
 def setup_termux_caylapbu():
     print(f"\n[*] ĐANG TẢI VÀ SETUP TOOL CAYLAPBU VÀO TERMUX...")
-    # Bọc lệnh bash -c để chạy được cú pháp <(curl...) của bác
     cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && bash -c \". <(curl -sL https://cdn.quanghuynopro.com/store/concac.sh)\""'
     try:
         os.system(cmd)
