@@ -16,9 +16,11 @@ COMMAND_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh.txt"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
 
-# Cấu hình tự cập nhật (Self-Update CHO CHÍNH AGENT)
-CORE_GITHUB_FILE = "agent"  # Tên file agent trên kho GitHub của bác
-LOCAL_PYTHON_FILE = os.path.abspath(__file__) # Tự động bắt đường dẫn thật của file này trên máy ảo
+# ==========================================
+# CẤU HÌNH TỰ CẬP NHẬT CHO CHÍNH AGENT
+# ==========================================
+CORE_GITHUB_FILE = "agent"  
+LOCAL_PYTHON_FILE = "/sdcard/Download/Agent_Core.py"  
 
 LAST_CMD_TEXT = ""
 
@@ -81,15 +83,12 @@ def update_solver_url(new_url):
         with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Tráo link
         updated_content = re.sub(r'"solver_url":\s*"[^"]*"', f'"solver_url": "{new_url}"', content)
         
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             f.write(updated_content)
             
         print(f"[+] Thành công! Đã cấy link solver mới vào config.json")
-        print(f"[*] Xong việc.")
-        
     except Exception as e:
         print(f"[!] Lỗi khi ghi đè file config: {e}")
 
@@ -115,9 +114,9 @@ EOF
     os.system(cmd)
     print("[+] Xong file marmotgag2!")
 
-# Hàm 5: SIÊU NĂNG LỰC - TỰ UPDATE CORE PYTHON VÀ KHỞI ĐỘNG LẠI
+# Hàm 5: SIÊU NĂNG LỰC - TỰ UPDATE AGENT VÀ KHỞI ĐỘNG LẠI
 def update_core_script():
-    print(f"\n[*] ĐANG TẢI BẢN CORE PYTHON MỚI NHẤT TỪ GITHUB VÀ TỰ RESTART...")
+    print(f"\n[*] ĐANG TẢI BẢN AGENT MỚI NHẤT TỪ GITHUB VÀ TỰ RESTART...")
     core_url = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/{CORE_GITHUB_FILE}?t={int(time.time())}"
     try:
         req = urllib.request.Request(core_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -127,11 +126,11 @@ def update_core_script():
         with open(LOCAL_PYTHON_FILE, 'w', encoding='utf-8') as f:
             f.write(new_code)
             
-        print("[+] Tải Core thành công! Đang tự động tái sinh tiến trình...")
+        print("[+] Tải Agent thành công! Đang tái sinh từ file vật lý...")
         time.sleep(2)
         os.execv(sys.executable, ['python', LOCAL_PYTHON_FILE])
     except Exception as e:
-        print(f"[!] Lỗi khi tự cập nhật Core: {e}")
+        print(f"[!] Lỗi khi tự cập nhật Agent: {e}")
 
 # Hàm 6: Chạy tool Cày Lấp Bụ (Chạy ngầm & Xuất Log để không đơ hệ thống)
 def run_termux_caylapbu():
@@ -153,11 +152,25 @@ def setup_termux_caylapbu():
     except Exception as e:
         print(f"[!] Lỗi khi tải tool caylapbu: {e}")
 
+# Hàm 8: (ĐÃ SỬA) KÉO FILE BOOT TỪ GITHUB ĐỂ BÁC TÙY Ý CHỈNH SỬA
+def setup_termux_boot():
+    print(f"\n[*] ĐANG TẢI CẤU HÌNH BOOT TỪ GITHUB (Termuxboot)...")
+    cmd = """
+    mkdir -p /data/data/com.termux/files/home/.termux/boot
+    curl -sL "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Termuxboot" -o /data/data/com.termux/files/home/.termux/boot/01-agent.sh
+    chmod +x /data/data/com.termux/files/home/.termux/boot/01-agent.sh
+    """
+    try:
+        os.system(cmd)
+        print("[+] Thiết lập Termux Boot hoàn tất! Đã kéo ruột từ Termuxboot về máy.")
+    except Exception as e:
+        print(f"[!] Lỗi khi cài Termux Boot: {e}")
+
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
 # ==========================================
 print("="*50)
-print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN TỰ ĐỘNG TÁI SINH)  ")
+print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN TÙY BIẾN BOOT)  ")
 print("="*50)
 
 while True:
@@ -200,6 +213,9 @@ while True:
                     
                 elif cmd == "RUN_CAYLAPBU":
                     run_termux_caylapbu()
+                    
+                elif cmd == "SETUP_BOOT":
+                    setup_termux_boot()
                     
                 elif cmd == "REBOOT":
                     print("[*] Đang ép khởi động lại thiết bị...")
