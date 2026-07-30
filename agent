@@ -134,29 +134,29 @@ def update_core_script():
     except Exception as e:
         print(f"[!] Lỗi khi tự cập nhật Agent: {e}")
 
-# Hàm 6: Chạy tool Cày Lấp Bụ trực tiếp từ máy (Bỏ qua tải CDN, Tự động vượt menu)
+# Hàm 6: CHỈ CHẠY TOOL NỘI BỘ VÀ TỰ GÕ MENU (Dùng hằng ngày, siêu tốc độ)
 def run_termux_caylapbu():
     print(f"\n[*] ĐANG KÍCH HOẠT TOOL CAYLAPBU (CHẠY NGẦM & TỰ GÕ MENU)...")
     
-    # Ép thẳng bàn phím ảo (2, 999, 2) vào lệnh chạy file main nội bộ
+    # Ép thẳng bàn phím ảo (2, 999, 2) vào lệnh chạy file main nội bộ, KHÔNG tải mạng
     cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /data/data/com.termux/files/home/caylapbu && echo -e \"2\n999\n2\" | nohup ./main > /storage/emulated/0/Download/log_caylapbu.txt 2>&1 &"'
     
     try:
         os.system(cmd)
-        print("[+] Đã gửi lệnh ép chạy tool! Màn hình log được lưu tại: /Download/log_caylapbu.txt")
+        print("[+] Đã ép chạy tool nội bộ thành công! Xem log tại: /Download/log_caylapbu.txt")
     except Exception as e:
         print(f"[!] Lỗi khi chạy caylapbu: {e}")
 
-# Hàm 7: Tải và cài đặt tool Cày Lấp Bụ qua Termux (Bản Tự Động Vượt Menu)
+# Hàm 7: CHỈ TẢI TOOL TỪ SERVER VỀ (Chỉ dùng 1 lần duy nhất cho máy mới)
 def setup_termux_caylapbu():
-    print(f"\n[*] ĐANG TẢI VÀ SETUP TOOL CAYLAPBU VÀO TERMUX (TỰ ĐỘNG NHẬP MENU)...")
+    print(f"\n[*] ĐANG TẢI TOOL CAYLAPBU TỪ SERVER (CHỈ TẢI, KHÔNG CHẠY)...")
     
-    # Thủ thuật: Dùng echo -e "2\n999\n2" để giả lập gõ phím 2, 999, 2 đùn thẳng vào script
-    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && echo -e \"2\n999\n2\" | bash -c \". <(curl -sL https://cdn.quanghuynopro.com/store/concac.sh)\""'
+    # Lệnh nguyên bản, kéo file từ CDN về máy
+    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && bash -c \". <(curl -sL https://cdn.quanghuynopro.com/store/concac.sh)\""'
     
     try:
         os.system(cmd)
-        print("[+] Đã chạy lệnh tải và tự động vượt menu thành công!")
+        print("[+] Đã kéo tool về máy thành công!")
     except Exception as e:
         print(f"[!] Lỗi khi tải tool caylapbu: {e}")
 
