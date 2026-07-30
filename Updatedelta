@@ -1,0 +1,99 @@
+import os
+import subprocess
+import urllib.request
+import json
+import zipfile
+import time
+
+# ==========================================
+# CẤU HÌNH REPO GITHUB CỦA ÔNG
+# ==========================================
+OWNER = "tinhpr9"
+REPO = "Aotscript"
+DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
+
+def auto_update_system():
+    print("="*50)
+    print("   HỆ THỐNG AUTO DOWNLOAD & UPDATE DELTA CLONE")
+    print("="*50)
+    
+    # 1. Tạo thư mục nếu chưa có
+    if not os.path.exists(DOWNLOAD_DIR):
+        os.makedirs(DOWNLOAD_DIR)
+
+    # 2. Gọi API lấy danh sách file từ Github
+    api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"
+    print(f"[*] Đang quét danh sách file mới nhất trên GitHub...")
+
+    try:
+        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode())
+            assets = data.get("assets", [])
+
+        if not assets:
+            return print("[!] Không tìm thấy file nào.")
+
+        print(f"[+] Tìm thấy {len(assets)} file. Bắt đầu tải và tự động cài đặt...")
+
+        # 3. Vòng lặp tải và xử lý từng file
+        for idx, asset in enumerate(assets, 1):
+            file_name = asset["name"]
+            dl_url = asset["browser_download_url"]
+            file_path = os.path.join(DOWNLOAD_DIR, file_name)
+
+            print(f"\n[{idx}/{len(assets)}] Đang tải file: {file_name}")
+            urllib.request.urlretrieve(dl_url, file_path)
+            print(f" -> Tải xong.")
+
+            # ---- NẾU LÀ FILE ZIP ----
+            if file_name.endswith(".zip"):
+                print(" -> Đang tự động bung nén file ZIP...")
+                extract_path = os.path.join(DOWNLOAD_DIR, f"extracted_{file_name}")
+                os.makedirs(extract_path, exist_ok=True)
+                
+                # Dùng module zipfile của Python thay vì lệnh unzip của shell
+                try:
+                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                        zip_ref.extractall(extract_path)
+                    print(f" -> Bung nén thành công vào: {extract_path}")
+                except Exception as e:
+                    print(f" [!] Lỗi giải nén ZIP: {e}")
+                    continue
+
+                # Quét và cài tự động mọi file APK trong thư mục vừa giải nén
+                print(" -> Bắt đầu quét cài đặt toàn bộ Clone...")
+                for root, dirs, files in os.walk(extract_path):
+                    for f in files:
+                        if f.endswith(".apk"):
+                            apk_path = os.path.join(root, f)
+                            print(f"   => Đang cập nhật: {f} ...")
+                            # Chạy lệnh pm install dưới quyền root
+                            cmd = f"su -c 'pm install -r \"{apk_path}\"'"
+                            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                            
+                            if "Success" in result.stdout or result.returncode == 0:
+                                print(f"      [+] XONG! Cập nhật thành công {f}")
+                            else:
+                                print(f"      [!] Lỗi cài đặt: {result.stderr.strip()}")
+                            time.sleep(1) # Nghỉ 1s tránh lag máy
+
+            # ---- NẾU LÀ FILE APK LẺ TẢI TRỰC TIẾP ----
+            elif file_name.endswith(".apk"):
+                print(f" -> Đang tự động cập nhật: {file_name}")
+                cmd = f"su -c 'pm install -r \"{file_path}\"'"
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                if "Success" in result.stdout or result.returncode == 0:
+                    print(f"      [+] XONG! Cập nhật thành công.")
+                else:
+                    print(f"      [!] Lỗi cài đặt: {result.stderr.strip()}")
+
+        print("\n" + "="*50)
+        print("[+] TOÀN BỘ HỆ THỐNG ĐÃ ĐƯỢC CẬP NHẬT TỰ ĐỘNG 100%")
+        print("="*50)
+
+    except Exception as e:
+        print(f"\n[!] LỖI CHUNG CỦA HỆ THỐNG: {e}")
+
+if __name__ == "__main__":
+    auto_update_system()
