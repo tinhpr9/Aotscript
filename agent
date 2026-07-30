@@ -17,8 +17,8 @@ DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
 
 # Cấu hình tự cập nhật (Self-Update)
-CORE_GITHUB_FILE = "Toolcookiechecker"  # Tên file Python trên nhánh main Github
-LOCAL_PYTHON_FILE = "/storage/emulated/0/Download/Shouko/ZeroPoint_AIO.py" # Đường dẫn file chạy trên máy ảo
+CORE_GITHUB_FILE = "Toolcookiechecker"  
+LOCAL_PYTHON_FILE = "/storage/emulated/0/Download/Shouko/ZeroPoint_AIO.py" 
 
 LAST_CMD_TEXT = ""
 
@@ -133,20 +133,26 @@ def update_core_script():
     except Exception as e:
         print(f"[!] Lỗi khi tự cập nhật Core: {e}")
 
-# Hàm 6: Chạy tool Cày Lấp Bụ qua Termux (Bản chạy ngầm + Xuất Log)
+# Hàm 6: Chạy tool Cày Lấp Bụ (Chạy ngầm & Xuất Log để không đơ hệ thống)
 def run_termux_caylapbu():
     print(f"\n[*] ĐANG KÍCH HOẠT TOOL CAYLAPBU (CHẠY NGẦM)...")
-    
-    # Đã thêm > log_caylapbu.txt 2>&1 để ghi lịch sử chạy
-    # Đã thêm & ở cuối cùng để tách luồng, không làm đơ tool Python
     cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /storage/emulated/0/Download && nohup /data/data/com.termux/files/home/caylapbu/main > /storage/emulated/0/Download/log_caylapbu.txt 2>&1 &"'
-    
     try:
         os.system(cmd)
-        print("[+] Đã gửi lệnh! Toàn bộ màn hình Termux đang được ghi vào file log_caylapbu.txt")
+        print("[+] Đã gửi lệnh chạy! Màn hình log được lưu tại: /Download/log_caylapbu.txt")
     except Exception as e:
         print(f"[!] Lỗi khi chạy caylapbu: {e}")
 
+# Hàm 7: Tải và cài đặt tool Cày Lấp Bụ qua Termux
+def setup_termux_caylapbu():
+    print(f"\n[*] ĐANG TẢI VÀ SETUP TOOL CAYLAPBU VÀO TERMUX...")
+    # Bọc lệnh bash -c để chạy được cú pháp <(curl...) của bác
+    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && bash -c \". <(curl -sL https://cdn.quanghuynopro.com/store/concac.sh)\""'
+    try:
+        os.system(cmd)
+        print("[+] Đã chạy lệnh tải tool thành công!")
+    except Exception as e:
+        print(f"[!] Lỗi khi tải tool caylapbu: {e}")
 
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
@@ -157,7 +163,6 @@ print("="*50)
 
 while True:
     try:
-        # Lách cache ngay trên link lấy lệnh điều khiển
         url_no_cache = f"{COMMAND_URL}?t={int(time.time())}"
         req = urllib.request.Request(url_no_cache, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req) as response:
@@ -166,9 +171,7 @@ while True:
         if full_text and full_text != LAST_CMD_TEXT:
             LAST_CMD_TEXT = full_text
             
-            # Tách riêng từng dòng lệnh ra để xử lý (chống lỗi enter)
             commands = full_text.splitlines()
-            
             print(f"\n[!] PHÁT HIỆN {len(commands)} LỆNH MỚI TỪ GITHUB!")
             
             for cmd in commands:
@@ -192,6 +195,9 @@ while True:
                     
                 elif cmd == "UPDATE_CORE":
                     update_core_script()
+                    
+                elif cmd == "SETUP_CAYLAPBU":
+                    setup_termux_caylapbu()
                     
                 elif cmd == "RUN_CAYLAPBU":
                     run_termux_caylapbu()
