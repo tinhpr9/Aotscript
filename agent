@@ -104,7 +104,7 @@ EOF
     os.system(cmd)
     print("[+] Xong file qhtrack!")
 
-# Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta (Đã fix link & chèn lách cache)
+# Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta
 def install_marmotgag2():
     print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT MARMOTGAG2 VÀO DELTA...")
     cmd = """
@@ -129,10 +129,20 @@ def update_core_script():
             
         print("[+] Tải Core thành công! Đang tự động tái sinh tiến trình...")
         time.sleep(2)
-        # Sử dụng os.execv để ghi đè tiến trình Python hiện tại bằng bản mới
         os.execv(sys.executable, ['python', LOCAL_PYTHON_FILE])
     except Exception as e:
         print(f"[!] Lỗi khi tự cập nhật Core: {e}")
+
+# Hàm 6: Chạy tool Cày Lấp Bụ qua Termux
+def run_termux_caylapbu():
+    print(f"\n[*] ĐANG KÍCH HOẠT TOOL CAYLAPBU TRONG TERMUX...")
+    # Dùng r'' (raw string) để python không nhầm lẫn dấu \$ của bash
+    cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /storage/emulated/0/Download && /data/data/com.termux/files/home/caylapbu/main"'
+    try:
+        os.system(cmd)
+        print("[+] Đã gửi lệnh chạy caylapbu thành công!")
+    except Exception as e:
+        print(f"[!] Lỗi khi chạy caylapbu: {e}")
 
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
@@ -178,6 +188,9 @@ while True:
                     
                 elif cmd == "UPDATE_CORE":
                     update_core_script()
+                    
+                elif cmd == "RUN_CAYLAPBU":
+                    run_termux_caylapbu()
                     
                 elif cmd == "REBOOT":
                     print("[*] Đang ép khởi động lại thiết bị...")
