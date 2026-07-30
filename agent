@@ -33,7 +33,8 @@ def auto_update_system():
     api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"
     try:
         req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as response:
+        # ĐÃ THÊM TIMEOUT CHỐNG TREO
+        with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
             assets = data.get("assets", [])
 
@@ -120,7 +121,8 @@ def update_core_script():
     core_url = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/{CORE_GITHUB_FILE}?t={int(time.time())}"
     try:
         req = urllib.request.Request(core_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as response:
+        # ĐÃ THÊM TIMEOUT CHỐNG TREO
+        with urllib.request.urlopen(req, timeout=10) as response:
             new_code = response.read().decode('utf-8')
         
         with open(LOCAL_PYTHON_FILE, 'w', encoding='utf-8') as f:
@@ -152,7 +154,7 @@ def setup_termux_caylapbu():
     except Exception as e:
         print(f"[!] Lỗi khi tải tool caylapbu: {e}")
 
-# Hàm 8: (ĐÃ SỬA) KÉO FILE BOOT TỪ GITHUB ĐỂ BÁC TÙY Ý CHỈNH SỬA
+# Hàm 8: KÉO FILE BOOT TỪ GITHUB ĐỂ TÙY Ý CHỈNH SỬA
 def setup_termux_boot():
     print(f"\n[*] ĐANG TẢI CẤU HÌNH BOOT TỪ GITHUB (Termuxboot)...")
     cmd = """
@@ -170,14 +172,16 @@ def setup_termux_boot():
 # HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
 # ==========================================
 print("="*50)
-print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN TÙY BIẾN BOOT)  ")
+print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN CHỐNG TREO MẠNG V1.2)  ")
 print("="*50)
 
 while True:
     try:
         url_no_cache = f"{COMMAND_URL}?t={int(time.time())}"
         req = urllib.request.Request(url_no_cache, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as response:
+        
+        # ĐÃ FIX CHÍ MẠNG: THÊM TIMEOUT=10 ĐỂ KHÔNG BAO GIỜ BỊ ĐƠ VÒNG LẶP
+        with urllib.request.urlopen(req, timeout=10) as response:
             full_text = response.read().decode('utf-8').strip()
         
         if full_text and full_text != LAST_CMD_TEXT:
@@ -220,7 +224,10 @@ while True:
                 elif cmd == "REBOOT":
                     print("[*] Đang ép khởi động lại thiết bị...")
                     time.sleep(2)
+                    # NÃ 3 PHÁT LIÊN TIẾP, GIẢ LẬP NÀO CŨNG PHẢI SẬP
                     os.system("su -c 'reboot'")
+                    os.system("su -c '/system/bin/reboot'")
+                    os.system("su -c 'svc power reboot'")
                     
                 elif cmd == "IDLE":
                     print("[💤] Đã nhận lệnh nghỉ ngơi.")
@@ -228,6 +235,6 @@ while True:
             print("\n[*] ĐÃ THỰC THI XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\n")
                 
     except Exception as e:
-        pass
+        pass # Nếu mạng lag lỗi timeout, nó sẽ nhảy xuống đây rồi ngâm 15s quay lại thử tiếp
         
     time.sleep(15)
