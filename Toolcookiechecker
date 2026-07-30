@@ -151,7 +151,10 @@ def face_unlock():
                     if st_data.get("result_files"):
                         print("\n[*] Đang tải file kết quả Face Unlock...")
                         for file_info in st_data["result_files"]:
-                            fname = file_info["filename"]
+                            # FIX LỖI STRING INDICES Ở ĐÂY
+                            fname = file_info.get("filename") if isinstance(file_info, dict) else str(file_info)
+                            if not fname: continue
+
                             dl_res = requests.get(f"{FACE_URL}/download/{job_id}/{fname}", headers=headers)
                             content = dl_res.text
                             
@@ -260,7 +263,10 @@ def cookie_checker():
                     live_cookies_found = [] 
                     
                     for file_info in st_data["download_files"]:
-                        ftype = file_info["type"]
+                        # FIX LỖI STRING INDICES Ở ĐÂY
+                        ftype = file_info.get("type") if isinstance(file_info, dict) else str(file_info)
+                        if not ftype: continue
+
                         save_path = os.path.join(BASE_DIR, f"Cookie_{ftype}_result.txt")
                         dl_res = requests.get(f"{COOKIE_URL}/download/{session_id}/{ftype}", headers=headers)
                         
@@ -373,7 +379,10 @@ def check_all_data_tong():
                     live_cookies_found = []
                     
                     for file_info in st_data["download_files"]:
-                        ftype = file_info["type"]
+                        # FIX LỖI STRING INDICES Ở ĐÂY CHỖ MODE 8
+                        ftype = file_info.get("type") if isinstance(file_info, dict) else str(file_info)
+                        if not ftype: continue
+
                         save_path = os.path.join(BASE_DIR, f"Cookie_DataTong_{ftype}_result.txt")
                         dl_res = requests.get(f"{COOKIE_URL}/download/{session_id}/{ftype}", headers=headers)
                         
@@ -575,4 +584,3 @@ def menu():
 if __name__ == "__main__":
     menu()
 EOF
-
