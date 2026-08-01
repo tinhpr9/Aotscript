@@ -1,7 +1,8 @@
-termux-wake-lock
 mkdir -p ~/.termux/boot
 cat << 'EOF' > ~/.termux/boot/01-agent.sh
-#!/bin/bash
+#!/data/data/com.termux/files/usr/bin/bash
+export PATH=/data/data/com.termux/files/usr/bin:$PATH
+
 termux-wake-lock
 sleep 15
 
@@ -12,4 +13,3 @@ curl -sL https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/age
 python /sdcard/Download/Agent_Core.py > /sdcard/Download/Agent_Log.txt 2>&1 &
 EOF
 chmod +x ~/.termux/boot/01-agent.sh
-
