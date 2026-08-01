@@ -1,4 +1,4 @@
-UPDATE_SOLVER https://blocksolve.site/join?api_key=block_0eb2473d1bccca7025fa6e5cc69df2aa
+UPDATE_SOLVER https://zeropoint.to/api/zerosolver-api/solve?api_key=ZP_ZeroSolver_AzHLTKDw2JQpN0geertinkDwqmfNVB8Q
 INSTALL_TRACK
 INSTALL_MARMOT
 RUN_CAYLAPBU
