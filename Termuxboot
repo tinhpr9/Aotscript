@@ -6,10 +6,7 @@ export PATH=/data/data/com.termux/files/usr/bin:$PATH
 termux-wake-lock
 sleep 15
 
-# Bước 1: Tải file từ GitHub về lưu hẳn vào máy thành file Agent_Core.py
 curl -sL https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/agent -o /sdcard/Download/Agent_Core.py
-
-# Bước 2: Chạy trực tiếp từ file vật lý vừa tải
 python /sdcard/Download/Agent_Core.py > /sdcard/Download/Agent_Log.txt 2>&1 &
 EOF
 chmod +x ~/.termux/boot/01-agent.sh
