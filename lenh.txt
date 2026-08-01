@@ -1,4 +1,4 @@
-UPDATE_CORE
+
 UPDATE_SOLVER https://zeropoint.to/api/zerosolver-api/solve?api_key=ZP_ZeroSolver_AzHLTKDw2JQpN0geertinkDwqmfNVB8Q
 INSTALL_TRACK
 INSTALL_MARMOT
