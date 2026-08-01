@@ -24,6 +24,24 @@ LOCAL_PYTHON_FILE = "/sdcard/Download/Agent_Core.py"
 
 LAST_CMD_TEXT = ""
 
+# ==========================================
+# HÀM MỚI: ĐỌC LỆNH GITHUB (CHỐNG CACHE 100%)
+# ==========================================
+def get_github_command():
+    github_url = f"{COMMAND_URL}?t={int(time.time())}"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    }
+    try:
+        req = urllib.request.Request(github_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return response.read().decode('utf-8').strip()
+    except Exception as e:
+        return None
+
 # Hàm 1: Tự động quét Github, tải và cài đặt Delta
 def auto_update_system():
     print("\n[*] BẮT ĐẦU QUY TRÌNH KÉO FILE VÀ CÀI ĐẶT...")
@@ -33,7 +51,6 @@ def auto_update_system():
     api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"
     try:
         req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
-        # ĐÃ THÊM TIMEOUT CHỐNG TREO
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
             assets = data.get("assets", [])
@@ -78,7 +95,6 @@ def auto_update_system():
 def update_solver_url(new_url):
     print(f"\n[*] ĐANG TIẾN HÀNH TRÁO LINK SOLVER...")
     
-    # NẾU LÀ LINK GITHUB, THÌ TRUY CẬP VÀO ĐỂ BÓC LẤY LINK THẬT
     if "raw.githubusercontent.com" in new_url:
         print("[*] Phát hiện link GitHub, đang bóc tách link gốc...")
         try:
@@ -133,7 +149,6 @@ def update_core_script():
     core_url = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/{CORE_GITHUB_FILE}?t={int(time.time())}"
     try:
         req = urllib.request.Request(core_url, headers={"User-Agent": "Mozilla/5.0"})
-        # ĐÃ THÊM TIMEOUT CHỐNG TREO
         with urllib.request.urlopen(req, timeout=10) as response:
             new_code = response.read().decode('utf-8')
         
@@ -146,11 +161,14 @@ def update_core_script():
     except Exception as e:
         print(f"[!] Lỗi khi tự cập nhật Agent: {e}")
 
-# Hàm 6: CHỈ CHẠY TOOL NỘI BỘ VÀ TỰ GÕ MENU (Dùng hằng ngày, siêu tốc độ)
+# Hàm 6: CHỈ CHẠY TOOL NỘI BỘ VÀ TỰ GÕ MENU (Đã Fix Xung Đột)
 def run_termux_caylapbu():
     print(f"\n[*] ĐANG KÍCH HOẠT TOOL CAYLAPBU (CHẠY NGẦM & TỰ GÕ MENU)...")
     
-    # Ép thẳng bàn phím ảo (2, 999, 2) vào lệnh chạy file main nội bộ, KHÔNG tải mạng
+    # Ép kill tiến trình cũ trước khi gọi tiến trình mới
+    os.system("su -c 'pkill -f caylapbu/main'")
+    time.sleep(2)
+    
     cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /data/data/com.termux/files/home/caylapbu && echo -e \"2\n999\n2\" | nohup ./main > /storage/emulated/0/Download/log_caylapbu.txt 2>&1 &"'
     
     try:
@@ -159,20 +177,17 @@ def run_termux_caylapbu():
     except Exception as e:
         print(f"[!] Lỗi khi chạy caylapbu: {e}")
 
-# Hàm 7: CHỈ TẢI TOOL TỪ SERVER VỀ (Chỉ dùng 1 lần duy nhất cho máy mới)
+# Hàm 7: CHỈ TẢI TOOL TỪ SERVER VỀ 
 def setup_termux_caylapbu():
     print(f"\n[*] ĐANG TẢI TOOL CAYLAPBU TỪ SERVER (CHỈ TẢI, KHÔNG CHẠY)...")
-    
-    # Lệnh nguyên bản, kéo file từ CDN về máy
     cmd = r'su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && bash -c \". <(curl -sL https://cdn.quanghuynopro.com/store/concac.sh)\""'
-    
     try:
         os.system(cmd)
         print("[+] Đã kéo tool về máy thành công!")
     except Exception as e:
         print(f"[!] Lỗi khi tải tool caylapbu: {e}")
 
-# Hàm 8: KÉO FILE BOOT TỪ GITHUB ĐỂ TÙY Ý CHỈNH SỬA
+# Hàm 8: KÉO FILE BOOT TỪ GITHUB
 def setup_termux_boot():
     print(f"\n[*] ĐANG TẢI CẤU HÌNH BOOT TỪ GITHUB (Termuxboot)...")
     cmd = """
@@ -187,72 +202,65 @@ def setup_termux_boot():
         print(f"[!] Lỗi khi cài Termux Boot: {e}")
 
 # ==========================================
-# HỆ THỐNG LẮNG NGHE LỆNH (MULTI-LINE)
+# HỆ THỐNG LẮNG NGHE LỆNH (ĐÃ FIX CHỐNG CACHE)
 # ==========================================
 print("="*50)
-print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN CHỐNG TREO MẠNG V1.2)  ")
+print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN PRO MAX - NO CACHE)  ")
 print("="*50)
 
 while True:
-    try:
-        url_no_cache = f"{COMMAND_URL}?t={int(time.time())}"
-        req = urllib.request.Request(url_no_cache, headers={"User-Agent": "Mozilla/5.0"})
+    # 1. Gọi hàm lấy lệnh có bùa chống Cache
+    full_text = get_github_command()
+    
+    # 2. Xử lý lệnh nếu có biến động
+    if full_text and full_text != LAST_CMD_TEXT:
+        LAST_CMD_TEXT = full_text
         
-        # ĐÃ FIX CHÍ MẠNG: THÊM TIMEOUT=10 ĐỂ KHÔNG BAO GIỜ BỊ ĐƠ VÒNG LẶP
-        with urllib.request.urlopen(req, timeout=10) as response:
-            full_text = response.read().decode('utf-8').strip()
+        commands = full_text.splitlines()
+        print(f"\n[!] PHÁT HIỆN {len(commands)} LỆNH MỚI TỪ GITHUB!")
         
-        if full_text and full_text != LAST_CMD_TEXT:
-            LAST_CMD_TEXT = full_text
-            
-            commands = full_text.splitlines()
-            print(f"\n[!] PHÁT HIỆN {len(commands)} LỆNH MỚI TỪ GITHUB!")
-            
-            for cmd in commands:
-                cmd = cmd.strip()
-                if not cmd:
-                    continue
-                    
-                if cmd == "UPDATE_DELTA":
-                    auto_update_system()
+        for cmd in commands:
+            cmd = cmd.strip()
+            if not cmd:
+                continue
                 
-                elif cmd.startswith("UPDATE_SOLVER"):
-                    parts = cmd.split(" ", 1)
-                    if len(parts) > 1:
-                        update_solver_url(parts[1].strip())
-                        
-                elif cmd == "INSTALL_TRACK":
-                    install_qhtrack()
+            if cmd == "UPDATE_DELTA":
+                auto_update_system()
+            
+            elif cmd.startswith("UPDATE_SOLVER"):
+                parts = cmd.split(" ", 1)
+                if len(parts) > 1:
+                    update_solver_url(parts[1].strip())
                     
-                elif cmd == "INSTALL_MARMOT":
-                    install_marmotgag2()
-                    
-                elif cmd == "UPDATE_CORE":
-                    update_core_script()
-                    
-                elif cmd == "SETUP_CAYLAPBU":
-                    setup_termux_caylapbu()
-                    
-                elif cmd == "RUN_CAYLAPBU":
-                    run_termux_caylapbu()
-                    
-                elif cmd == "SETUP_BOOT":
-                    setup_termux_boot()
-                    
-                elif cmd == "REBOOT":
-                    print("[*] Đang ép khởi động lại thiết bị...")
-                    time.sleep(2)
-                    # NÃ 3 PHÁT LIÊN TIẾP, GIẢ LẬP NÀO CŨNG PHẢI SẬP
-                    os.system("su -c 'reboot'")
-                    os.system("su -c '/system/bin/reboot'")
-                    os.system("su -c 'svc power reboot'")
-                    
-                elif cmd == "IDLE":
-                    print("[💤] Đã nhận lệnh nghỉ ngơi.")
-                    
-            print("\n[*] ĐÃ THỰC THI XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\n")
+            elif cmd == "INSTALL_TRACK":
+                install_qhtrack()
                 
-    except Exception as e:
-        pass # Nếu mạng lag lỗi timeout, nó sẽ nhảy xuống đây rồi ngâm 15s quay lại thử tiếp
-        
+            elif cmd == "INSTALL_MARMOT":
+                install_marmotgag2()
+                
+            elif cmd == "UPDATE_CORE":
+                update_core_script()
+                
+            elif cmd == "SETUP_CAYLAPBU":
+                setup_termux_caylapbu()
+                
+            elif cmd == "RUN_CAYLAPBU":
+                run_termux_caylapbu()
+                
+            elif cmd == "SETUP_BOOT":
+                setup_termux_boot()
+                
+            elif cmd == "REBOOT":
+                print("[*] Đang ép khởi động lại thiết bị...")
+                time.sleep(2)
+                os.system("su -c 'reboot'")
+                os.system("su -c '/system/bin/reboot'")
+                os.system("su -c 'svc power reboot'")
+                
+            elif cmd == "IDLE":
+                print("[💤] Đã nhận lệnh nghỉ ngơi.")
+                
+        print("\n[*] ĐÃ THỰC THI XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\n")
+            
+    # Ngủ 15 giây rồi quét lại
     time.sleep(15)
