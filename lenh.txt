@@ -1,6 +1,6 @@
-UPDATE_CORE
-UPDATE_SOLVER https://zeropoint.to/api/zerosolver-api/solve?api_key=ZP_ZeroSolver_AzHLTKDw2JQpN0geertinkDwqmfNVB8Q
+UPDATE_SOLVER https://zeropoint.to/api/zerosolver-api/solve?api_key=ZP_ZeroSolver_AzHLTKDwZJQpNOgeertsnkDwqrFMVUEQ
 INSTALL_TRACK
 INSTALL_MARMOT
 RUN_CAYLAPBU
 SETUP_BOOT
+UPDATE_CORE
