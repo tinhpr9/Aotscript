@@ -1,1 +1,4 @@
-REBOOT
+UPDATE_SOLVER https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Solver
+INSTALL_TRACK
+INSTALL_MARMOT
+SETUP_BOOT
