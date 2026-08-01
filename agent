@@ -74,9 +74,21 @@ def auto_update_system():
     except Exception as e:
         print(f"[!] Lỗi Update: {e}")
 
-# Hàm 2: Tự động đổi link Solver API
+# Hàm 2: Tự động đổi link Solver API (Đã nâng cấp bóc link Github)
 def update_solver_url(new_url):
     print(f"\n[*] ĐANG TIẾN HÀNH TRÁO LINK SOLVER...")
+    
+    # NẾU LÀ LINK GITHUB, THÌ TRUY CẬP VÀO ĐỂ BÓC LẤY LINK THẬT
+    if "raw.githubusercontent.com" in new_url:
+        print("[*] Phát hiện link GitHub, đang bóc tách link gốc...")
+        try:
+            req = urllib.request.Request(new_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                new_url = response.read().decode('utf-8').strip()
+                print(f"[+] Lấy link gốc thành công: {new_url[:30]}...")
+        except Exception as e:
+            return print(f"[!] Lỗi khi đọc file Solver trên GitHub: {e}")
+
     if not os.path.exists(CONFIG_PATH):
         return print(f"[!] Lỗi: Không tìm thấy file {CONFIG_PATH} trong máy ảo.")
     
@@ -89,7 +101,7 @@ def update_solver_url(new_url):
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             f.write(updated_content)
             
-        print(f"[+] Thành công! Đã cấy link solver mới vào config.json")
+        print(f"[+] Thành công! Đã cấy link solver thật vào config.json")
     except Exception as e:
         print(f"[!] Lỗi khi ghi đè file config: {e}")
 
