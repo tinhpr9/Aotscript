@@ -201,27 +201,44 @@ def setup_termux_boot():
     except Exception as e:
         print(f"[!] Lỗi khi cài Termux Boot: {e}")
 
-# Hàm 9: TỰ ĐỘNG TẠO FILE LINK VIP SERVER CHO SHOUKO
+# Hàm 9: TỰ ĐỘNG BỐC THĂM LINK VIP (KHÔNG CẦN CÀI ĐẶT TAY)
 def setup_vip_servers():
-    print(f"\n[*] ĐANG TẠO DANH SÁCH VIP SERVER CHO SHOUKO...")
-    cmd = """
-    mkdir -p /storage/emulated/0/Download/Shouko
-    cat << 'EOF' > /storage/emulated/0/Download/Shouko/server_links.txt
-    com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateserverlinkcode=92779279903624242564889139156943
-    com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateserverlinkcode=75965591118341192180390468357627
-    com.tinh.vv.hk,https://www.roblox.com/games/97598239454123?privateserverlinkcode=44898430032643230017153269850342
-    com.tinh.vv.hl,https://www.roblox.com/games/97598239454123?privateserverlinkcode=38947761528483266126778490953326
-    com.tinh.vv.hm,https://www.roblox.com/games/97598239454123?privateserverlinkcode=05215211430310954805339985240264
-    com.tinh.vv.hn,https://www.roblox.com/games/97598239454123?privateserverlinkcode=38859967544877712828846533805220
-    com.tinh.vv.ho,https://www.roblox.com/games/97598239454123?privateserverlinkcode=97156995083024810050699368248741
-    com.tinh.vv.hp,https://www.roblox.com/games/97598239454123?privateserverlinkcode=44759395272633477986974639417044
-    EOF
-    """
+    print(f"\n[*] ĐANG BỐC THĂM LINK VIP TỪ KHO TỔNG...")
     try:
-        os.system(cmd)
-        print("[+] Đã cài đặt server_links.txt thành công cho thiết bị này!")
+        import urllib.request
+        import os
+        import random
+
+        # Tự động lấy ID phần cứng của máy ảo
+        android_id = os.popen('settings get secure android_id').read().strip()
+
+        # Tính toán ra 1 con số ngẫu nhiên nhưng cố định cho từng máy
+        try:
+            machine_index = int(android_id, 16)
+        except:
+            machine_index = random.randint(0, 1000)
+
+        url = "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/tong_hop_link.txt"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        data = urllib.request.urlopen(req, timeout=10).read().decode('utf-8')
+
+        # Tách các cụm link ra (được chia cách nhau bằng 3 dấu bằng ===)
+        blocks = [block.strip() for block in data.split('===') if block.strip()]
+
+        if not blocks:
+            return print("[!] Kho link tổng đang trống hoặc sai định dạng!")
+
+        # Bốc đúng cụm link theo thuật toán (chia lấy dư)
+        my_links = blocks[machine_index % len(blocks)]
+
+        # Lưu vào máy
+        os.system("mkdir -p /storage/emulated/0/Download/Shouko")
+        with open("/storage/emulated/0/Download/Shouko/server_links.txt", "w", encoding='utf-8') as f:
+            f.write(my_links)
+
+        print(f"[+] Đã chép xong cụm link VIP cho 8 acc của thiết bị này!")
     except Exception as e:
-        print(f"[!] Lỗi khi cài đặt VIP Server: {e}")
+        print(f"[!] Lỗi khi lấy link VIP: {e}")
 
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (ĐÃ FIX CHỐNG CACHE)
