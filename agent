@@ -137,7 +137,7 @@ def install_custom_script(script_url):
     print(f"\n[*] PHÁT HIỆN LINK SCRIPT MỚI, ĐANG DÁN VÀO DELTA...")
     cmd = f"""
     cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/marmotgag2
-loadstring(game:HttpGet("{script_url}?t=" .. tostring(os.time())))()
+loadstring(game:HttpGet("{script_url}"))()
 EOF
     """
     os.system(cmd)
