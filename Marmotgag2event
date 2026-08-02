@@ -1,6 +1,5 @@
 local keys = {  -- Thêm bao nhiêu key vào đây cũng được, mỗi key để trong ngoặc kép và cách nhau dấu phẩy
     "DPFXpRuyWNCxFLGLPmvdRnzsQndQJWwL", 
-    "vKikIrEFNKdjIvRnDnItQPEsaJiXBerK", 
 }
 
 math.randomseed(os.time())
