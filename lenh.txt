@@ -1,4 +1,1 @@
-UPDATE_SOLVER https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Solver
-INSTALL_TRACK
-https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2
-SETUP_BOOT
+UPDATE_CORE
