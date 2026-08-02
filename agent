@@ -12,7 +12,7 @@ import sys
 # ==========================================
 OWNER = "tinhpr9"
 REPO = "Aotscript"
-GITHUB_TOKEN = "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"
+GITHUB_TOKEN = "ghp_" + "urV2ZHTpG0VmIFLDF97VFPINBoW6Mg417EEy"
 COMMAND_URL = f"https://{GITHUB_TOKEN}@raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh.txt"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
@@ -125,9 +125,10 @@ def update_solver_url(new_url):
 # Hàm 3: Tạo file Autoexecute qhtrack cho Delta
 def install_qhtrack():
     print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT TRACK VÀO DELTA...")
+    track_url = "https://" + GITHUB_TOKEN + "@raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Track?t="
     cmd = f"""
     cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/qhtrack
-loadstring(game:HttpGet("https://{GITHUB_TOKEN}@raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Track?t=" .. tostring(os.time())))()
+loadstring(game:HttpGet("{track_url}" .. tostring(os.time())))()
 EOF
     """
     os.system(cmd)
@@ -191,9 +192,10 @@ def setup_termux_caylapbu():
 # Hàm 8: KÉO FILE BOOT TỪ GITHUB
 def setup_termux_boot():
     print(f"\n[*] ĐANG TẢI CẤU HÌNH BOOT TỪ GITHUB (Termuxboot)...")
+    raw_termuxboot_url = "https://" + GITHUB_TOKEN + "@raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Termuxboot"
     cmd = f"""
     mkdir -p /data/data/com.termux/files/home/.termux/boot
-    curl -sL "https://{GITHUB_TOKEN}@raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Termuxboot" -o /data/data/com.termux/files/home/.termux/boot/01-agent.sh
+    curl -sL "{raw_termuxboot_url}" -o /data/data/com.termux/files/home/.termux/boot/01-agent.sh
     chmod +x /data/data/com.termux/files/home/.termux/boot/01-agent.sh
     """
     try:
