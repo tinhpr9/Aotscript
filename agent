@@ -210,10 +210,10 @@ def setup_vip_servers():
         import random
 
         # Tự động lấy ID phần cứng của máy ảo
-        android_id = os.popen('settings get secure android_id').read().strip()
-
-        # Tính toán ra 1 con số ngẫu nhiên nhưng cố định cho từng máy
         try:
+            android_id = os.popen('su -c "settings get secure android_id" 2>/dev/null').read().strip()
+            if not android_id:
+                android_id = "0"
             machine_index = int(android_id, 16)
         except:
             machine_index = random.randint(0, 1000)
