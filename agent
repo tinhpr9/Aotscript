@@ -132,23 +132,16 @@ EOF
     os.system(cmd)
     print("[+] Xong file qhtrack!")
 
-# Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta (Đã nâng cấp chọn Map)
-def install_marmotgag2(mode):
-    print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT MARMOTGAG2 (BẢN {mode}) VÀO DELTA...")
-    
-    if mode == "EVENT":
-        url = "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2event"
-    else:
-        # Mặc định là MAIN nếu không gõ gì hoặc gõ MAIN
-        url = "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2"
-        
+# Hàm 4: Dán trực tiếp script từ Link bất kỳ vào Delta
+def install_custom_script(script_url):
+    print(f"\n[*] PHÁT HIỆN LINK SCRIPT MỚI, ĐANG DÁN VÀO DELTA...")
     cmd = f"""
     cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/marmotgag2
-loadstring(game:HttpGet("{url}?t=" .. tostring(os.time())))()
+loadstring(game:HttpGet("{script_url}?t=" .. tostring(os.time())))()
 EOF
     """
     os.system(cmd)
-    print(f"[+] Xong file marmotgag2 bản {mode}!")
+    print(f"[+] Đã dán link mới vào tự động chạy thành công!")
 
 # Hàm 5: SIÊU NĂNG LỰC - TỰ UPDATE AGENT VÀ KHỞI ĐỘNG LẠI
 def update_core_script():
@@ -230,6 +223,11 @@ while True:
             cmd = cmd.strip()
             if not cmd:
                 continue
+                
+            # CƠ CHẾ SIÊU VIỆT: Cứ thấy link là tự dán
+            if cmd.startswith("http://") or cmd.startswith("https://"):
+                install_custom_script(cmd)
+                continue # Nhận diện xong thì bỏ qua các lệnh dưới
                 
             if cmd == "UPDATE_DELTA":
                 auto_update_system()
