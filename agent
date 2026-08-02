@@ -6,6 +6,8 @@ import zipfile
 import subprocess
 import re
 import sys
+import traceback
+import datetime
 
 # ==========================================
 # CẤU HÌNH CLOUD & HỆ THỐNG
@@ -24,6 +26,18 @@ CORE_GITHUB_FILE = "agent"
 LOCAL_PYTHON_FILE = "/sdcard/Download/Agent_Core.py"  
 
 LAST_CMD_TEXT = ""
+
+
+def log_error(action_name, exception_obj):
+    try:
+        err_time = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        tb = traceback.format_exc()
+        msg = f"[{err_time}] Error in {action_name}: {exception_obj}\n{tb}\n"
+        with open("/sdcard/Download/Agent_Error.txt", "a", encoding='utf-8') as f:
+            f.write(msg)
+        print(msg)
+    except Exception as log_e:
+        print("[!] Failed to write error log:", log_e)
 
 # ==========================================
 # HÀM MỚI: ĐỌC LỆNH GITHUB (CHỐNG CACHE 100%)
@@ -74,7 +88,7 @@ def auto_update_system():
                     with zipfile.ZipFile(file_path, 'r') as zip_ref:
                         zip_ref.extractall(extract_path)
                 except Exception as e:
-                    print(f" [!] Lỗi bung zip: {e}")
+                    log_error("auto_update_system_unzip", e)
                     continue
                     
                 for root, dirs, files in os.walk(extract_path):
@@ -90,7 +104,7 @@ def auto_update_system():
 
         print("[+] CẬP NHẬT DELTA HOÀN TẤT CHO THIẾT BỊ NÀY!")
     except Exception as e:
-        print(f"[!] Lỗi Update: {e}")
+        log_error("auto_update_system", e)
 
 # Hàm 2: Tự động đổi link Solver API (Đã nâng cấp bóc link Github)
 def update_solver_url(new_url):
@@ -104,7 +118,8 @@ def update_solver_url(new_url):
                 new_url = response.read().decode('utf-8').strip()
                 print(f"[+] Lấy link gốc thành công: {new_url[:30]}...")
         except Exception as e:
-            return print(f"[!] Lỗi khi đọc file Solver trên GitHub: {e}")
+            log_error("update_solver_url_fetch", e)
+            return
 
     if not os.path.exists(CONFIG_PATH):
         return print(f"[!] Lỗi: Không tìm thấy file {CONFIG_PATH} trong máy ảo.")
@@ -120,7 +135,7 @@ def update_solver_url(new_url):
             
         print(f"[+] Thành công! Đã cấy link solver thật vào config.json")
     except Exception as e:
-        print(f"[!] Lỗi khi ghi đè file config: {e}")
+        log_error("update_solver_url_write", e)
 
 # Hàm 3: Tạo file Autoexecute qhtrack cho Delta
 def install_qhtrack():
@@ -161,7 +176,7 @@ def update_core_script():
         time.sleep(2)
         os.execv(sys.executable, ['python', LOCAL_PYTHON_FILE])
     except Exception as e:
-        print(f"[!] Lỗi khi tự cập nhật Agent: {e}")
+        log_error("update_core_script", e)
 
 # Hàm 6: CHỈ CHẠY TOOL NỘI BỘ VÀ TỰ GÕ MENU (Đã Fix Xung Đột)
 def run_termux_caylapbu():
@@ -177,7 +192,7 @@ def run_termux_caylapbu():
         os.system(cmd)
         print("[+] Đã ép chạy tool nội bộ thành công! Xem log tại: /Download/log_caylapbu.txt")
     except Exception as e:
-        print(f"[!] Lỗi khi chạy caylapbu: {e}")
+        log_error("run_termux_caylapbu", e)
 
 # Hàm 7: CHỈ TẢI TOOL TỪ SERVER VỀ 
 def setup_termux_caylapbu():
@@ -187,7 +202,7 @@ def setup_termux_caylapbu():
         os.system(cmd)
         print("[+] Đã kéo tool về máy thành công!")
     except Exception as e:
-        print(f"[!] Lỗi khi tải tool caylapbu: {e}")
+        log_error("setup_termux_caylapbu", e)
 
 # Hàm 8: KÉO FILE BOOT TỪ GITHUB
 def setup_termux_boot():
@@ -202,7 +217,7 @@ def setup_termux_boot():
         os.system(cmd)
         print("[+] Thiết lập Termux Boot hoàn tất! Đã kéo ruột từ Termuxboot về máy.")
     except Exception as e:
-        print(f"[!] Lỗi khi cài Termux Boot: {e}")
+        log_error("setup_termux_boot", e)
 
 # Hàm 9: TỰ ĐỘNG BỐC THĂM LINK VIP (KHÔNG CẦN CÀI ĐẶT TAY)
 def setup_vip_servers():
@@ -241,7 +256,7 @@ def setup_vip_servers():
 
         print(f"[+] Đã chép xong cụm link VIP cho 8 acc của thiết bị này!")
     except Exception as e:
-        print(f"[!] Lỗi khi lấy link VIP: {e}")
+        log_error("setup_vip_servers", e)
 
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (ĐÃ FIX CHỐNG CACHE)
