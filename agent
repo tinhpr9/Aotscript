@@ -132,16 +132,23 @@ EOF
     os.system(cmd)
     print("[+] Xong file qhtrack!")
 
-# Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta
-def install_marmotgag2():
-    print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT MARMOTGAG2 (BẢN EVENT) VÀO DELTA...")
-    cmd = """
+# Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta (Đã nâng cấp chọn Map)
+def install_marmotgag2(mode):
+    print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT MARMOTGAG2 (BẢN {mode}) VÀO DELTA...")
+    
+    if mode == "EVENT":
+        url = "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2event"
+    else:
+        # Mặc định là MAIN nếu không gõ gì hoặc gõ MAIN
+        url = "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2"
+        
+    cmd = f"""
     cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/marmotgag2
-loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2event?t=" .. tostring(os.time())))()
+loadstring(game:HttpGet("{url}?t=" .. tostring(os.time())))()
 EOF
     """
     os.system(cmd)
-    print("[+] Xong file marmotgag2 bản Event!")
+    print(f"[+] Xong file marmotgag2 bản {mode}!")
 
 # Hàm 5: SIÊU NĂNG LỰC - TỰ UPDATE AGENT VÀ KHỞI ĐỘNG LẠI
 def update_core_script():
