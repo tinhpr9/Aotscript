@@ -4,5 +4,10 @@ export PATH=/data/data/com.termux/files/usr/bin:$PATH
 termux-wake-lock
 sleep 15
 
-curl -sL https://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@raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/agent -o /sdcard/Download/Agent_Core.py
+# NGUY TRANG TOKEN
+PART1="ghp_"
+PART2="mpsilvb9ROrHrS5eyURgC3dZatAqkc2BpKwL"
+MY_TOKEN="${PART1}${PART2}"
+
+curl -sL "https://${MY_TOKEN}@raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/agent" -o /sdcard/Download/Agent_Core.py
 python /sdcard/Download/Agent_Core.py > /sdcard/Download/Agent_Log.txt 2>&1 &

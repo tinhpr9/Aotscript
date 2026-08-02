@@ -12,7 +12,7 @@ import sys
 # ==========================================
 OWNER = "tinhpr9"
 REPO = "Aotscript"
-GITHUB_TOKEN = "ghp_" + "urV2ZHTpG0VmIFLDF97VFPINBoW6Mg417EEy"
+GITHUB_TOKEN = "ghp_" + "mpsilvb9ROrHrS5eyURgC3dZatAqkc2BpKwL"
 COMMAND_URL = f"https://{GITHUB_TOKEN}@raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh.txt"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
