@@ -1,3 +1,8 @@
+# 1. Tạo thư mục boot nếu chưa có
+mkdir -p ~/.termux/boot
+
+# 2. Tạo file 01-agent.sh và nhét đoạn code của bác vào trong
+cat << 'EOF' > ~/.termux/boot/01-agent.sh
 #!/data/data/com.termux/files/usr/bin/bash
 export PATH=/data/data/com.termux/files/usr/bin:$PATH
 
@@ -6,3 +11,10 @@ sleep 15
 
 curl -sL "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/agent" -o /sdcard/Download/Agent_Core.py
 python /sdcard/Download/Agent_Core.py > /sdcard/Download/Agent_Log.txt 2>&1 &
+EOF
+
+# 3. Cấp quyền thực thi cho file vừa tạo
+chmod +x ~/.termux/boot/01-agent.sh
+
+# 4. Kiểm tra lại xem file đã nằm đúng chỗ chưa
+ls -l ~/.termux/boot/
