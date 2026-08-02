@@ -201,6 +201,28 @@ def setup_termux_boot():
     except Exception as e:
         print(f"[!] Lỗi khi cài Termux Boot: {e}")
 
+# Hàm 9: TỰ ĐỘNG TẠO FILE LINK VIP SERVER CHO SHOUKO
+def setup_vip_servers():
+    print(f"\n[*] ĐANG TẠO DANH SÁCH VIP SERVER CHO SHOUKO...")
+    cmd = """
+    mkdir -p /storage/emulated/0/Download/Shouko
+    cat << 'EOF' > /storage/emulated/0/Download/Shouko/server_links.txt
+    com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateserverlinkcode=92779279903624242564889139156943
+    com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateserverlinkcode=75965591118341192180390468357627
+    com.tinh.vv.hk,https://www.roblox.com/games/97598239454123?privateserverlinkcode=44898430032643230017153269850342
+    com.tinh.vv.hl,https://www.roblox.com/games/97598239454123?privateserverlinkcode=38947761528483266126778490953326
+    com.tinh.vv.hm,https://www.roblox.com/games/97598239454123?privateserverlinkcode=05215211430310954805339985240264
+    com.tinh.vv.hn,https://www.roblox.com/games/97598239454123?privateserverlinkcode=38859967544877712828846533805220
+    com.tinh.vv.ho,https://www.roblox.com/games/97598239454123?privateserverlinkcode=97156995083024810050699368248741
+    com.tinh.vv.hp,https://www.roblox.com/games/97598239454123?privateserverlinkcode=44759395272633477986974639417044
+    EOF
+    """
+    try:
+        os.system(cmd)
+        print("[+] Đã cài đặt server_links.txt thành công cho thiết bị này!")
+    except Exception as e:
+        print(f"[!] Lỗi khi cài đặt VIP Server: {e}")
+
 # ==========================================
 # HỆ THỐNG LẮNG NGHE LỆNH (ĐÃ FIX CHỐNG CACHE)
 # ==========================================
@@ -254,6 +276,9 @@ while True:
                 
             elif cmd == "SETUP_BOOT":
                 setup_termux_boot()
+                
+            elif cmd == "SETUP_VIP":
+                setup_vip_servers()
                 
             elif cmd == "REBOOT":
                 print("[*] Đang ép khởi động lại thiết bị...")
