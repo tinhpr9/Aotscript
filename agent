@@ -134,14 +134,14 @@ EOF
 
 # Hàm 4: Tạo file Autoexecute marmotgag2 cho Delta
 def install_marmotgag2():
-    print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT MARMOTGAG2 VÀO DELTA...")
+    print(f"\n[*] ĐANG CÀI ĐẶT SCRIPT MARMOTGAG2 (BẢN EVENT) VÀO DELTA...")
     cmd = """
     cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/marmotgag2
-loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2?t=" .. tostring(os.time())))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Marmotgag2event?t=" .. tostring(os.time())))()
 EOF
     """
     os.system(cmd)
-    print("[+] Xong file marmotgag2!")
+    print("[+] Xong file marmotgag2 bản Event!")
 
 # Hàm 5: SIÊU NĂNG LỰC - TỰ UPDATE AGENT VÀ KHỞI ĐỘNG LẠI
 def update_core_script():
