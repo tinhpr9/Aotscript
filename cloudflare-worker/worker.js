@@ -16,6 +16,8 @@ const COMMANDS = {
   setup_caylapbu: { value: "SETUP_CAYLAPBU", bit: 16, label: "🌱 SETUP_CAYLAPBU" },
   run_caylapbu: { value: "RUN_CAYLAPBU", bit: 32, label: "▶️ RUN_CAYLAPBU" },
   update_delta: { value: "UPDATE_DELTA", bit: 64, label: "🔁 UPDATE_DELTA" },
+  update_solver: { value: "UPDATE_SOLVER", bit: 256, label: "🧠 UPDATE_SOLVER" },
+  update_script: { value: "UPDATESCRIPT", bit: 512, label: "📝 UPDATESCRIPT" },
   reboot: { value: "REBOOT", bit: 128, label: "🔌 REBOOT" },
 };
 
@@ -27,6 +29,8 @@ const COMMAND_ORDER = [
   "setup_caylapbu",
   "run_caylapbu",
   "update_delta",
+  "update_solver",
+  "update_script",
   "reboot",
 ];
 
@@ -100,7 +104,7 @@ async function handleUpdate(update, env) {
   }
 
   if (callback) {
-    await handleCallback(callback, chatId, messageId, env);
+    await handleCallback(callback, chatId, messageId, env, from.id);
     return;
   }
 
@@ -113,6 +117,12 @@ async function handleUpdate(update, env) {
 
   if (input === "/status") {
     await sendStatus(chatId, env);
+    return;
+  }
+
+  const pendingState = await loadSessionState(from.id, chatId);
+  if (pendingState && pendingState.step && !input.startsWith("/")) {
+    await handlePendingSessionMessage(chatId, from.id, pendingState, input, env);
     return;
   }
 
@@ -196,7 +206,7 @@ function parseTextCommand(input) {
 
   if (commandKeys.length === 0) return null;
 
-  // Only allow the 8 non-URL command keys in this multi-select flow
+  // Allow commands in the multi-select flow, including URL-based selectors.
   const allowed = new Set(Object.keys(COMMANDS));
   const filtered = commandKeys.filter((k) => allowed.has(k));
   if (filtered.length === 0 || filtered.some((key) => !COMMANDS[key])) return null;
@@ -275,7 +285,191 @@ function shortCommandCacheKey(token) {
   return `https://aotscript.local/shortcmd/${token}`;
 }
 
-async function handleCallback(callback, chatId, messageId, env) {
+function sessionStateKey(userId, chatId) {
+  return `https://aotscript.local/session/${userId}:${chatId}`;
+}
+
+async function saveSessionState(userId, chatId, state, env) {
+  const key = sessionStateKey(userId, chatId);
+  const body = JSON.stringify({ ...state, created: Date.now() });
+  await caches.default.put(
+    new Request(key),
+    new Response(body, { headers: { "Content-Type": "application/json" } })
+  );
+}
+
+async function loadSessionState(userId, chatId) {
+  const key = sessionStateKey(userId, chatId);
+  const response = await caches.default.match(new Request(key));
+  if (!response) return null;
+  try {
+    const stored = JSON.parse(await response.text());
+    if (!stored || typeof stored.created !== "number") {
+      await clearSessionState(userId, chatId);
+      return null;
+    }
+    if (Date.now() - stored.created > 10 * 60 * 1000) {
+      await clearSessionState(userId, chatId);
+      return null;
+    }
+    return stored;
+  } catch (error) {
+    await clearSessionState(userId, chatId);
+    return null;
+  }
+}
+
+async function clearSessionState(userId, chatId) {
+  const key = sessionStateKey(userId, chatId);
+  await caches.default.delete(new Request(key));
+}
+
+async function startUrlSession(chatId, userId, target, commandKeys, env) {
+  const state = {
+    userId,
+    chatId,
+    target,
+    commandKeys,
+    step: null,
+    solverUrl: null,
+    scriptUrl: null,
+  };
+
+  if (commandKeys.includes("update_solver")) {
+    state.step = "awaiting_solver_url";
+    await saveSessionState(userId, chatId, state, env);
+    await sendMessage(chatId, env, "Vui lòng gửi URL Solver (http:// hoặc https://) hoặc bấm HỦY.", {
+      inline_keyboard: [[{ text: "❌ HỦY", callback_data: "cancel-session" }]],
+    });
+    return;
+  }
+
+  state.step = "awaiting_script_url";
+  await saveSessionState(userId, chatId, state, env);
+  await sendMessage(chatId, env, "Vui lòng gửi URL Script (http:// hoặc https://) hoặc bấm HỦY.", {
+    inline_keyboard: [[{ text: "❌ HỦY", callback_data: "cancel-session" }]],
+  });
+}
+
+async function handlePendingSessionMessage(chatId, userId, state, input, env) {
+  const lower = input.trim();
+  if (state.step === "awaiting_solver_url") {
+    if (!isValidUrl(lower)) {
+      await sendMessage(chatId, env, "URL Solver không hợp lệ. Phải bắt đầu bằng http:// hoặc https://. Vui lòng gửi lại hoặc bấm HỦY.");
+      return;
+    }
+    state.solverUrl = lower;
+    if (state.commandKeys.includes("update_script")) {
+      state.step = "awaiting_script_url";
+      await saveSessionState(userId, chatId, state, env);
+      await sendMessage(chatId, env, "Vui lòng gửi URL Script (http:// hoặc https://) hoặc bấm HỦY.", {
+        inline_keyboard: [[{ text: "❌ HỦY", callback_data: "cancel-session" }]],
+      });
+      return;
+    }
+  } else if (state.step === "awaiting_script_url") {
+    if (!isValidUrl(lower)) {
+      await sendMessage(chatId, env, "URL Script không hợp lệ. Phải bắt đầu bằng http:// hoặc https://. Vui lòng gửi lại hoặc bấm HỦY.");
+      return;
+    }
+    state.scriptUrl = lower;
+  } else {
+    await sendMessage(chatId, env, "Phiên hiện tại không hợp lệ. Vui lòng bấm /start để bắt đầu lại.");
+    return;
+  }
+
+  await saveSessionState(userId, chatId, state, env);
+
+  if (state.commandKeys.includes("update_solver") && !state.solverUrl) {
+    return;
+  }
+  if (state.commandKeys.includes("update_script") && !state.scriptUrl) {
+    return;
+  }
+
+  await sendSessionSummary(chatId, state, env);
+}
+
+async function sendSessionSummary(chatId, state, env) {
+  const lines = [`Nhóm: ${state.target.toUpperCase()}`, "Lệnh:"];
+  for (const key of state.commandKeys) {
+    if (key === "update_solver") {
+      lines.push(`- ${COMMANDS[key].value}: ${state.solverUrl}`);
+    } else if (key === "update_script") {
+      lines.push(`- ${COMMANDS[key].value}: ${state.scriptUrl}`);
+    } else {
+      lines.push(`- ${COMMANDS[key].value}`);
+    }
+  }
+  lines.push("\nNhấn XÁC NHẬN GỬI để tiếp tục hoặc HỦY để dừng.");
+  const replyMarkup = {
+    inline_keyboard: [
+      [{ text: "✅ XÁC NHẬN GỬI", callback_data: "confirm-session" }],
+      [{ text: "❌ HỦY", callback_data: "cancel-session" }],
+    ],
+  };
+  await sendMessage(chatId, env, lines.join("\n"), replyMarkup);
+}
+
+async function executeSessionCommands(chatId, state, env) {
+  const file = TARGET_FILES[state.target];
+  const normalizedKeys = [...new Set(state.commandKeys)];
+
+  if (!file || normalizedKeys.length === 0 || normalizedKeys.some((key) => !COMMANDS[key])) {
+    await sendMessage(chatId, env, "Target hoặc lệnh không hợp lệ.");
+    await clearSessionState(state.userId, state.chatId);
+    return;
+  }
+
+  if (normalizedKeys.includes("idle") && normalizedKeys.length > 1) {
+    await sendMessage(chatId, env, "IDLE phải đứng một mình, không thể gửi kèm lệnh khác.");
+    await clearSessionState(state.userId, state.chatId);
+    return;
+  }
+
+  let orderedKeys = COMMAND_ORDER.filter((key) => normalizedKeys.includes(key));
+  if (orderedKeys.includes("reboot")) {
+    orderedKeys = orderedKeys.filter((k) => k !== "reboot");
+    orderedKeys.push("reboot");
+  }
+
+  const commandLines = orderedKeys.map((key) => {
+    if (key === "update_solver") {
+      return `/solver ${state.target} ${state.solverUrl}`;
+    }
+    if (key === "update_script") {
+      return `/script ${state.target} ${state.scriptUrl}`;
+    }
+    return COMMANDS[key].value;
+  });
+
+  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const content = `# telegram_command_id=${commandId}\n${commandLines.join("\n")}\n`;
+
+  try {
+    const commit = await updateGitHubFile(
+      file,
+      content,
+      `bot: ${state.target.toUpperCase()} ${commandLines.join(" + ")}`,
+      env
+    );
+    await sendMessage(
+      chatId,
+      env,
+      `✅ Đã gửi ${commandLines.length} lệnh\n` +
+        `Nhóm: ${state.target.toUpperCase()}\n` +
+        `Lệnh:\n- ${commandLines.join("\n- ")}\n` +
+        `File: ${file}\n` +
+        `Commit: ${commit.slice(0, 7)}`
+    );
+  } catch (error) {
+    await sendMessage(chatId, env, `❌ Không gửi được lệnh: ${error.message}`);
+  } finally {
+    await clearSessionState(state.userId, state.chatId);
+  }
+}
+
+async function handleCallback(callback, chatId, messageId, env, fromId) {
   const data = callback.data || "";
 
   if (data.startsWith("target:")) {
@@ -315,7 +509,12 @@ async function handleCallback(callback, chatId, messageId, env) {
       return;
     }
 
-    // Commands that require a second confirmation
+    if (commandKeys.some((k) => ["update_solver", "update_script"].includes(k))) {
+      await answerCallback(callback.id, env);
+      await startUrlSession(chatId, fromId, target, commandKeys, env);
+      return;
+    }
+
     const needsConfirm = commandKeys.some((k) => ["run_caylapbu", "update_delta", "reboot"].includes(k));
     if (needsConfirm) {
       await answerCallback(callback.id, env);
@@ -349,9 +548,31 @@ async function handleCallback(callback, chatId, messageId, env) {
     return;
   }
 
+  if (data === "confirm-session") {
+    await answerCallback(callback.id, env, "Đang gửi lệnh...");
+    const state = await loadSessionState(fromId, chatId);
+    if (!state || !state.commandKeys || !state.target) {
+      await answerCallback(callback.id, env, "Phiên đã hết hạn hoặc không hợp lệ.", true);
+      return;
+    }
+    await executeSessionCommands(chatId, state, env);
+    return;
+  }
+
+  if (data === "cancel-session") {
+    await clearSessionState(fromId, chatId);
+    await answerCallback(callback.id, env, "Đã hủy.");
+    return;
+  }
+
   if (data.startsWith("cancel:")) {
-    const token = data.slice(7);
-    await clearShortCommand(token);
+    const parts = data.split(":");
+    if (parts.length === 2) {
+      const token = parts[1];
+      await clearShortCommand(token);
+      await answerCallback(callback.id, env, "Đã hủy.");
+      return;
+    }
     await answerCallback(callback.id, env, "Đã hủy.");
     return;
   }
@@ -476,7 +697,8 @@ async function showCommands(chatId, target, mask, env, messageId) {
   const replyMarkup = {
     inline_keyboard: [
       [button("idle"), button("setup_vip"), button("install_track"), button("setup_boot")],
-      [button("setup_caylapbu"), button("run_caylapbu"), button("update_delta"), button("reboot")],
+      [button("setup_caylapbu"), button("run_caylapbu"), button("update_delta"), button("update_solver")],
+      [button("update_script"), button("reboot")],
       [
         {
           text: `✅ GỬI ${selected.length} LỆNH`,
