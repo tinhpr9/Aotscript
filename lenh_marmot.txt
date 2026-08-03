@@ -1,3 +1,1 @@
-# MARMOT-specific commands
-# Replace or extend this file with MARMOT-only instructions.
-# Example: custom MARMOT command
+# MARMOT safe test
