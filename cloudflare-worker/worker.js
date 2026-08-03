@@ -12,9 +12,23 @@ const COMMANDS = {
   idle: { value: "IDLE", bit: 1, label: "💤 IDLE" },
   setup_vip: { value: "SETUP_VIP", bit: 2, label: "⚙️ SETUP_VIP" },
   install_track: { value: "INSTALL_TRACK", bit: 4, label: "📡 INSTALL_TRACK" },
+  setup_boot: { value: "SETUP_BOOT", bit: 8, label: "🔧 SETUP_BOOT" },
+  setup_caylapbu: { value: "SETUP_CAYLAPBU", bit: 16, label: "🌱 SETUP_CAYLAPBU" },
+  run_caylapbu: { value: "RUN_CAYLAPBU", bit: 32, label: "▶️ RUN_CAYLAPBU" },
+  update_delta: { value: "UPDATE_DELTA", bit: 64, label: "🔁 UPDATE_DELTA" },
+  reboot: { value: "REBOOT", bit: 128, label: "🔌 REBOOT" },
 };
 
-const COMMAND_ORDER = ["idle", "setup_vip", "install_track"];
+const COMMAND_ORDER = [
+  "idle",
+  "setup_vip",
+  "install_track",
+  "setup_boot",
+  "setup_caylapbu",
+  "run_caylapbu",
+  "update_delta",
+  "reboot",
+];
 
 export default {
   async fetch(request, env) {
@@ -100,6 +114,39 @@ async function handleUpdate(update, env) {
     return;
   }
 
+  // Support URL-based commands: /solver and /script
+  const solverMatch = input.match(/^\/solver\s+(all|marmot|nova)\s+(https?:\/\/\S+)$/i);
+  if (solverMatch) {
+    const target = solverMatch[1].toLowerCase();
+    const url = solverMatch[2];
+    if (!TARGET_FILES[target]) {
+      await sendMessage(chatId, env, "Target không hợp lệ cho /solver.");
+      return;
+    }
+    if (!isValidUrl(url)) {
+      await sendMessage(chatId, env, "URL không hợp lệ. Phải là http:// hoặc https://");
+      return;
+    }
+    await executeSolverCommand(chatId, target, url, env);
+    return;
+  }
+
+  const scriptMatch = input.match(/^\/script\s+(all|marmot|nova)\s+(https?:\/\/\S+)$/i);
+  if (scriptMatch) {
+    const target = scriptMatch[1].toLowerCase();
+    const url = scriptMatch[2];
+    if (!TARGET_FILES[target]) {
+      await sendMessage(chatId, env, "Target không hợp lệ cho /script.");
+      return;
+    }
+    if (!isValidUrl(url)) {
+      await sendMessage(chatId, env, "URL không hợp lệ. Phải là http:// hoặc https://");
+      return;
+    }
+    await executeScriptCommand(chatId, target, url, env);
+    return;
+  }
+
   const parsed = parseTextCommand(input);
   if (!parsed) {
     await sendMessage(
@@ -123,11 +170,14 @@ function parseTextCommand(input) {
     .split(/[\s,]+/)
     .filter(Boolean);
 
-  if (commandKeys.length === 0 || commandKeys.some((key) => !COMMANDS[key])) {
-    return null;
-  }
+  if (commandKeys.length === 0) return null;
 
-  const uniqueKeys = [...new Set(commandKeys)];
+  // Only allow the 8 non-URL command keys in this multi-select flow
+  const allowed = new Set(Object.keys(COMMANDS));
+  const filtered = commandKeys.filter((k) => allowed.has(k));
+  if (filtered.length === 0 || filtered.some((key) => !COMMANDS[key])) return null;
+
+  const uniqueKeys = [...new Set(filtered)];
   if (uniqueKeys.includes("idle") && uniqueKeys.length > 1) {
     return null;
   }
@@ -175,8 +225,42 @@ async function handleCallback(callback, chatId, messageId, env) {
       return;
     }
 
+    // Commands that require a second confirmation
+    const needsConfirm = commandKeys.some((k) => ["run_caylapbu", "update_delta", "reboot"].includes(k));
+    if (needsConfirm) {
+      await answerCallback(callback.id, env);
+      const confirmMarkup = {
+        inline_keyboard: [
+          [
+            { text: "❗ Xác nhận gửi", callback_data: `confirm:${target}:${mask}` },
+            { text: "❌ Hủy", callback_data: `cancel:${target}:${mask}` },
+          ],
+        ],
+      };
+      await sendMessage(chatId, env, `Xác nhận gửi ${commandKeys.length} lệnh?`, confirmMarkup);
+      return;
+    }
+
     await answerCallback(callback.id, env, "Đang gửi lệnh...");
     await executeCommands(chatId, target, commandKeys, env);
+    return;
+  }
+
+  if (data.startsWith("confirm:")) {
+    const [, target, maskText] = data.split(":");
+    const mask = Number(maskText);
+    const commandKeys = commandKeysFromMask(mask);
+    if (!TARGET_FILES[target] || commandKeys.length === 0) {
+      await answerCallback(callback.id, env, "Không tìm thấy lệnh để gửi.", true);
+      return;
+    }
+    await answerCallback(callback.id, env, "Đang gửi lệnh...");
+    await executeCommands(chatId, target, commandKeys, env);
+    return;
+  }
+
+  if (data.startsWith("cancel:")) {
+    await answerCallback(callback.id, env, "Đã hủy.");
     return;
   }
 
@@ -271,8 +355,8 @@ async function showCommands(chatId, target, mask, env, messageId) {
 
   const replyMarkup = {
     inline_keyboard: [
-      [button("idle"), button("setup_vip")],
-      [button("install_track")],
+      [button("idle"), button("setup_vip"), button("install_track"), button("setup_boot")],
+      [button("setup_caylapbu"), button("run_caylapbu"), button("update_delta"), button("reboot")],
       [
         {
           text: `✅ GỬI ${selected.length} LỆNH`,
@@ -308,7 +392,12 @@ async function executeCommands(chatId, target, commandKeys, env) {
     return;
   }
 
-  const orderedKeys = COMMAND_ORDER.filter((key) => normalizedKeys.includes(key));
+  let orderedKeys = COMMAND_ORDER.filter((key) => normalizedKeys.includes(key));
+  // Ensure REBOOT if present is always last
+  if (orderedKeys.includes("reboot")) {
+    orderedKeys = orderedKeys.filter((k) => k !== "reboot");
+    orderedKeys.push("reboot");
+  }
   const commandValues = orderedKeys.map((key) => COMMANDS[key].value);
   const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   const content = `# telegram_command_id=${commandId}\n${commandValues.join("\n")}\n`;
@@ -397,6 +486,41 @@ function githubHeaders(env) {
     "User-Agent": "aotscript-cloudflare-worker",
     "Content-Type": "application/json",
   };
+}
+
+function isValidUrl(u) {
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch (e) {
+    return false;
+  }
+}
+
+async function executeSolverCommand(chatId, target, url, env) {
+  const file = TARGET_FILES[target];
+  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const line = `/solver ${target} ${url}`;
+  const content = `# telegram_command_id=${commandId}\n${line}\n`;
+  try {
+    const commit = await updateGitHubFile(file, content, `bot: ${target.toUpperCase()} /solver`, env);
+    await sendMessage(chatId, env, `✅ Đã gửi lệnh /solver\nNhóm: ${target}\nURL: ${url}\nCommit: ${commit.slice(0,7)}`);
+  } catch (err) {
+    await sendMessage(chatId, env, `❌ Không gửi được /solver: ${err.message}`);
+  }
+}
+
+async function executeScriptCommand(chatId, target, url, env) {
+  const file = TARGET_FILES[target];
+  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const line = `/script ${target} ${url}`;
+  const content = `# telegram_command_id=${commandId}\n${line}\n`;
+  try {
+    const commit = await updateGitHubFile(file, content, `bot: ${target.toUpperCase()} /script`, env);
+    await sendMessage(chatId, env, `✅ Đã gửi lệnh /script\nNhóm: ${target}\nURL: ${url}\nCommit: ${commit.slice(0,7)}`);
+  } catch (err) {
+    await sendMessage(chatId, env, `❌ Không gửi được /script: ${err.message}`);
+  }
 }
 
 async function sendMessage(chatId, env, textValue, replyMarkup) {
