@@ -209,6 +209,45 @@ def install_custom_script(script_url):
     except Exception as e:
         log_error("install_custom_script", e)
 
+
+def reboot_device():
+    reboot_commands = [
+        ["su", "-c", "setprop sys.powerctl reboot"],
+        ["su", "-c", "reboot"],
+        ["su", "-c", "/system/bin/reboot"],
+        ["su", "-c", "svc power reboot"],
+    ]
+
+    for command in reboot_commands:
+        command_display = " ".join(command)
+        print(f"[*] Thử phương án: {command_display}")
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                print(f"[+] Lệnh reboot được chấp nhận: {command_display}")
+                if result.stdout:
+                    print(f"[stdout] {result.stdout.strip()}")
+                if result.stderr:
+                    print(f"[stderr] {result.stderr.strip()}")
+                time.sleep(5)
+                return
+            print(f"[!] Lỗi khi chạy: {command_display} returncode={result.returncode}")
+            if result.stdout:
+                print(f"[stdout] {result.stdout.strip()}")
+            if result.stderr:
+                print(f"[stderr] {result.stderr.strip()}")
+        except Exception as e:
+            print(f"[!] Exception khi chạy: {command_display}: {e}")
+            log_error("reboot_device", e)
+
+    log_error("reboot_device", RuntimeError("Tất cả phương án reboot đều thất bại"))
+    print("[!] Không thể reboot thiết bị bằng các phương án hiện tại.")
+
 # Hàm 1: Tự động quét Github, tải và cài đặt Delta
 def auto_update_system():
     print("\n[*] BẮT ĐẦU QUY TRÌNH KÉO FILE VÀ CÀI ĐẶT...")
@@ -466,11 +505,7 @@ if __name__ == "__main__":
                 setup_vip_servers()
 
             elif cmd == "REBOOT":
-                print("[*] Đang ép khởi động lại thiết bị...")
-                time.sleep(2)
-                os.system("su -c 'reboot'")
-                os.system("su -c '/system/bin/reboot'")
-                os.system("su -c 'svc power reboot'")
+                reboot_device()
 
             elif cmd == "IDLE":
                 print("[💤] Đã nhận lệnh nghỉ ngơi.")
