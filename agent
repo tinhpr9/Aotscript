@@ -21,9 +21,6 @@ CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
 # ==========================================
 # CẤU HÌNH TỰ CẬP NHẬT CHO CHÍNH AGENT
 # ==========================================
-CORE_GITHUB_FILE = "agent"  
-LOCAL_PYTHON_FILE = "/sdcard/Download/Agent_Core.py"  
-
 LAST_CMD_TEXT = ""
 
 
@@ -162,22 +159,7 @@ EOF
     print(f"[+] Đã dán link mới vào tự động chạy thành công!")
 
 # Hàm 5: SIÊU NĂNG LỰC - TỰ UPDATE AGENT VÀ KHỞI ĐỘNG LẠI
-def update_core_script():
-    print(f"\n[*] ĐANG TẢI BẢN AGENT MỚI NHẤT TỪ GITHUB VÀ TỰ RESTART...")
-    core_url = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/{CORE_GITHUB_FILE}?t={int(time.time())}"
-    try:
-        req = urllib.request.Request(core_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            new_code = response.read().decode('utf-8')
-        
-        with open(LOCAL_PYTHON_FILE, 'w', encoding='utf-8') as f:
-            f.write(new_code)
-            
-        print("[+] Tải Agent thành công! Đang tái sinh từ file vật lý...")
-        time.sleep(2)
-        os.execv(sys.executable, ['python', LOCAL_PYTHON_FILE])
-    except Exception as e:
-        log_error("update_core_script", e)
+# (Đã xóa do yêu cầu loại bỏ UPDATE_CORE)
 
 # Hàm 6: CHỈ CHẠY TOOL NỘI BỘ VÀ TỰ GÕ MENU (Đã Fix Xung Đột)
 def run_termux_caylapbu():
@@ -298,9 +280,6 @@ while True:
 
             elif cmd == "INSTALL_TRACK":
                 install_qhtrack()
-
-            elif cmd == "UPDATE_CORE":
-                update_core_script()
 
             elif cmd == "SETUP_CAYLAPBU":
                 setup_termux_caylapbu()
