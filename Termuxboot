@@ -7,8 +7,27 @@ export PATH=/data/data/com.termux/files/usr/bin:$PATH
 termux-wake-lock
 sleep 15
 
-curl -sL "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/agent?t=$(date +%s)" -o /sdcard/Download/Agent_Core.py
-python /sdcard/Download/Agent_Core.py > /sdcard/Download/Agent_Log.txt 2>&1 &
+AGENT="/sdcard/Download/Agent_Core.py"
+TEMP="/sdcard/Download/Agent_Core.py.tmp"
+LOG="/sdcard/Download/Agent_Log.txt"
+
+# Ngăn nhiều Agent chạy cùng lúc
+pkill -f "$AGENT" 2>/dev/null || true
+sleep 2
+
+# Chỉ thay Agent cũ khi tải bản mới thành công
+if curl -fsSL \
+  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/agent?t=$(date +%s)" \
+  -o "$TEMP"; then
+
+    mv "$TEMP" "$AGENT"
+
+    nohup python -u "$AGENT" \
+      > "$LOG" 2>&1 &
+else
+    echo "$(date) - Không tải được Agent từ GitHub" >> "$LOG"
+    rm -f "$TEMP"
+fi
 EOF
 
 chmod +x ~/.termux/boot/01-agent.sh
