@@ -152,8 +152,9 @@ EOF
 # Hàm 4: Dán trực tiếp script từ Link bất kỳ vào Delta
 def install_custom_script(script_url):
     print(f"\n[*] PHÁT HIỆN LINK SCRIPT MỚI, ĐANG DÁN VÀO DELTA...")
+    os.system("rm -rf /storage/emulated/0/Delta/Autoexecute/*")
     cmd = f"""
-    cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/marmotgag2
+    cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/main_farm_script.lua
 loadstring(game:HttpGet("{script_url}"))()
 EOF
     """
@@ -281,38 +282,35 @@ while True:
             cmd = cmd.strip()
             if not cmd:
                 continue
-                
-            # CƠ CHẾ SIÊU VIỆT: Cứ thấy link là tự dán
-            if cmd.startswith("http://") or cmd.startswith("https://"):
-                install_custom_script(cmd)
-                continue # Nhận diện xong thì bỏ qua các lệnh dưới
-                
+
+            if cmd.startswith("Updatescript "):
+                link = cmd.split(" ", 1)[1].strip()
+                install_custom_script(link)
+                continue
+
             if cmd == "UPDATE_DELTA":
                 auto_update_system()
-            
+
             elif cmd.startswith("UPDATE_SOLVER"):
                 parts = cmd.split(" ", 1)
                 if len(parts) > 1:
                     update_solver_url(parts[1].strip())
-                    
+
             elif cmd == "INSTALL_TRACK":
                 install_qhtrack()
-                
-            elif cmd == "INSTALL_MARMOT":
-                install_marmotgag2()
-                
+
             elif cmd == "UPDATE_CORE":
                 update_core_script()
-                
+
             elif cmd == "SETUP_CAYLAPBU":
                 setup_termux_caylapbu()
-                
+
             elif cmd == "RUN_CAYLAPBU":
                 run_termux_caylapbu()
-                
+
             elif cmd == "SETUP_BOOT":
                 setup_termux_boot()
-                
+
             elif cmd == "SETUP_VIP":
                 setup_vip_servers()
                 
