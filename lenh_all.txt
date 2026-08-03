@@ -1,0 +1,6 @@
+# COMMON commands for all groups
+# Use this file to distribute commands that should run on both NOVA and MARMOT devices.
+UPDATE_SOLVER https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Solver
+INSTALL_TRACK
+SETUP_BOOT
+SETUP_VIP
