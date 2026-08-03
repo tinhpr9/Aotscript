@@ -1,2 +1,2 @@
-# telegram_command_id=1785776135195-ecdc8a04
-/solver all https://blocksolve.site/join?api_key=block_0eb2473d1bccca7025fa6e5cc69df2aa
+# telegram_command_id=1785776247076-9b0e6b5e
+REBOOT
