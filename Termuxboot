@@ -7,13 +7,7 @@ export PATH=/data/data/com.termux/files/usr/bin:$PATH
 termux-wake-lock
 sleep 15
 
-# NGUY TRANG TOKEN
-PART1="ghp_"
-PART2="Điền_Đuôi_Token_Của_Bác_Vào_Đây"
-MY_TOKEN="${PART1}${PART2}"
-
-# ĐÃ THÊM BÙA CHỐNG CACHE VÀO ĐUÔI LINK
-curl -sL "https://${MY_TOKEN}@raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/agent?t=\$(date +%s)" -o /sdcard/Download/Agent_Core.py
+curl -sL "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/agent?t=$(date +%s)" -o /sdcard/Download/Agent_Core.py
 python /sdcard/Download/Agent_Core.py > /sdcard/Download/Agent_Log.txt 2>&1 &
 EOF
 
