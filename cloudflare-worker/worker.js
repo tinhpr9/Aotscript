@@ -1,0 +1,593 @@
+const OWNER = "tinhpr9";
+const REPO = "Aotscript";
+const BRANCH = "main";
+
+const TARGET_FILES = {
+  all: "lenh_all.txt",
+  marmot: "lenh_marmot.txt",
+  nova: "lenh_nova.txt",
+};
+
+const COMMANDS = {
+  idle: { value: "IDLE", bit: 1, label: "💤 IDLE" },
+  setup_vip: { value: "SETUP_VIP", bit: 2, label: "⚙️ SETUP_VIP" },
+  install_track: { value: "INSTALL_TRACK", bit: 4, label: "📡 INSTALL_TRACK" },
+  setup_boot: { value: "SETUP_BOOT", bit: 8, label: "🔧 SETUP_BOOT" },
+  setup_caylapbu: { value: "SETUP_CAYLAPBU", bit: 16, label: "🌱 SETUP_CAYLAPBU" },
+  run_caylapbu: { value: "RUN_CAYLAPBU", bit: 32, label: "▶️ RUN_CAYLAPBU" },
+  update_delta: { value: "UPDATE_DELTA", bit: 64, label: "🔁 UPDATE_DELTA" },
+  reboot: { value: "REBOOT", bit: 128, label: "🔌 REBOOT" },
+};
+
+const COMMAND_ORDER = [
+  "idle",
+  "setup_vip",
+  "install_track",
+  "setup_boot",
+  "setup_caylapbu",
+  "run_caylapbu",
+  "update_delta",
+  "reboot",
+];
+
+export default {
+  async fetch(request, env) {
+    try {
+      const url = new URL(request.url);
+
+      if (request.method === "GET" && url.pathname === "/") {
+        return text("Aotscript Control Bot is online");
+      }
+
+      if (request.method === "GET" && url.pathname === "/setup") {
+        const webhookUrl = `${url.origin}/telegram`;
+        const result = await telegram(env, "setWebhook", {
+          url: webhookUrl,
+          secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+          allowed_updates: ["message", "callback_query"],
+          drop_pending_updates: true,
+        });
+
+        await telegram(env, "setMyCommands", {
+          commands: [
+            { command: "start", description: "Mở bảng điều khiển" },
+            { command: "status", description: "Xem lệnh hiện tại" },
+          ],
+        });
+
+        return json({ ok: true, webhook: webhookUrl, telegram: result });
+      }
+
+      if (request.method === "POST" && url.pathname === "/telegram") {
+        const webhookSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+        if (webhookSecret !== env.TELEGRAM_WEBHOOK_SECRET) {
+          return new Response("Unauthorized", { status: 401 });
+        }
+
+        const update = await request.json();
+        await handleUpdate(update, env);
+        return text("ok");
+      }
+
+      return new Response("Not found", { status: 404 });
+    } catch (error) {
+      console.error(error);
+      return json({ ok: false, error: String(error?.message || error) }, 500);
+    }
+  },
+};
+
+async function handleUpdate(update, env) {
+  const message = update.message;
+  const callback = update.callback_query;
+  const from = message?.from || callback?.from;
+  const chatId = message?.chat?.id || callback?.message?.chat?.id;
+  const messageId = callback?.message?.message_id;
+
+  if (!from || !chatId) return;
+
+  if (String(from.id) !== String(env.TELEGRAM_ADMIN_USER_ID)) {
+    if (callback) {
+      await telegram(env, "answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: "Không có quyền sử dụng bot.",
+        show_alert: true,
+      });
+    }
+    return;
+  }
+
+  if (callback) {
+    await handleCallback(callback, chatId, messageId, env);
+    return;
+  }
+
+  const input = (message.text || "").trim();
+
+  if (input === "/start" || input === "/menu") {
+    await showTargets(chatId, env);
+    return;
+  }
+
+  if (input === "/status") {
+    await sendStatus(chatId, env);
+    return;
+  }
+
+  // Support URL-based commands: /solver and /script
+  const solverMatch = input.match(/^\/solver\s+(all|marmot|nova)\s+(https?:\/\/\S+)$/i);
+  if (solverMatch) {
+    const target = solverMatch[1].toLowerCase();
+    const url = solverMatch[2];
+    if (!TARGET_FILES[target]) {
+      await sendMessage(chatId, env, "Target không hợp lệ cho /solver.");
+      return;
+    }
+    if (!isValidUrl(url)) {
+      await sendMessage(chatId, env, "URL không hợp lệ. Phải là http:// hoặc https://");
+      return;
+    }
+    await executeSolverCommand(chatId, target, url, env);
+    return;
+  }
+
+  const scriptMatch = input.match(/^\/script\s+(all|marmot|nova)\s+(https?:\/\/\S+)$/i);
+  if (scriptMatch) {
+    const target = scriptMatch[1].toLowerCase();
+    const url = scriptMatch[2];
+    if (!TARGET_FILES[target]) {
+      await sendMessage(chatId, env, "Target không hợp lệ cho /script.");
+      return;
+    }
+    if (!isValidUrl(url)) {
+      await sendMessage(chatId, env, "URL không hợp lệ. Phải là http:// hoặc https://");
+      return;
+    }
+    await executeScriptCommand(chatId, target, url, env);
+    return;
+  }
+
+  const parsed = parseTextCommand(input);
+  if (!parsed) {
+    await sendMessage(
+      chatId,
+      env,
+      "Lệnh không hợp lệ. Dùng /start để mở bảng điều khiển hoặc /status để xem trạng thái."
+    );
+    return;
+  }
+
+  await executeCommands(chatId, parsed.target, parsed.commandKeys, env);
+}
+
+function parseTextCommand(input) {
+  const match = input.match(/^\/(all|marmot|nova)\s+(.+)$/i);
+  if (!match) return null;
+
+  const target = match[1].toLowerCase();
+  const commandKeys = match[2]
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
+
+  if (commandKeys.length === 0) return null;
+
+  // Only allow the 8 non-URL command keys in this multi-select flow
+  const allowed = new Set(Object.keys(COMMANDS));
+  const filtered = commandKeys.filter((k) => allowed.has(k));
+  if (filtered.length === 0 || filtered.some((key) => !COMMANDS[key])) return null;
+
+  const uniqueKeys = [...new Set(filtered)];
+  if (uniqueKeys.includes("idle") && uniqueKeys.length > 1) {
+    return null;
+  }
+
+  return { target, commandKeys: uniqueKeys };
+}
+
+async function handleCallback(callback, chatId, messageId, env) {
+  const data = callback.data || "";
+
+  if (data.startsWith("target:")) {
+    const target = data.slice(7);
+    if (!TARGET_FILES[target]) {
+      await answerCallback(callback.id, env, "Nhóm không hợp lệ.", true);
+      return;
+    }
+
+    await answerCallback(callback.id, env);
+    await showCommands(chatId, target, 0, env, messageId);
+    return;
+  }
+
+  if (data.startsWith("pick:")) {
+    const [, target, maskText, commandKey] = data.split(":");
+    const mask = Number(maskText);
+
+    if (!TARGET_FILES[target] || !Number.isInteger(mask) || !COMMANDS[commandKey]) {
+      await answerCallback(callback.id, env, "Lựa chọn không hợp lệ.", true);
+      return;
+    }
+
+    const nextMask = toggleCommand(mask, commandKey);
+    await answerCallback(callback.id, env);
+    await showCommands(chatId, target, nextMask, env, messageId);
+    return;
+  }
+
+  if (data.startsWith("send:")) {
+    const [, target, maskText] = data.split(":");
+    const mask = Number(maskText);
+    const commandKeys = commandKeysFromMask(mask);
+
+    if (!TARGET_FILES[target] || commandKeys.length === 0) {
+      await answerCallback(callback.id, env, "Bạn chưa chọn lệnh nào.", true);
+      return;
+    }
+
+    // Commands that require a second confirmation
+    const needsConfirm = commandKeys.some((k) => ["run_caylapbu", "update_delta", "reboot"].includes(k));
+    if (needsConfirm) {
+      await answerCallback(callback.id, env);
+      const confirmMarkup = {
+        inline_keyboard: [
+          [
+            { text: "❗ Xác nhận gửi", callback_data: `confirm:${target}:${mask}` },
+            { text: "❌ Hủy", callback_data: `cancel:${target}:${mask}` },
+          ],
+        ],
+      };
+      await sendMessage(chatId, env, `Xác nhận gửi ${commandKeys.length} lệnh?`, confirmMarkup);
+      return;
+    }
+
+    await answerCallback(callback.id, env, "Đang gửi lệnh...");
+    await executeCommands(chatId, target, commandKeys, env);
+    return;
+  }
+
+  if (data.startsWith("confirm:")) {
+    const [, target, maskText] = data.split(":");
+    const mask = Number(maskText);
+    const commandKeys = commandKeysFromMask(mask);
+    if (!TARGET_FILES[target] || commandKeys.length === 0) {
+      await answerCallback(callback.id, env, "Không tìm thấy lệnh để gửi.", true);
+      return;
+    }
+    await answerCallback(callback.id, env, "Đang gửi lệnh...");
+    await executeCommands(chatId, target, commandKeys, env);
+    return;
+  }
+
+  if (data.startsWith("cancel:")) {
+    await answerCallback(callback.id, env, "Đã hủy.");
+    return;
+  }
+
+  if (data.startsWith("clear:")) {
+    const target = data.slice(6);
+    if (!TARGET_FILES[target]) {
+      await answerCallback(callback.id, env, "Nhóm không hợp lệ.", true);
+      return;
+    }
+
+    await answerCallback(callback.id, env, "Đã bỏ chọn.");
+    await showCommands(chatId, target, 0, env, messageId);
+    return;
+  }
+
+  if (data === "status") {
+    await answerCallback(callback.id, env);
+    await sendStatus(chatId, env);
+    return;
+  }
+
+  if (data === "menu") {
+    await answerCallback(callback.id, env);
+    await showTargets(chatId, env, messageId);
+    return;
+  }
+
+  await answerCallback(callback.id, env, "Nút không hợp lệ.", true);
+}
+
+function toggleCommand(mask, commandKey) {
+  const command = COMMANDS[commandKey];
+
+  if (commandKey === "idle") {
+    return mask === command.bit ? 0 : command.bit;
+  }
+
+  const maskWithoutIdle = mask & ~COMMANDS.idle.bit;
+  return maskWithoutIdle ^ command.bit;
+}
+
+function commandKeysFromMask(mask) {
+  if (!Number.isInteger(mask) || mask <= 0) return [];
+
+  if (mask & COMMANDS.idle.bit) {
+    return ["idle"];
+  }
+
+  return COMMAND_ORDER.filter(
+    (key) => key !== "idle" && (mask & COMMANDS[key].bit) !== 0
+  );
+}
+
+async function showTargets(chatId, env, messageId) {
+  const textValue = "Chọn nhóm máy:";
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        { text: "🌍 TẤT CẢ", callback_data: "target:all" },
+        { text: "🦫 MARMOT", callback_data: "target:marmot" },
+      ],
+      [
+        { text: "✨ NOVA", callback_data: "target:nova" },
+        { text: "📋 TRẠNG THÁI", callback_data: "status" },
+      ],
+    ],
+  };
+
+  if (messageId) {
+    await editMessage(chatId, messageId, env, textValue, replyMarkup);
+  } else {
+    await sendMessage(chatId, env, textValue, replyMarkup);
+  }
+}
+
+async function showCommands(chatId, target, mask, env, messageId) {
+  const label = target.toUpperCase();
+  const selected = commandKeysFromMask(mask);
+  const selectedText = selected.length
+    ? selected.map((key) => COMMANDS[key].value).join(", ")
+    : "Chưa chọn";
+
+  const button = (key) => ({
+    text: `${mask & COMMANDS[key].bit ? "✅" : "⬜"} ${COMMANDS[key].label}`,
+    callback_data: `pick:${target}:${mask}:${key}`,
+  });
+
+  const textValue =
+    `Nhóm đã chọn: ${label}\n` +
+    `Đã chọn: ${selectedText}\n\n` +
+    "Chạm để chọn/bỏ chọn, sau đó bấm GỬI LỆNH.";
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [button("idle"), button("setup_vip"), button("install_track"), button("setup_boot")],
+      [button("setup_caylapbu"), button("run_caylapbu"), button("update_delta"), button("reboot")],
+      [
+        {
+          text: `✅ GỬI ${selected.length} LỆNH`,
+          callback_data: `send:${target}:${mask}`,
+        },
+        { text: "🗑 BỎ CHỌN", callback_data: `clear:${target}` },
+      ],
+      [
+        { text: "⬅️ Đổi nhóm", callback_data: "menu" },
+        { text: "📋 Trạng thái", callback_data: "status" },
+      ],
+    ],
+  };
+
+  if (messageId) {
+    await editMessage(chatId, messageId, env, textValue, replyMarkup);
+  } else {
+    await sendMessage(chatId, env, textValue, replyMarkup);
+  }
+}
+
+async function executeCommands(chatId, target, commandKeys, env) {
+  const file = TARGET_FILES[target];
+  const normalizedKeys = [...new Set(commandKeys)];
+
+  if (!file || normalizedKeys.length === 0 || normalizedKeys.some((key) => !COMMANDS[key])) {
+    await sendMessage(chatId, env, "Target hoặc lệnh không hợp lệ.");
+    return;
+  }
+
+  if (normalizedKeys.includes("idle") && normalizedKeys.length > 1) {
+    await sendMessage(chatId, env, "IDLE phải đứng một mình, không thể gửi kèm lệnh khác.");
+    return;
+  }
+
+  let orderedKeys = COMMAND_ORDER.filter((key) => normalizedKeys.includes(key));
+  // Ensure REBOOT if present is always last
+  if (orderedKeys.includes("reboot")) {
+    orderedKeys = orderedKeys.filter((k) => k !== "reboot");
+    orderedKeys.push("reboot");
+  }
+  const commandValues = orderedKeys.map((key) => COMMANDS[key].value);
+  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const content = `# telegram_command_id=${commandId}\n${commandValues.join("\n")}\n`;
+
+  try {
+    const commit = await updateGitHubFile(
+      file,
+      content,
+      `bot: ${target.toUpperCase()} ${commandValues.join(" + ")}`,
+      env
+    );
+
+    await sendMessage(
+      chatId,
+      env,
+      `✅ Đã gửi ${commandValues.length} lệnh\n` +
+        `Nhóm: ${target.toUpperCase()}\n` +
+        `Lệnh:\n- ${commandValues.join("\n- ")}\n` +
+        `File: ${file}\n` +
+        `Commit: ${commit.slice(0, 7)}`
+    );
+  } catch (error) {
+    await sendMessage(chatId, env, `❌ Không gửi được lệnh: ${error.message}`);
+  }
+}
+
+async function sendStatus(chatId, env) {
+  const lines = ["📋 Lệnh hiện tại trên GitHub:"];
+
+  for (const [target, file] of Object.entries(TARGET_FILES)) {
+    try {
+      const data = await getGitHubFile(file, env);
+      const content = decodeBase64(data.content || "").trim() || "(trống)";
+      lines.push(`\n${target.toUpperCase()} — ${file}\n${content}`);
+    } catch (error) {
+      lines.push(`\n${target.toUpperCase()} — lỗi: ${error.message}`);
+    }
+  }
+
+  await sendMessage(chatId, env, lines.join("\n"));
+}
+
+async function getGitHubFile(path, env) {
+  const response = await fetch(
+    `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
+    {
+      headers: githubHeaders(env),
+    }
+  );
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || `GitHub GET ${response.status}`);
+  }
+  return data;
+}
+
+async function updateGitHubFile(path, content, message, env) {
+  const current = await getGitHubFile(path, env);
+  const response = await fetch(
+    `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(path)}`,
+    {
+      method: "PUT",
+      headers: githubHeaders(env),
+      body: JSON.stringify({
+        message,
+        content: encodeBase64(content),
+        sha: current.sha,
+        branch: BRANCH,
+      }),
+    }
+  );
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || `GitHub PUT ${response.status}`);
+  }
+  return data.commit.sha;
+}
+
+function githubHeaders(env) {
+  return {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+    "X-GitHub-Api-Version": "2026-03-10",
+    "User-Agent": "aotscript-cloudflare-worker",
+    "Content-Type": "application/json",
+  };
+}
+
+function isValidUrl(u) {
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch (e) {
+    return false;
+  }
+}
+
+async function executeSolverCommand(chatId, target, url, env) {
+  const file = TARGET_FILES[target];
+  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const line = `/solver ${target} ${url}`;
+  const content = `# telegram_command_id=${commandId}\n${line}\n`;
+  try {
+    const commit = await updateGitHubFile(file, content, `bot: ${target.toUpperCase()} /solver`, env);
+    await sendMessage(chatId, env, `✅ Đã gửi lệnh /solver\nNhóm: ${target}\nURL: ${url}\nCommit: ${commit.slice(0,7)}`);
+  } catch (err) {
+    await sendMessage(chatId, env, `❌ Không gửi được /solver: ${err.message}`);
+  }
+}
+
+async function executeScriptCommand(chatId, target, url, env) {
+  const file = TARGET_FILES[target];
+  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const line = `/script ${target} ${url}`;
+  const content = `# telegram_command_id=${commandId}\n${line}\n`;
+  try {
+    const commit = await updateGitHubFile(file, content, `bot: ${target.toUpperCase()} /script`, env);
+    await sendMessage(chatId, env, `✅ Đã gửi lệnh /script\nNhóm: ${target}\nURL: ${url}\nCommit: ${commit.slice(0,7)}`);
+  } catch (err) {
+    await sendMessage(chatId, env, `❌ Không gửi được /script: ${err.message}`);
+  }
+}
+
+async function sendMessage(chatId, env, textValue, replyMarkup) {
+  return telegram(env, "sendMessage", {
+    chat_id: chatId,
+    text: textValue,
+    reply_markup: replyMarkup,
+  });
+}
+
+async function editMessage(chatId, messageId, env, textValue, replyMarkup) {
+  return telegram(env, "editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text: textValue,
+    reply_markup: replyMarkup,
+  });
+}
+
+async function answerCallback(callbackQueryId, env, textValue, showAlert = false) {
+  return telegram(env, "answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    ...(textValue ? { text: textValue, show_alert: showAlert } : {}),
+  });
+}
+
+async function telegram(env, method, payload) {
+  const response = await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    throw new Error(data.description || `Telegram ${response.status}`);
+  }
+  return data.result;
+}
+
+function encodeBase64(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function decodeBase64(value) {
+  const clean = value.replace(/\n/g, "");
+  const binary = atob(clean);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function text(value, status = 200) {
+  return new Response(value, {
+    status,
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+}
+
+function json(value, status = 200) {
+  return new Response(JSON.stringify(value, null, 2), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
