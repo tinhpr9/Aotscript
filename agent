@@ -1,5 +1,6 @@
 import time
 import urllib.request
+import urllib.parse
 import os
 import json
 import zipfile
@@ -8,51 +9,205 @@ import re
 import sys
 import traceback
 import datetime
+import hashlib
 
 # ==========================================
 # CẤU HÌNH CLOUD & HỆ THỐNG
 # ==========================================
 OWNER = "tinhpr9"
 REPO = "Aotscript"
-COMMAND_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh.txt"
+COMMON_COMMAND_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh_all.txt"
+GROUP_COMMAND_URLS = {
+    "NOVA": f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh_nova.txt",
+    "MARMOT": f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/lenh_marmot.txt",
+}
+GROUP_SCRIPT_URLS = {
+    "NOVA": f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/Novagag2",
+    "MARMOT": f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/Marmotgag2",
+}
+GROUP_PATH = "/storage/emulated/0/Download/Shouko/device_group.txt"
+STATE_PATH = "/storage/emulated/0/Download/Shouko/agent_state.json"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
-
-# ==========================================
-# CẤU HÌNH TỰ CẬP NHẬT CHO CHÍNH AGENT
-# ==========================================
-LAST_CMD_TEXT = ""
+AUTOEXECUTE_DIR = "/storage/emulated/0/Delta/Autoexecute"
+GROUP_SCRIPT_FILE = os.path.join(AUTOEXECUTE_DIR, "group_script.lua")
 
 
-def log_error(action_name, exception_obj):
+def log_error(action_name, exception_obj, group=None):
     try:
         err_time = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         tb = traceback.format_exc()
-        msg = f"[{err_time}] Error in {action_name}: {exception_obj}\n{tb}\n"
+        group_part = f" [group={group}]" if group else ""
+        msg = f"[{err_time}]{group_part} Error in {action_name}: {exception_obj}\n{tb}\n"
         with open("/sdcard/Download/Agent_Error.txt", "a", encoding='utf-8') as f:
             f.write(msg)
         print(msg)
     except Exception as log_e:
         print("[!] Failed to write error log:", log_e)
 
-# ==========================================
-# HÀM MỚI: ĐỌC LỆNH GITHUB (CHỐNG CACHE 100%)
-# ==========================================
-def get_github_command():
-    github_url = f"{COMMAND_URL}?t={int(time.time())}"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0"
-    }
+
+def ensure_parent_dir(path):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def calculate_sha256(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_state():
+    ensure_parent_dir(STATE_PATH)
+    if not os.path.exists(STATE_PATH):
+        return {
+            "device_group": "",
+            "common_command_hash": "",
+            "group_command_hash": "",
+            "last_processed_at": "",
+        }
     try:
-        req = urllib.request.Request(github_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return response.read().decode('utf-8').strip()
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {
+            "device_group": data.get("device_group", ""),
+            "common_command_hash": data.get("common_command_hash", ""),
+            "group_command_hash": data.get("group_command_hash", ""),
+            "last_processed_at": data.get("last_processed_at", ""),
+        }
     except Exception as e:
-        log_error("get_github_command", e)
+        log_error("load_state", e)
+        return {
+            "device_group": "",
+            "common_command_hash": "",
+            "group_command_hash": "",
+            "last_processed_at": "",
+        }
+
+
+def save_state(state):
+    ensure_parent_dir(STATE_PATH)
+    tmp_path = STATE_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, STATE_PATH)
+    except Exception as e:
+        log_error("save_state", e)
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+def get_device_group():
+    ensure_parent_dir(GROUP_PATH)
+    if not os.path.exists(GROUP_PATH):
+        log_error("get_device_group", FileNotFoundError(GROUP_PATH))
         return None
+    try:
+        with open(GROUP_PATH, "r", encoding="utf-8") as f:
+            group = f.read().strip().upper()
+        if group not in GROUP_COMMAND_URLS:
+            raise ValueError(f"Invalid device group: {group}")
+        return group
+    except Exception as e:
+        log_error("get_device_group", e)
+        return None
+
+
+def fetch_text(url, source_name):
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"Invalid URL: {url}")
+        sep = "&" if parsed.query else "?"
+        fetch_url = f"{url}{sep}t={int(time.time())}"
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        req = urllib.request.Request(fetch_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return response.read().decode("utf-8")
+    except Exception as e:
+        log_error(f"fetch_text_{source_name}", e)
+        return None
+
+
+def get_command_sources(group):
+    sources = [("COMMON", COMMON_COMMAND_URL)]
+    if group in GROUP_COMMAND_URLS:
+        sources.append((group, GROUP_COMMAND_URLS[group]))
+    return sources
+
+
+def fetch_commands_for_group(group):
+    if not group:
+        return None, None
+    common_text = fetch_text(COMMON_COMMAND_URL, "COMMON")
+    group_text = fetch_text(GROUP_COMMAND_URLS.get(group, ""), group)
+    return common_text, group_text
+
+
+def is_valid_url(url):
+    if "\n" in url or "\r" in url:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url)
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    except Exception:
+        return False
+
+
+def install_group_script(group):
+    if group not in GROUP_SCRIPT_URLS:
+        log_error("install_group_script", ValueError(f"Unsupported group: {group}"), group)
+        return
+    script_url = GROUP_SCRIPT_URLS[group]
+    if not is_valid_url(script_url):
+        log_error("install_group_script", ValueError(f"Invalid group script URL: {script_url}"), group)
+        return
+    try:
+        os.makedirs(AUTOEXECUTE_DIR, exist_ok=True)
+        if os.path.exists(GROUP_SCRIPT_FILE):
+            os.remove(GROUP_SCRIPT_FILE)
+        if "?" in script_url:
+            lua_body = f'loadstring(game:HttpGet("{script_url}&t=" .. tostring(os.time())))()'
+        else:
+            lua_body = f'loadstring(game:HttpGet("{script_url}?t=" .. tostring(os.time())))()'
+        with open(GROUP_SCRIPT_FILE, "w", encoding="utf-8") as f:
+            f.write(lua_body + "\n")
+        with open(GROUP_SCRIPT_FILE, "r", encoding="utf-8") as f:
+            actual = f.read().strip()
+        if actual != lua_body:
+            raise IOError("Group script verification failed")
+        print(f"[+] INSTALL_GROUP_SCRIPT: group={group}, url={script_url}, file={GROUP_SCRIPT_FILE}")
+    except Exception as e:
+        log_error("install_group_script", e, group)
+
+
+def install_custom_script(script_url):
+    print(f"\n[*] PHÁT HIỆN LINK SCRIPT MỚI, ĐANG DÁN VÀO DELTA...")
+    if not is_valid_url(script_url):
+        log_error("install_custom_script", ValueError(f"Invalid URL: {script_url}"))
+        return
+    try:
+        os.makedirs(AUTOEXECUTE_DIR, exist_ok=True)
+        target_file = os.path.join(AUTOEXECUTE_DIR, "main_farm_script.lua")
+        if os.path.exists(target_file):
+            os.remove(target_file)
+        lua_body = f'loadstring(game:HttpGet("{script_url}"))()'
+        with open(target_file, "w", encoding="utf-8") as f:
+            f.write(lua_body + "\n")
+        with open(target_file, "r", encoding="utf-8") as f:
+            if f.read().strip() != lua_body:
+                raise IOError("Verification failed for custom script file")
+        print(f"[+] Đã dán link mới vào tự động chạy thành công! file={target_file}")
+    except Exception as e:
+        log_error("install_custom_script", e)
 
 # Hàm 1: Tự động quét Github, tải và cài đặt Delta
 def auto_update_system():
@@ -146,18 +301,6 @@ EOF
     os.system(cmd)
     print("[+] Xong file qhtrack!")
 
-# Hàm 4: Dán trực tiếp script từ Link bất kỳ vào Delta
-def install_custom_script(script_url):
-    print(f"\n[*] PHÁT HIỆN LINK SCRIPT MỚI, ĐANG DÁN VÀO DELTA...")
-    os.system("rm -rf /storage/emulated/0/Delta/Autoexecute/*")
-    cmd = f"""
-    cat << 'EOF' > /storage/emulated/0/Delta/Autoexecute/main_farm_script.lua
-loadstring(game:HttpGet("{script_url}"))()
-EOF
-    """
-    os.system(cmd)
-    print(f"[+] Đã dán link mới vào tự động chạy thành công!")
-
 # Hàm 5: SIÊU NĂNG LỰC - TỰ UPDATE AGENT VÀ KHỞI ĐỘNG LẠI
 # (Đã xóa do yêu cầu loại bỏ UPDATE_CORE)
 
@@ -242,29 +385,58 @@ def setup_vip_servers():
     except Exception as e:
         log_error("setup_vip_servers", e)
 
-# ==========================================
-# HỆ THỐNG LẮNG NGHE LỆNH (ĐÃ FIX CHỐNG CACHE)
-# ==========================================
-print("="*50)
-print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN PRO MAX - NO CACHE)  ")
-print("="*50)
+if __name__ == "__main__":
+    # ==========================================
+    # HỆ THỐNG LẮNG NGHE LỆNH (ĐÃ FIX CHỐNG CACHE)
+    # ==========================================
+    print("="*50)
+    print("  📡 HỆ THỐNG C&C ĐÃ SẴN SÀNG (BẢN PRO MAX - NO CACHE)  ")
+    print("="*50)
 
-while True:
-    # 1. Gọi hàm lấy lệnh có bùa chống Cache
-    full_text = get_github_command()
-    
-    # 2. Xử lý lệnh nếu có biến động
-    if full_text and full_text != LAST_CMD_TEXT:
-        LAST_CMD_TEXT = full_text
-        
-        commands = full_text.splitlines()
-        print(f"\n[!] PHÁT HIỆN {len(commands)} LỆNH MỚI TỪ GITHUB!")
-        
+    state = load_state()
+
+    while True:
+        group = get_device_group()
+        if group is None:
+            print("[!] Không xác định được device group. Kiểm tra device_group.txt và thử lại sau.")
+            time.sleep(15)
+            continue
+
+        if group != state.get("device_group"):
+            print(f"[+] Thay đổi device group hoặc lần chạy đầu: {group}")
+            state["device_group"] = group
+            install_group_script(group)
+            save_state(state)
+
+        common_text, group_text = fetch_commands_for_group(group)
+        if common_text is None and group_text is None:
+            print("[!] Không thể tải lệnh từ cả common và group sources. Thử lại sau.")
+            time.sleep(15)
+            continue
+
+        common_hash = calculate_sha256(common_text or "")
+        group_hash = calculate_sha256(group_text or "")
+
+        if common_hash == state.get("common_command_hash") and group_hash == state.get("group_command_hash"):
+            time.sleep(15)
+            continue
+
+        state["common_command_hash"] = common_hash
+        state["group_command_hash"] = group_hash
+        state["last_processed_at"] = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        save_state(state)
+
+        command_lines = []
+        if common_text:
+            command_lines.extend(common_text.splitlines())
+        if group_text:
+            command_lines.extend(group_text.splitlines())
+
+        commands = [cmd.strip() for cmd in command_lines if cmd.strip()]
+        commands = [cmd.strip() for cmd in command_lines if cmd.strip()]
+        print(f"\n[!] PHÁT HIỆN {len(commands)} LỆNH MỚI TỪ GITHUB (group={group})!")
+
         for cmd in commands:
-            cmd = cmd.strip()
-            if not cmd:
-                continue
-
             if cmd.startswith("Updatescript "):
                 link = cmd.split(" ", 1)[1].strip()
                 install_custom_script(link)
@@ -292,18 +464,16 @@ while True:
 
             elif cmd == "SETUP_VIP":
                 setup_vip_servers()
-                
+
             elif cmd == "REBOOT":
                 print("[*] Đang ép khởi động lại thiết bị...")
                 time.sleep(2)
                 os.system("su -c 'reboot'")
                 os.system("su -c '/system/bin/reboot'")
                 os.system("su -c 'svc power reboot'")
-                
+
             elif cmd == "IDLE":
                 print("[💤] Đã nhận lệnh nghỉ ngơi.")
-                
-        print("\n[*] ĐÃ THỰC THI XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\n")
-            
-    # Ngủ 15 giây rồi quét lại
-    time.sleep(15)
+
+        print("\n[*] ĐÃ THỰC HIỆN XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\n")
+        time.sleep(15)
