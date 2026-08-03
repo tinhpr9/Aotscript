@@ -52,6 +52,8 @@ export default {
           commands: [
             { command: "start", description: "Mở bảng điều khiển" },
             { command: "status", description: "Xem lệnh hiện tại" },
+            { command: "solver", description: "Cập nhật URL Solver" },
+            { command: "script", description: "Cập nhật URL script" },
           ],
         });
 
@@ -102,7 +104,7 @@ async function handleUpdate(update, env) {
     return;
   }
 
-  const input = (message.text || "").trim();
+  const input = (message.text || message.caption || "").trim();
 
   if (input === "/start" || input === "/menu") {
     await showTargets(chatId, env);
@@ -147,6 +149,28 @@ async function handleUpdate(update, env) {
     return;
   }
 
+  const solverShortMatch = input.match(/^\/solver\s+(https?:\/\/\S+)$/i);
+  if (solverShortMatch) {
+    const url = solverShortMatch[1];
+    if (!isValidUrl(url)) {
+      await sendMessage(chatId, env, "URL không hợp lệ. Phải là http:// hoặc https://");
+      return;
+    }
+    await promptTargetSelection(chatId, "solver", url, env);
+    return;
+  }
+
+  const scriptShortMatch = input.match(/^\/script\s+(https?:\/\/\S+)$/i);
+  if (scriptShortMatch) {
+    const url = scriptShortMatch[1];
+    if (!isValidUrl(url)) {
+      await sendMessage(chatId, env, "URL không hợp lệ. Phải là http:// hoặc https://");
+      return;
+    }
+    await promptTargetSelection(chatId, "script", url, env);
+    return;
+  }
+
   const parsed = parseTextCommand(input);
   if (!parsed) {
     await sendMessage(
@@ -183,6 +207,72 @@ function parseTextCommand(input) {
   }
 
   return { target, commandKeys: uniqueKeys };
+}
+
+async function promptTargetSelection(chatId, command, url, env) {
+  const token = crypto.randomUUID().slice(0, 8);
+  await saveShortCommand(token, command, url);
+
+  const title = command === "solver" ? "/solver" : "/script";
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        { text: "🌍 TẤT CẢ", callback_data: `shortcmd:${command}:${token}:all` },
+        { text: "🦫 MARMOT", callback_data: `shortcmd:${command}:${token}:marmot` },
+      ],
+      [
+        { text: "✨ NOVA", callback_data: `shortcmd:${command}:${token}:nova` },
+        { text: "❌ HỦY", callback_data: `cancel:${token}` },
+      ],
+    ],
+  };
+
+  await sendMessage(
+    chatId,
+    env,
+    `Chọn nhóm để gửi ${title} ${url}`,
+    replyMarkup
+  );
+}
+
+async function saveShortCommand(token, command, url) {
+  const key = shortCommandCacheKey(token);
+  const value = JSON.stringify({ command, url, created: Date.now() });
+  await caches.default.put(
+    new Request(key),
+    new Response(value, { headers: { "Content-Type": "application/json" } })
+  );
+}
+
+async function loadShortCommand(token) {
+  const key = shortCommandCacheKey(token);
+  const response = await caches.default.match(new Request(key));
+  if (!response) return null;
+  try {
+    const stored = JSON.parse(await response.text());
+    if (!stored || typeof stored.created !== "number") {
+      await clearShortCommand(token);
+      return null;
+    }
+    const age = Date.now() - stored.created;
+    if (age > 5 * 60 * 1000) {
+      await clearShortCommand(token);
+      return null;
+    }
+    return stored;
+  } catch (error) {
+    await clearShortCommand(token);
+    return null;
+  }
+}
+
+async function clearShortCommand(token) {
+  const key = shortCommandCacheKey(token);
+  await caches.default.delete(new Request(key));
+}
+
+function shortCommandCacheKey(token) {
+  return `https://aotscript.local/shortcmd/${token}`;
 }
 
 async function handleCallback(callback, chatId, messageId, env) {
@@ -260,6 +350,8 @@ async function handleCallback(callback, chatId, messageId, env) {
   }
 
   if (data.startsWith("cancel:")) {
+    const token = data.slice(7);
+    await clearShortCommand(token);
     await answerCallback(callback.id, env, "Đã hủy.");
     return;
   }
@@ -273,6 +365,34 @@ async function handleCallback(callback, chatId, messageId, env) {
 
     await answerCallback(callback.id, env, "Đã bỏ chọn.");
     await showCommands(chatId, target, 0, env, messageId);
+    return;
+  }
+
+  if (data.startsWith("shortcmd:")) {
+    const parts = data.split(":");
+    if (parts.length !== 4) {
+      await answerCallback(callback.id, env, "Dữ liệu không hợp lệ.", true);
+      return;
+    }
+    const [, command, token, target] = parts;
+    if (!["solver", "script"].includes(command) || !TARGET_FILES[target]) {
+      await answerCallback(callback.id, env, "Lựa chọn không hợp lệ.", true);
+      return;
+    }
+
+    const stored = await loadShortCommand(token);
+    if (!stored || stored.command !== command) {
+      await answerCallback(callback.id, env, "Lệnh đã hết hạn. Vui lòng thử lại.", true);
+      return;
+    }
+
+    await answerCallback(callback.id, env);
+    await clearShortCommand(token);
+    if (command === "solver") {
+      await executeSolverCommand(chatId, target, stored.url, env);
+      return;
+    }
+    await executeScriptCommand(chatId, target, stored.url, env);
     return;
   }
 
