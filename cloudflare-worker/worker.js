@@ -10,14 +10,14 @@ const TARGET_FILES = {
 
 const COMMANDS = {
   idle: { value: "IDLE", bit: 1, label: "💤 IDLE" },
-  setup_vip: { value: "SETUP_VIP", bit: 2, label: "⚙️ SETUP_VIP" },
-  install_track: { value: "INSTALL_TRACK", bit: 4, label: "📡 INSTALL_TRACK" },
-  setup_boot: { value: "SETUP_BOOT", bit: 8, label: "🔧 SETUP_BOOT" },
-  setup_caylapbu: { value: "SETUP_CAYLAPBU", bit: 16, label: "🌱 SETUP_CAYLAPBU" },
-  run_caylapbu: { value: "RUN_CAYLAPBU", bit: 32, label: "▶️ RUN_CAYLAPBU" },
-  update_delta: { value: "UPDATE_DELTA", bit: 64, label: "🔁 UPDATE_DELTA" },
-  update_solver: { value: "UPDATE_SOLVER", bit: 256, label: "🧠 UPDATE_SOLVER" },
-  update_script: { value: "UPDATESCRIPT", bit: 512, label: "📝 UPDATESCRIPT" },
+  setup_vip: { value: "SETUP_VIP", bit: 2, label: "⚙️ VIP" },
+  install_track: { value: "INSTALL_TRACK", bit: 4, label: "📡 TRACK" },
+  setup_boot: { value: "SETUP_BOOT", bit: 8, label: "🔧 BOOT" },
+  setup_caylapbu: { value: "SETUP_CAYLAPBU", bit: 16, label: "🌱 CÀI CAYLAPBU" },
+  run_caylapbu: { value: "RUN_CAYLAPBU", bit: 32, label: "▶️ CHẠY CAYLAPBU" },
+  update_delta: { value: "UPDATE_DELTA", bit: 64, label: "🔁 DELTA" },
+  update_solver: { value: "UPDATE_SOLVER", bit: 256, label: "🧠 SOLVER" },
+  update_script: { value: "UPDATESCRIPT", bit: 512, label: "📝 SCRIPT" },
   reboot: { value: "REBOOT", bit: 128, label: "🔌 REBOOT" },
 };
 
@@ -788,8 +788,10 @@ async function showCommands(chatId, target, mask, env, messageId) {
 
   const replyMarkup = {
     inline_keyboard: [
-      [button("idle"), button("setup_vip"), button("install_track"), button("setup_boot")],
-      [button("setup_caylapbu"), button("run_caylapbu"), button("update_delta"), button("update_solver")],
+      [button("idle"), button("setup_vip")],
+      [button("install_track"), button("setup_boot")],
+      [button("setup_caylapbu"), button("run_caylapbu")],
+      [button("update_delta"), button("update_solver")],
       [button("update_script"), button("reboot")],
       [
         {
