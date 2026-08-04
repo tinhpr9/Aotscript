@@ -58,6 +58,22 @@ def calculate_sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def command_timestamp_for_sort(text):
+    # Lấy timestamp lớn nhất từ telegram_command_id để xếp nguồn lệnh.
+    timestamps = []
+
+    for match in re.finditer(
+        r"telegram_command_id\s*=\s*(\d+)(?:-[\w-]+)?",
+        text or "",
+    ):
+        try:
+            timestamps.append(int(match.group(1)))
+        except (TypeError, ValueError):
+            continue
+
+    return max(timestamps) if timestamps else 0
+
+
 def load_config():
     try:
         if not os.path.exists(CONFIG_PATH):
@@ -135,7 +151,7 @@ def heartbeat_loop(stop_event, device_id, state):
             "device_group": current_group,
             "timestamp": timestamp,
             "status": "heartbeat",
-            "last_command_id": state.get("last_command_id", ""),
+            "command_id": state.get("last_command_id", ""),
             "last_result": state.get("last_result", ""),
         }
         try:
@@ -555,24 +571,67 @@ if __name__ == "__main__":
             time.sleep(15)
             continue
 
-        common_hash = calculate_sha256(common_text or "")
-        group_hash = calculate_sha256(group_text or "")
+        common_hash = (
+            calculate_sha256(common_text)
+            if common_text is not None
+            else None
+        )
+        group_hash = (
+            calculate_sha256(group_text)
+            if group_text is not None
+            else None
+        )
 
-        if common_hash == state.get("common_command_hash") and group_hash == state.get("group_command_hash"):
+        common_changed = (
+            common_hash is not None
+            and common_hash != state.get("common_command_hash")
+        )
+        group_changed = (
+            group_hash is not None
+            and group_hash != state.get("group_command_hash")
+        )
+
+        if not common_changed and not group_changed:
             time.sleep(15)
             continue
 
-        state["common_command_hash"] = common_hash
-        state["group_command_hash"] = group_hash
-        state["last_processed_at"] = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        changed_sources = []
+
+        if common_changed:
+            changed_sources.append(("COMMON", common_text))
+
+        if group_changed:
+            changed_sources.append((group, group_text))
+
+        # Nguồn có command timestamp nhỏ hơn chạy trước.
+        # Nhờ vậy command mới nhất luôn chạy sau cùng và giữ last_command_id.
+        changed_sources.sort(
+            key=lambda source: command_timestamp_for_sort(source[1])
+        )
+
+        # Lưu hash trước khi thực thi để các lệnh gây reboot không bị lặp vô hạn.
+        if common_changed:
+            state["common_command_hash"] = common_hash
+
+        if group_changed:
+            state["group_command_hash"] = group_hash
+
+        state["last_processed_at"] = (
+            datetime.datetime.utcnow().strftime(
+                "%Y-%m-%d %H:%M:%S UTC"
+            )
+        )
         save_state(state)
 
-        # process commands with support for telegram_command_id comment lines
+        # Chỉ ghép các nguồn vừa thay đổi, theo thứ tự cũ -> mới.
         command_lines = []
-        if common_text:
-            command_lines.extend(common_text.splitlines())
-        if group_text:
-            command_lines.extend(group_text.splitlines())
+
+        for source_name, source_text in changed_sources:
+            print(
+                f"[+] Nguồn lệnh thay đổi: {source_name} "
+                f"(timestamp={command_timestamp_for_sort(source_text)})"
+            )
+            command_lines.extend((source_text or "").splitlines())
 
         # scan lines and group by command_id if present
         i = 0
