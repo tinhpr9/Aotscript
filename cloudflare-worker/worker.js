@@ -34,6 +34,8 @@ const COMMAND_ORDER = [
   "reboot",
 ];
 
+const ALLOWED_REPORT_STATUSES = ["heartbeat", "received", "running", "success", "error"];
+
 export default {
   async fetch(request, env) {
     try {
@@ -56,6 +58,8 @@ export default {
           commands: [
             { command: "start", description: "Mở bảng điều khiển" },
             { command: "status", description: "Xem lệnh hiện tại" },
+            { command: "devices", description: "Danh sách thiết bị" },
+            { command: "progress", description: "Xem tiến độ lệnh gần nhất" },
             { command: "solver", description: "Cập nhật URL Solver" },
             { command: "script", description: "Cập nhật URL script" },
           ],
@@ -73,6 +77,11 @@ export default {
         const update = await request.json();
         await handleUpdate(update, env);
         return text("ok");
+      }
+
+      // Agent report endpoint
+      if (request.method === "POST" && url.pathname === "/agent/report") {
+        return await handleAgentReport(request, env);
       }
 
       return new Response("Not found", { status: 404 });
@@ -117,6 +126,16 @@ async function handleUpdate(update, env) {
 
   if (input === "/status") {
     await sendStatus(chatId, env);
+    return;
+  }
+
+  if (input === "/devices") {
+    await showDevices(chatId, env);
+    return;
+  }
+
+  if (input === "/progress") {
+    await sendProgress(chatId, env);
     return;
   }
 
@@ -453,15 +472,30 @@ async function executeSessionCommands(chatId, state, env) {
       `bot: ${state.target.toUpperCase()} ${commandLines.join(" + ")}`,
       env
     );
-    await sendMessage(
-      chatId,
-      env,
-      `✅ Đã gửi ${commandLines.length} lệnh\n` +
-        `Nhóm: ${state.target.toUpperCase()}\n` +
-        `Lệnh:\n- ${commandLines.join("\n- ")}\n` +
-        `File: ${file}\n` +
-        `Commit: ${commit.slice(0, 7)}`
-    );
+      const replyMarkup = {
+        inline_keyboard: [[
+          { text: "CẬP NHẬT TIẾN ĐỘ", callback_data: `show_progress` },
+          { text: "DANH SÁCH MÁY", callback_data: `show_devices` },
+        ]],
+      };
+
+      try {
+        const pseudoCommandId = content.match(/telegram_command_id=([\w\-]+)/)?.[1] || `${Date.now()}-${crypto.randomUUID().slice(0,8)}`;
+        await env.DEVICE_STATUS.put(`cmd:${pseudoCommandId}`, JSON.stringify({ target: state.target, total_expected: commandLines.length, created: Date.now() }));
+      } catch (e) {
+        console.error('KV put cmd meta failed', e);
+      }
+
+      await sendMessage(
+        chatId,
+        env,
+        `✅ Đã gửi ${commandLines.length} lệnh\n` +
+          `Nhóm: ${state.target.toUpperCase()}\n` +
+          `Lệnh:\n- ${commandLines.join("\n- ")}\n` +
+          `File: ${file}\n` +
+          `Commit: ${commit.slice(0, 7)}`,
+        replyMarkup
+      );
   } catch (error) {
     await sendMessage(chatId, env, `❌ Không gửi được lệnh: ${error.message}`);
   } finally {
@@ -629,6 +663,18 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
     return;
   }
 
+  if (data === "show_devices") {
+    await answerCallback(callback.id, env);
+    await showDevices(chatId, env);
+    return;
+  }
+
+  if (data === "show_progress") {
+    await answerCallback(callback.id, env);
+    await sendProgress(chatId, env);
+    return;
+  }
+
   await answerCallback(callback.id, env, "Nút không hợp lệ.", true);
 }
 
@@ -751,16 +797,30 @@ async function executeCommands(chatId, target, commandKeys, env) {
       `bot: ${target.toUpperCase()} ${commandValues.join(" + ")}`,
       env
     );
+      const replyMarkup = {
+        inline_keyboard: [[
+          { text: "CẬP NHẬT TIẾN ĐỘ", callback_data: `show_progress` },
+          { text: "DANH SÁCH MÁY", callback_data: `show_devices` },
+        ]],
+      };
 
-    await sendMessage(
-      chatId,
-      env,
-      `✅ Đã gửi ${commandValues.length} lệnh\n` +
-        `Nhóm: ${target.toUpperCase()}\n` +
-        `Lệnh:\n- ${commandValues.join("\n- ")}\n` +
-        `File: ${file}\n` +
-        `Commit: ${commit.slice(0, 7)}`
-    );
+      // store command metadata for progress aggregation
+      try {
+        await env.DEVICE_STATUS.put(`cmd:${commandId}`, JSON.stringify({ target, total_expected: commandValues.length, created: Date.now() }));
+      } catch (e) {
+        console.error('KV put cmd meta failed', e);
+      }
+
+      await sendMessage(
+        chatId,
+        env,
+        `✅ Đã gửi ${commandValues.length} lệnh\n` +
+          `Nhóm: ${target.toUpperCase()}\n` +
+          `Lệnh:\n- ${commandValues.join("\n- ")}\n` +
+          `File: ${file}\n` +
+          `Commit: ${commit.slice(0, 7)}`,
+        replyMarkup
+      );
   } catch (error) {
     await sendMessage(chatId, env, `❌ Không gửi được lệnh: ${error.message}`);
   }
@@ -919,6 +979,186 @@ function decodeBase64(value) {
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
   return new TextDecoder().decode(bytes);
 }
+
+// -------------------- Agent reporting and device helpers --------------------
+async function handleAgentReport(request, env) {
+  const secret = request.headers.get("X-Agent-Secret");
+  if (!secret || secret !== env.AGENT_REPORT_SECRET) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return json({ ok: false, error: "invalid_json" }, 400);
+  }
+
+  const { device_id, device_group, timestamp, status, command_id, command, command_index, command_total, last_result } = body;
+
+  if (!device_id || !device_group || !timestamp || !status) {
+    return json({ ok: false, error: "missing_fields" }, 400);
+  }
+
+  // Validate status
+  if (!ALLOWED_REPORT_STATUSES.includes(status)) {
+    return json({ ok: false, error: "invalid_status" }, 400);
+  }
+
+  // Validate device_id and group
+  const didMatch = device_id.match(/^(MARMOT|NOVA)-(\d{2})$/);
+  if (!didMatch) return json({ ok: false, error: "invalid_device_id" }, 400);
+  const prefix = didMatch[1];
+  const idx = parseInt(didMatch[2], 10);
+  if (idx < 1 || idx > 10) return json({ ok: false, error: "device_index_out_of_range" }, 400);
+  if (device_group !== prefix) return json({ ok: false, error: "group_mismatch" }, 400);
+
+  // store/update device record in KV
+  try {
+    const key = device_id;
+    let rec = {};
+    try {
+      const existing = await env.DEVICE_STATUS.get(key);
+      if (existing) rec = JSON.parse(existing);
+    } catch (e) {
+      rec = {};
+    }
+
+    const now = Date.now();
+    rec.device_id = device_id;
+    rec.device_group = device_group;
+    rec.last_seen = now;
+    rec.last_status = status;
+    if (command_id) {
+      rec.last_command_id = command_id;
+      rec.last_command = command || rec.last_command || null;
+      rec.last_command_index = command_index || rec.last_command_index || null;
+      rec.last_command_total = command_total || rec.last_command_total || null;
+      rec.last_command_ts = Date.parse(timestamp) || now;
+    }
+    if (last_result) rec.last_result = last_result;
+
+    await env.DEVICE_STATUS.put(key, JSON.stringify(rec));
+    return json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+}
+
+async function getDeviceRecord(deviceId, env) {
+  try {
+    const raw = await env.DEVICE_STATUS.get(deviceId);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+function formatTimestamp(ms) {
+  try {
+    return new Date(ms).toISOString().replace('T',' ').replace('Z',' UTC');
+  } catch (e) {
+    return '-';
+  }
+}
+
+async function showDevices(chatId, env) {
+  const now = Date.now();
+  const lines = ["📋 Danh sách 20 thiết bị:"];
+  const ids = [];
+  for (let i = 1; i <= 10; i++) ids.push(`MARMOT-${String(i).padStart(2,'0')}`);
+  for (let i = 1; i <= 10; i++) ids.push(`NOVA-${String(i).padStart(2,'0')}`);
+
+  for (const id of ids) {
+    const rec = await getDeviceRecord(id, env);
+    if (!rec) {
+      lines.push(`${id} — offline — group: ${id.split('-')[0]} — last_seen: -`);
+      continue;
+    }
+    const online = now - (rec.last_seen || 0) <= 90 * 1000;
+    lines.push(`${id} — ${online ? 'online' : 'offline'} — group: ${rec.device_group} — last_seen: ${formatTimestamp(rec.last_seen)} — status: ${rec.last_status || '-'}${rec.last_command_id ? ' — cmd:' + rec.last_command_id : ''}`);
+  }
+
+  await sendMessage(chatId, env, lines.join('\n'));
+}
+
+async function sendProgress(chatId, env) {
+  // find latest command meta stored in KV
+  try {
+    // scan known cmd keys by listing (KV list), fallback: scan devices to find newest last_command_ts
+    let latest = { cmd: null, ts: 0 };
+    // check device records
+    const ids = [];
+    for (let i = 1; i <= 10; i++) ids.push(`MARMOT-${String(i).padStart(2,'0')}`);
+    for (let i = 1; i <= 10; i++) ids.push(`NOVA-${String(i).padStart(2,'0')}`);
+    const recs = [];
+    for (const id of ids) {
+      const r = await getDeviceRecord(id, env);
+      if (r) recs.push(r);
+      if (r && r.last_command_ts && r.last_command_ts > latest.ts) {
+        latest = { cmd: r.last_command_id, ts: r.last_command_ts };
+      }
+    }
+
+    if (!latest.cmd) {
+      return sendMessage(chatId, env, 'Không tìm thấy command gần đây để báo tiến độ.');
+    }
+
+    // try load command meta
+    let meta = null;
+    try {
+      const mraw = await env.DEVICE_STATUS.get(`cmd:${latest.cmd}`);
+      if (mraw) meta = JSON.parse(mraw);
+    } catch (e) {}
+
+    const target = meta?.target || 'unknown';
+    const total_expected = meta?.total_expected || (target === 'marmot' || target === 'nova' ? 10 : 20);
+
+    const counts = { received: 0, running: 0, success: 0, error: 0, offline: 0, no_response: 0 };
+    const now = Date.now();
+    for (const id of ids) {
+      const r = await getDeviceRecord(id, env);
+      if (!r) {
+        counts.offline += 1;
+        continue;
+      }
+      // if device is offline
+      if (now - (r.last_seen || 0) > 90 * 1000) {
+        counts.offline += 1;
+        continue;
+      }
+      if (r.last_command_id !== latest.cmd) {
+        counts.no_response += 1;
+        continue;
+      }
+      const s = r.last_status;
+      if (s === 'received') counts.received += 1;
+      else if (s === 'running') counts.running += 1;
+      else if (s === 'success') counts.success += 1;
+      else if (s === 'error') counts.error += 1;
+      else counts.no_response += 1;
+    }
+
+    const lines = [
+      `📊 Tiến độ cho command: ${latest.cmd}`,
+      `Nhóm: ${target.toUpperCase()}`,
+      `Tổng máy dự kiến: ${total_expected}`,
+      `Received: ${counts.received}`,
+      `Running: ${counts.running}`,
+      `Success: ${counts.success}`,
+      `Error: ${counts.error}`,
+      `Offline: ${counts.offline}`,
+      `No response / other: ${counts.no_response}`,
+    ];
+
+    await sendMessage(chatId, env, lines.join('\n'));
+  } catch (e) {
+    await sendMessage(chatId, env, `Lỗi khi tổng hợp tiến độ: ${e.message}`);
+  }
+}
+
 
 function text(value, status = 200) {
   return new Response(value, {

@@ -10,6 +10,8 @@ import sys
 import traceback
 import datetime
 import hashlib
+import threading
+import urllib.error
 
 # ==========================================
 # CẤU HÌNH CLOUD & HỆ THỐNG
@@ -54,6 +56,79 @@ def ensure_parent_dir(path):
 
 def calculate_sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_config():
+    try:
+        if not os.path.exists(CONFIG_PATH):
+            return {}
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception as e:
+        log_error("load_config", e)
+        return {}
+
+
+def load_device_id():
+    path = "/storage/emulated/0/Download/Shouko/device_id.txt"
+    try:
+        if not os.path.exists(path):
+            log_error("load_device_id", FileNotFoundError(path))
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            did = f.read().strip().upper()
+        # Validate format
+        m = re.match(r"^(MARMOT|NOVA)-(\d{2})$", did)
+        if not m:
+            raise ValueError(f"Invalid device_id format: {did}")
+        prefix, num = m.group(1), int(m.group(2))
+        if num < 1 or num > 10:
+            raise ValueError(f"Device index out of range: {did}")
+        return did
+    except Exception as e:
+        log_error("load_device_id", e)
+        return None
+
+
+def send_report_to_worker(report_url, secret, payload):
+    try:
+        if not report_url or not secret:
+            return False
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(report_url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("X-Agent-Secret", secret)
+        # Do not log secret
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+        return True
+    except urllib.error.HTTPError as e:
+        log_error("send_report_to_worker_http", e)
+        return False
+    except Exception as e:
+        log_error("send_report_to_worker", e)
+        return False
+
+
+def heartbeat_loop(stop_event, device_id, device_group, cfg, state):
+    report_url = cfg.get("worker_report_url")
+    secret = cfg.get("agent_report_secret")
+    while not stop_event.is_set():
+        ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        payload = {
+            "device_id": device_id,
+            "device_group": device_group,
+            "timestamp": ts,
+            "status": "heartbeat",
+            "last_command_id": state.get("last_command_id", ""),
+            "last_result": state.get("last_result", ""),
+        }
+        try:
+            send_report_to_worker(report_url, secret, payload)
+        except Exception:
+            pass
+        # Sleep for 30 seconds or until stopped
+        stop_event.wait(30)
 
 
 def load_state():
@@ -434,6 +509,17 @@ if __name__ == "__main__":
 
     state = load_state()
 
+    # load runtime config and device id
+    cfg = load_config()
+    device_id = load_device_id()
+
+    # start heartbeat background thread
+    stop_event = threading.Event()
+    hb_thread = None
+    if device_id:
+        hb_thread = threading.Thread(target=heartbeat_loop, args=(stop_event, device_id, state.get("device_group", ""), cfg, state), daemon=True)
+        hb_thread.start()
+
     while True:
         group = get_device_group()
         if group is None:
@@ -465,50 +551,264 @@ if __name__ == "__main__":
         state["last_processed_at"] = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         save_state(state)
 
+        # process commands with support for telegram_command_id comment lines
         command_lines = []
         if common_text:
             command_lines.extend(common_text.splitlines())
         if group_text:
             command_lines.extend(group_text.splitlines())
 
-        commands = [cmd.strip() for cmd in command_lines if cmd.strip()]
-        commands = [cmd.strip() for cmd in command_lines if cmd.strip()]
-        print(f"\n[!] PHÁT HIỆN {len(commands)} LỆNH MỚI TỪ GITHUB (group={group})!")
-
-        for cmd in commands:
-            if cmd.startswith("Updatescript "):
-                link = cmd.split(" ", 1)[1].strip()
-                install_custom_script(link)
+        # scan lines and group by command_id if present
+        i = 0
+        total_detected = 0
+        while i < len(command_lines):
+            raw = command_lines[i].strip()
+            if not raw:
+                i += 1
                 continue
 
-            if cmd == "UPDATE_DELTA":
-                auto_update_system()
+            # comment handling
+            if raw.startswith("#"):
+                # look for telegram_command_id
+                m = re.search(r"telegram_command_id\s*=\s*([\w\-]+)", raw)
+                if m:
+                    cmd_id = m.group(1).strip()
+                    # skip empty or duplicate
+                    if cmd_id and cmd_id != state.get("last_command_id"):
+                        # collect following commands until next comment or EOF
+                        j = i + 1
+                        group_cmds = []
+                        while j < len(command_lines):
+                            line_j = command_lines[j].strip()
+                            if not line_j:
+                                j += 1
+                                continue
+                            if line_j.startswith("#"):
+                                break
+                            group_cmds.append(line_j)
+                            j += 1
 
-            elif cmd.startswith("UPDATE_SOLVER"):
-                parts = cmd.split(" ", 1)
-                if len(parts) > 1:
-                    update_solver_url(parts[1].strip())
+                        total_detected += len(group_cmds)
+                        print(f"\n[!] PHÁT HIỆN COMMAND_ID={cmd_id} with {len(group_cmds)} lệnh (group={group})")
+                        # report received for this command id
+                        cfg = cfg if 'cfg' in globals() else load_config()
+                        report_url = cfg.get("worker_report_url")
+                        secret = cfg.get("agent_report_secret")
+                        ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                        payload = {
+                            "device_id": device_id,
+                            "device_group": group,
+                            "timestamp": ts,
+                            "status": "received",
+                            "command_id": cmd_id,
+                            "command": None,
+                        }
+                        try:
+                            send_report_to_worker(report_url, secret, payload)
+                        except Exception:
+                            pass
+                        # persist last_command_id
+                        state["last_command_id"] = cmd_id
+                        save_state(state)
 
-            elif cmd == "INSTALL_TRACK":
-                install_qhtrack()
+                        # execute grouped commands in order
+                        for idx_c, single_cmd in enumerate(group_cmds, start=1):
+                            # send running status with progress
+                            ts_run = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                            payload_run = {
+                                "device_id": device_id,
+                                "device_group": group,
+                                "timestamp": ts_run,
+                                "status": "running",
+                                "command_id": cmd_id,
+                                "command": single_cmd,
+                                "command_index": idx_c,
+                                "command_total": len(group_cmds),
+                            }
+                            try:
+                                send_report_to_worker(report_url, secret, payload_run)
+                            except Exception:
+                                pass
 
-            elif cmd == "SETUP_CAYLAPBU":
-                setup_termux_caylapbu()
+                            # execute the command (preserve original logic)
+                            try:
+                                if single_cmd.startswith("Updatescript "):
+                                    link = single_cmd.split(" ", 1)[1].strip()
+                                    install_custom_script(link)
 
-            elif cmd == "RUN_CAYLAPBU":
-                run_termux_caylapbu()
+                                elif single_cmd == "UPDATE_DELTA":
+                                    auto_update_system()
 
-            elif cmd == "SETUP_BOOT":
-                setup_termux_boot()
+                                elif single_cmd.startswith("UPDATE_SOLVER"):
+                                    parts = single_cmd.split(" ", 1)
+                                    if len(parts) > 1:
+                                        update_solver_url(parts[1].strip())
 
-            elif cmd == "SETUP_VIP":
-                setup_vip_servers()
+                                elif single_cmd == "INSTALL_TRACK":
+                                    install_qhtrack()
 
-            elif cmd == "REBOOT":
-                reboot_device()
+                                elif single_cmd == "SETUP_CAYLAPBU":
+                                    setup_termux_caylapbu()
 
-            elif cmd == "IDLE":
-                print("[💤] Đã nhận lệnh nghỉ ngơi.")
+                                elif single_cmd == "RUN_CAYLAPBU":
+                                    run_termux_caylapbu()
 
-        print("\n[*] ĐÃ THỰC HIỆN XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\n")
+                                elif single_cmd == "SETUP_BOOT":
+                                    setup_termux_boot()
+
+                                elif single_cmd == "SETUP_VIP":
+                                    setup_vip_servers()
+
+                                elif single_cmd == "REBOOT":
+                                    reboot_device()
+
+                                elif single_cmd == "IDLE":
+                                    print("[💤] Đã nhận lệnh nghỉ ngơi.")
+
+                                # send success report
+                                ts_succ = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                                payload_succ = {
+                                    "device_id": device_id,
+                                    "device_group": group,
+                                    "timestamp": ts_succ,
+                                    "status": "success",
+                                    "command_id": cmd_id,
+                                    "command": single_cmd,
+                                    "command_index": idx_c,
+                                    "command_total": len(group_cmds),
+                                    "last_result": "ok",
+                                }
+                                try:
+                                    send_report_to_worker(report_url, secret, payload_succ)
+                                except Exception:
+                                    pass
+                                state["last_result"] = "ok"
+                                save_state(state)
+
+                            except Exception as e:
+                                short_err = str(e)
+                                if len(short_err) > 240:
+                                    short_err = short_err[:237] + "..."
+                                ts_err = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                                payload_err = {
+                                    "device_id": device_id,
+                                    "device_group": group,
+                                    "timestamp": ts_err,
+                                    "status": "error",
+                                    "command_id": cmd_id,
+                                    "command": single_cmd,
+                                    "command_index": idx_c,
+                                    "command_total": len(group_cmds),
+                                    "last_result": short_err,
+                                }
+                                try:
+                                    send_report_to_worker(report_url, secret, payload_err)
+                                except Exception:
+                                    pass
+                                state["last_result"] = short_err
+                                save_state(state)
+
+                        i = j
+                        continue
+                # generic comment: skip
+                i += 1
+                continue
+
+            # non-comment single command (no command_id)
+            # treat as before but also send running/success/error without command_id
+            single_cmd = raw
+            total_detected += 1
+            # report running
+            cfg = cfg if 'cfg' in globals() else load_config()
+            report_url = cfg.get("worker_report_url")
+            secret = cfg.get("agent_report_secret")
+            ts_run = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            payload_run = {
+                "device_id": device_id,
+                "device_group": group,
+                "timestamp": ts_run,
+                "status": "running",
+                "command_id": None,
+                "command": single_cmd,
+            }
+            try:
+                send_report_to_worker(report_url, secret, payload_run)
+            except Exception:
+                pass
+
+            try:
+                if single_cmd.startswith("Updatescript "):
+                    link = single_cmd.split(" ", 1)[1].strip()
+                    install_custom_script(link)
+
+                elif single_cmd == "UPDATE_DELTA":
+                    auto_update_system()
+
+                elif single_cmd.startswith("UPDATE_SOLVER"):
+                    parts = single_cmd.split(" ", 1)
+                    if len(parts) > 1:
+                        update_solver_url(parts[1].strip())
+
+                elif single_cmd == "INSTALL_TRACK":
+                    install_qhtrack()
+
+                elif single_cmd == "SETUP_CAYLAPBU":
+                    setup_termux_caylapbu()
+
+                elif single_cmd == "RUN_CAYLAPBU":
+                    run_termux_caylapbu()
+
+                elif single_cmd == "SETUP_BOOT":
+                    setup_termux_boot()
+
+                elif single_cmd == "SETUP_VIP":
+                    setup_vip_servers()
+
+                elif single_cmd == "REBOOT":
+                    reboot_device()
+
+                elif single_cmd == "IDLE":
+                    print("[💤] Đã nhận lệnh nghỉ ngơi.")
+
+                ts_succ = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                payload_succ = {
+                    "device_id": device_id,
+                    "device_group": group,
+                    "timestamp": ts_succ,
+                    "status": "success",
+                    "command_id": None,
+                    "command": single_cmd,
+                    "last_result": "ok",
+                }
+                try:
+                    send_report_to_worker(report_url, secret, payload_succ)
+                except Exception:
+                    pass
+                state["last_result"] = "ok"
+                save_state(state)
+
+            except Exception as e:
+                short_err = str(e)
+                if len(short_err) > 240:
+                    short_err = short_err[:237] + "..."
+                ts_err = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                payload_err = {
+                    "device_id": device_id,
+                    "device_group": group,
+                    "timestamp": ts_err,
+                    "status": "error",
+                    "command_id": None,
+                    "command": single_cmd,
+                    "last_result": short_err,
+                }
+                try:
+                    send_report_to_worker(report_url, secret, payload_err)
+                except Exception:
+                    pass
+                state["last_result"] = short_err
+                save_state(state)
+
+            i += 1
+
+        print(f"\n[*] ĐÃ THỰC HIỆN XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\nDetected {total_detected} actionable lines.")
         time.sleep(15)
