@@ -1,4 +1,5 @@
-DISABLE_OLD_BOOT=0 bash <<'BASH'
+#!/usr/bin/env bash
+DISABLE_OLD_BOOT=0 bash -s -- "$@" <<'BASH'
 set -u
 
 ok()   { echo "✅ $*"; }
@@ -6,10 +7,80 @@ warn() { echo "⚠️ $*"; }
 die()  { echo "❌ $*"; exit 1; }
 root() { su -c "$1"; }
 
+usage() {
+  echo "Cách dùng:"
+  echo "  msetup m166 NOVA"
+  echo "  msetup m62 MARMOT"
+}
+
+DEVICE_ID_RAW="${1:-}"
+DEVICE_GROUP_RAW="${2:-}"
+
+[ -n "$DEVICE_ID_RAW" ] && [ -n "$DEVICE_GROUP_RAW" ] || {
+  usage
+  die "Thiếu device_id hoặc profile"
+}
+
+DEVICE_ID="$(
+  printf '%s' "$DEVICE_ID_RAW" |
+    tr -d '\r\n ' |
+    tr '[:upper:]' '[:lower:]'
+)"
+
+DEVICE_GROUP="$(
+  printf '%s' "$DEVICE_GROUP_RAW" |
+    tr -d '\r\n ' |
+    tr '[:lower:]' '[:upper:]'
+)"
+
+[[ "$DEVICE_ID" =~ ^m[1-9][0-9]{0,5}$ ]] ||
+  die "Device ID không hợp lệ: $DEVICE_ID_RAW"
+
+case "$DEVICE_GROUP" in
+  MARMOT|NOVA) ;;
+  *) die "Profile không hợp lệ: $DEVICE_GROUP_RAW" ;;
+esac
+
+validate_agent_config() {
+  python - "$1" <<'PY'
+import json
+import pathlib
+import sys
+import urllib.parse
+
+path = pathlib.Path(sys.argv[1])
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+url = data.get("worker_report_url")
+secret = data.get("agent_report_secret")
+
+if not isinstance(url, str) or not url.strip():
+    raise SystemExit(1)
+
+parsed = urllib.parse.urlparse(url.strip())
+
+if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    raise SystemExit(1)
+
+if not isinstance(secret, str) or not secret.strip():
+    raise SystemExit(1)
+PY
+}
+
 STAMP="$(date +%Y%m%d-%H%M%S)"
 SD="/storage/emulated/0"
 DL="$SD/Download"
-BACKUP="$DL/m166_settings_before_${STAMP}.txt"
+SHOUKO_DIR="$DL/Shouko"
+AGENT_CONFIG="$SHOUKO_DIR/agent_config.json"
+PRIVATE_AGENT_CONFIG="$HOME/.config/aotscript/agent_config.json"
+BACKUP="$DL/msetup_settings_before_${STAMP}.txt"
 DISABLED="$HOME/.termux/boot-disabled/$STAMP"
 
 KEYS=(
@@ -20,7 +91,7 @@ KEYS=(
   force_desktop_mode_on_external_displays
 )
 
-echo "=== TỰ ĐỘNG CẤU HÌNH m166 ==="
+echo "=== MSETUP: $DEVICE_ID / $DEVICE_GROUP ==="
 
 root id 2>/dev/null | grep -q 'uid=0(root)' ||
   die "ROOT không hoạt động"
@@ -30,22 +101,21 @@ mkdir -p "$DL"
 
 {
   echo "time=$STAMP"
+  echo "device_id=$DEVICE_ID"
+  echo "device_group=$DEVICE_GROUP"
   echo "size=$(root 'wm size' 2>&1)"
   echo "density=$(root 'wm density' 2>&1)"
-
   for key in "${KEYS[@]}"; do
     echo "$key=$(root "settings get global $key" 2>/dev/null)"
   done
-} > "$BACKUP" || die "Không tạo được bản sao lưu"
+} > "$BACKUP" || die "Không tạo được bản sao lưu cài đặt"
 
-ok "Đã sao lưu: $BACKUP"
+ok "Đã sao lưu cài đặt: $BACKUP"
 
 if [ "$DISABLE_OLD_BOOT" = "1" ]; then
   moved=0
-
   for name in winterhub.sh winterhub.sh.bak; do
     src="$HOME/.termux/boot/$name"
-
     if [ -f "$src" ]; then
       mkdir -p "$DISABLED"
       mv "$src" "$DISABLED/$name" ||
@@ -54,12 +124,11 @@ if [ "$DISABLE_OLD_BOOT" = "1" ]; then
       moved=1
     fi
   done
-
   [ "$moved" = "1" ] &&
     echo "Boot cũ được giữ tại: $DISABLED" ||
     echo "[*] Không có winterhub cũ cần chuyển"
 else
-  echo "[*] Giữ nguyên boot script hiện tại"
+  echo "[*] Giữ nguyên mọi boot script hiện tại"
 fi
 
 for key in "${KEYS[@]}"; do
@@ -68,6 +137,11 @@ for key in "${KEYS[@]}"; do
   else
     warn "Không đặt được $key"
   fi
+done
+
+for command in python curl unzip; do
+  command -v "$command" >/dev/null 2>&1 ||
+    die "Thiếu lệnh bắt buộc: $command"
 done
 
 if command -v gdown >/dev/null 2>&1; then
@@ -82,6 +156,81 @@ else
   ok "Cài gdown thành công"
 fi
 
+mkdir -p "$HOME/bin" "$HOME/.termux/boot"
+
+case ":$PATH:" in
+  *":$HOME/bin:"*) ;;
+  *)
+    grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null ||
+      echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+    export PATH="$HOME/bin:$PATH"
+    ;;
+esac
+
+MSETUP_CMD="$HOME/bin/msetup"
+MSETUP_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/msetup.$$"
+
+cat > "$MSETUP_TMP" <<'MSETUP_EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+set -u
+
+usage() {
+  echo "Cách dùng:"
+  echo "  msetup m166 NOVA"
+  echo "  msetup m62 MARMOT"
+}
+
+[ "$#" -eq 2 ] || {
+  usage
+  exit 1
+}
+
+CURL="/data/data/com.termux/files/usr/bin/curl"
+BASH="/data/data/com.termux/files/usr/bin/bash"
+TMP="$(mktemp)"
+
+cleanup() {
+  rm -f "$TMP"
+}
+trap cleanup EXIT INT TERM
+
+"$CURL" -fsSL \
+  --retry 3 \
+  --connect-timeout 15 \
+  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/setup-m166.sh?t=$(date +%s)" \
+  -o "$TMP" || {
+    echo "[LỖI] Không tải được setup mới nhất."
+    exit 1
+  }
+
+[ -s "$TMP" ] || {
+  echo "[LỖI] Setup tải về bị trống."
+  exit 1
+}
+
+"$BASH" -n "$TMP" || {
+  echo "[LỖI] Setup tải về sai cú pháp."
+  exit 1
+}
+
+"$BASH" "$TMP" "$@"
+MSETUP_EOF
+
+chmod 700 "$MSETUP_TMP"
+
+if [ -f "$MSETUP_CMD" ] &&
+   cmp -s "$MSETUP_TMP" "$MSETUP_CMD"; then
+  rm -f "$MSETUP_TMP"
+  ok "Lệnh msetup đã đúng"
+else
+  [ ! -f "$MSETUP_CMD" ] ||
+    cp -p "$MSETUP_CMD" "${MSETUP_CMD}.bak-${STAMP}"
+  mv "$MSETUP_TMP" "$MSETUP_CMD" ||
+    die "Không cài được msetup"
+  chmod 700 "$MSETUP_CMD"
+  ok "Đã cài lệnh: msetup"
+fi
+
 SIZE_OUT="$(root 'wm size' 2>/dev/null)"
 SIZE="$(
   printf '%s\n' "$SIZE_OUT" |
@@ -92,19 +241,15 @@ SIZE="$(
 if [[ "$SIZE" =~ ^([0-9]+)x([0-9]+)$ ]]; then
   WIDTH="${BASH_REMATCH[1]}"
   HEIGHT="${BASH_REMATCH[2]}"
-
   if [ "$WIDTH" -lt "$HEIGHT" ]; then
     SHORT="$WIDTH"
   else
     SHORT="$HEIGHT"
   fi
-
   DENSITY=$(( (SHORT * 160 + 350) / 700 ))
   [ "$DENSITY" -lt 72 ] && DENSITY=72
-
   root "wm density $DENSITY" ||
     die "Không đặt được density"
-
   sleep 2
   ok "Đã đặt density=$DENSITY, gần 700 dp"
 else
@@ -120,75 +265,37 @@ echo "=== CẤU HÌNH GBOARD ==="
 if root "pm path $PKG" >/dev/null 2>&1; then
   root "pm enable $PKG" >/dev/null 2>&1 || true
   root "ime enable '$IME'" >/dev/null 2>&1 || true
-
   if root "ime set '$IME'"; then
     ok "Đã đặt Gboard làm mặc định"
   else
     warn "Không đặt được Gboard làm mặc định"
   fi
-
-  echo "IME: $(root 'settings get secure default_input_method' 2>/dev/null)"
-
-  VERSION="$(
-    root "dumpsys package $PKG" 2>/dev/null |
-      sed -n 's/^[[:space:]]*versionName=//p' |
-      head -n 1
-  )"
-
-  echo "Gboard: ${VERSION:-không đọc được phiên bản}"
 else
   warn "Gboard chưa được cài"
 fi
-
-if root "am start -a android.intent.action.VIEW \
--d 'market://details?id=$PKG' \
--p com.android.vending" >/dev/null 2>&1; then
-  ok "Đã mở trang Gboard trong CH Play"
-else
-  warn "Không mở được trang Gboard trong CH Play"
-fi
-
-command -v unzip >/dev/null 2>&1 ||
-  die "Thiếu unzip"
 
 download_zip() {
   local id="$1"
   local out="$2"
   local part="${out}.part.$$"
-  local list
-
   echo
-  echo "[*] Đang tải: $out"
+  echo "[*] Đang tải: $(basename "$out")"
   rm -f "$part"
-
   if ! gdown "$id" -O "$part"; then
     rm -f "$part"
-    die "Tải thất bại: $out"
+    die "Tải thất bại: $(basename "$out")"
   fi
-
   [ -s "$part" ] || {
     rm -f "$part"
-    die "File tải về trống: $out"
+    die "File tải về trống: $(basename "$out")"
   }
-
   if ! unzip -t "$part" >/dev/null 2>&1; then
     rm -f "$part"
-    die "ZIP bị lỗi: $out"
+    die "ZIP bị lỗi: $(basename "$out")"
   fi
-
   mv -f "$part" "$out" ||
-    die "Không lưu được: $out"
-
-  ok "ZIP hợp lệ: $out"
-
-  echo "Cấu trúc cấp đầu:"
-  list="$(unzip -Z1 "$out")" ||
-    die "Không đọc được cấu trúc ZIP"
-
-  printf '%s\n' "$list" |
-    awk -F/ 'NF && $1 != "" {print $1}' |
-    sort -u |
-    sed 's/^/  - /'
+    die "Không lưu được: $(basename "$out")"
+  ok "ZIP hợp lệ: $(basename "$out")"
 }
 
 extract_safe() {
@@ -197,33 +304,92 @@ extract_safe() {
   local expected="$3"
   local target="$dest/$expected"
   local list
-
   list="$(unzip -Z1 "$zip")" ||
-    die "Không đọc được $zip"
-
+    die "Không đọc được $(basename "$zip")"
   printf '%s\n' "$list" |
     grep -q "^${expected}/" ||
-    die "$zip không có thư mục cấp đầu $expected"
-
+    die "$(basename "$zip") không có thư mục $expected"
   if [ -e "$target" ] && [ ! -d "$target" ]; then
     die "$target tồn tại nhưng không phải thư mục"
   fi
-
   if [ -d "$target" ] &&
      [ -n "$(find "$target" -mindepth 1 -print -quit 2>/dev/null)" ]; then
-    warn "$target đã có dữ liệu; bỏ qua giải nén để tránh ghi đè"
+    warn "$target đã có dữ liệu; giữ nguyên để tránh ghi đè"
+    return 0
+  fi
+  mkdir -p "$dest"
+  unzip -q "$zip" -d "$dest" ||
+    die "Giải nén thất bại: $(basename "$zip")"
+  [ -d "$target" ] ||
+    die "Giải nén xong nhưng không thấy $target"
+  ok "Đã giải nén: $target"
+}
+
+install_agent_config() {
+  local tmp="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/agent_config.$$"
+  local source_name=""
+  rm -f "$tmp"
+
+  if unzip -Z1 "$SHOUKO_ZIP" |
+       tr -d '\r' |
+       grep -Fxq 'Shouko/agent_config.json'; then
+    if unzip -p "$SHOUKO_ZIP" 'Shouko/agent_config.json' > "$tmp" &&
+       [ -s "$tmp" ] &&
+       validate_agent_config "$tmp"; then
+      source_name="Shouko.zip riêng tư"
+    else
+      rm -f "$tmp"
+      warn "agent_config.json trong Shouko.zip chưa hợp lệ"
+    fi
+  fi
+
+  if [ -z "$source_name" ] &&
+     [ -s "$PRIVATE_AGENT_CONFIG" ]; then
+    cp -p "$PRIVATE_AGENT_CONFIG" "$tmp" ||
+      die "Không đọc được backup Agent riêng tư"
+    if validate_agent_config "$tmp"; then
+      source_name="backup riêng tư trong Termux"
+    else
+      rm -f "$tmp"
+      warn "Backup Agent riêng tư chưa hợp lệ"
+    fi
+  fi
+
+  if [ -z "$source_name" ] &&
+     [ -s "$AGENT_CONFIG" ] &&
+     validate_agent_config "$AGENT_CONFIG"; then
+    chmod 600 "$AGENT_CONFIG" 2>/dev/null || true
+    ok "Giữ nguyên agent_config.json hợp lệ hiện có"
     return 0
   fi
 
-  mkdir -p "$dest"
+  [ -n "$source_name" ] || {
+    rm -f "$tmp"
+    die "Không tìm thấy agent_config.json hợp lệ trong Shouko.zip, backup riêng tư hoặc máy hiện tại"
+  }
 
-  unzip -q "$zip" -d "$dest" ||
-    die "Giải nén thất bại: $zip"
+  mkdir -p "$SHOUKO_DIR"
 
-  [ -d "$target" ] ||
-    die "Giải nén xong nhưng không thấy $target"
+  if [ -f "$AGENT_CONFIG" ] &&
+     cmp -s "$tmp" "$AGENT_CONFIG"; then
+    rm -f "$tmp"
+    chmod 600 "$AGENT_CONFIG" 2>/dev/null || true
+    ok "agent_config.json đã đúng"
+    return 0
+  fi
 
-  ok "Đã giải nén: $target"
+  if [ -f "$AGENT_CONFIG" ]; then
+    cp -p "$AGENT_CONFIG" "${AGENT_CONFIG}.bak-${STAMP}" ||
+      die "Không backup được agent_config.json"
+  fi
+
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$AGENT_CONFIG" ||
+    die "Không cài được agent_config.json"
+  chmod 600 "$AGENT_CONFIG" 2>/dev/null || true
+  validate_agent_config "$AGENT_CONFIG" ||
+    die "agent_config.json sau khi cài không hợp lệ"
+  ok "Đã cài agent_config.json từ $source_name; không hiển thị nội dung"
 }
 
 SHOUKO_ZIP="$DL/Shouko.zip"
@@ -239,47 +405,8 @@ download_zip \
 
 extract_safe "$SHOUKO_ZIP" "$DL" "Shouko"
 extract_safe "$DELTA_ZIP" "$SD" "Delta"
+install_agent_config
 
-echo
-echo "========== KẾT QUẢ =========="
-root 'wm size'
-root 'wm density'
-
-for key in "${KEYS[@]}"; do
-  value="$(root "settings get global $key" 2>/dev/null)"
-
-  if [ "$value" = "1" ]; then
-    ok "$key=$value"
-  else
-    warn "$key=$value"
-  fi
-done
-
-ok "gdown=$(command -v gdown)"
-
-for path in \
-  "$DL/Shouko" \
-  "$SD/Delta" \
-  "$HOME/caylapbu/main"
-do
-  if [ -e "$path" ]; then
-    ls -ld "$path"
-  else
-    warn "Chưa có: $path"
-  fi
-done
-
-echo
-
-# ===== TIỆN ÍCH M166: TOOLCHECK + AGENT BOOT AN TOÀN =====
-echo
-echo "=== CÀI TOOLCHECK VÀ AGENT BOOT AN TOÀN ==="
-
-mkdir -p "$HOME/bin" "$HOME/.termux/boot"
-
-# ---------------------------------------------------------
-# Lệnh tắt: toolcheck
-# ---------------------------------------------------------
 TOOLCHECK_CMD="$HOME/bin/toolcheck"
 TOOLCHECK_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/toolcheck.$$"
 
@@ -317,10 +444,8 @@ echo "[*] Đang tải Toolcheck mới nhất..."
 "$PYTHON" -c '
 import pathlib
 import sys
-
-file = pathlib.Path(sys.argv[1])
-source = file.read_text(encoding="utf-8")
-compile(source, str(file), "exec")
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+compile(source, sys.argv[1], "exec")
 ' "$TMP"
 
 "$PYTHON" "$TMP"
@@ -333,31 +458,14 @@ if [ -f "$TOOLCHECK_CMD" ] &&
   rm -f "$TOOLCHECK_TMP"
   ok "Lệnh toolcheck đã đúng"
 else
-  if [ -f "$TOOLCHECK_CMD" ]; then
+  [ ! -f "$TOOLCHECK_CMD" ] ||
     cp -p "$TOOLCHECK_CMD" "${TOOLCHECK_CMD}.bak-${STAMP}"
-  fi
-
-  mv "$TOOLCHECK_TMP" "$TOOLCHECK_CMD"
+  mv "$TOOLCHECK_TMP" "$TOOLCHECK_CMD" ||
+    die "Không cài được toolcheck"
   chmod 700 "$TOOLCHECK_CMD"
   ok "Đã cài lệnh: toolcheck"
 fi
 
-case ":$PATH:" in
-  *":$HOME/bin:"*) ;;
-  *)
-    grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null ||
-      echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
-    export PATH="$HOME/bin:$PATH"
-    ;;
-esac
-
-
-# ---------------------------------------------------------
-# Lệnh tắt: setdevice
-# Chạy một lần cho mỗi máy:
-#   setdevice m62 MARMOT
-#   setdevice m166 NOVA
-# ---------------------------------------------------------
 SETDEVICE_CMD="$HOME/bin/setdevice"
 SETDEVICE_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/setdevice.$$"
 
@@ -367,7 +475,6 @@ set -e
 
 NAME_RAW="${1:-}"
 GROUP_RAW="${2:-}"
-
 DIR="/sdcard/Download/Shouko"
 ID_FILE="$DIR/device_id.txt"
 GROUP_FILE="$DIR/device_group.txt"
@@ -379,34 +486,16 @@ usage() {
   echo "  setdevice m166 NOVA"
 }
 
-if [ -z "$NAME_RAW" ]; then
+[ -n "$NAME_RAW" ] && [ -n "$GROUP_RAW" ] || {
   usage
   exit 1
-fi
+}
 
 NAME="$(
   printf '%s' "$NAME_RAW" |
+    tr -d '\r\n ' |
     tr '[:upper:]' '[:lower:]'
 )"
-
-if [[ ! "$NAME" =~ ^m[1-9][0-9]{0,5}$ ]]; then
-  echo "[LỖI] Tên máy không hợp lệ: $NAME_RAW"
-  echo "Ví dụ: m62, m166, m1000"
-  exit 1
-fi
-
-mkdir -p "$DIR"
-
-if [ -z "$GROUP_RAW" ] &&
-   [ -s "$GROUP_FILE" ]; then
-  GROUP_RAW="$(cat "$GROUP_FILE")"
-fi
-
-if [ -z "$GROUP_RAW" ]; then
-  read -r -p \
-    "Nhập profile MARMOT hoặc NOVA: " \
-    GROUP_RAW
-fi
 
 GROUP="$(
   printf '%s' "$GROUP_RAW" |
@@ -414,53 +503,46 @@ GROUP="$(
     tr '[:lower:]' '[:upper:]'
 )"
 
+[[ "$NAME" =~ ^m[1-9][0-9]{0,5}$ ]] || {
+  echo "[LỖI] Tên máy không hợp lệ: $NAME_RAW"
+  exit 1
+}
+
 case "$GROUP" in
   MARMOT|NOVA) ;;
   *)
     echo "[LỖI] Profile không hợp lệ: $GROUP_RAW"
-    usage
     exit 1
     ;;
 esac
 
+mkdir -p "$DIR"
+
 OLD_ID="$(
-  cat "$ID_FILE" 2>/dev/null |
-    tr -d '\r\n ' || true
+  tr -d '\r\n ' < "$ID_FILE" 2>/dev/null |
+    tr '[:upper:]' '[:lower:]' || true
 )"
 
 OLD_GROUP="$(
-  cat "$GROUP_FILE" 2>/dev/null |
-    tr -d '\r\n ' |
+  tr -d '\r\n ' < "$GROUP_FILE" 2>/dev/null |
     tr '[:lower:]' '[:upper:]' || true
 )"
 
 if [ "$OLD_ID" = "$NAME" ] &&
    [ "$OLD_GROUP" = "$GROUP" ]; then
-  echo "[OK] Máy đã được cấu hình:"
-  echo "device_id=$NAME"
-  echo "device_group=$GROUP"
+  echo "[OK] Máy đã được cấu hình: $NAME / $GROUP"
   exit 0
 fi
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
-for file in \
-  "$ID_FILE" \
-  "$GROUP_FILE" \
-  "$STATE_FILE"
-do
-  if [ -f "$file" ]; then
-    cp -p \
-      "$file" \
-      "${file}.bak-${STAMP}"
-  fi
+for file in "$ID_FILE" "$GROUP_FILE" "$STATE_FILE"; do
+  [ ! -f "$file" ] ||
+    cp -p "$file" "${file}.bak-${STAMP}"
 done
 
-printf '%s\n' "$NAME" \
-  > "${ID_FILE}.tmp"
-
-printf '%s\n' "$GROUP" \
-  > "${GROUP_FILE}.tmp"
+printf '%s\n' "$NAME" > "${ID_FILE}.tmp"
+printf '%s\n' "$GROUP" > "${GROUP_FILE}.tmp"
 
 mv "${ID_FILE}.tmp" "$ID_FILE"
 mv "${GROUP_FILE}.tmp" "$GROUP_FILE"
@@ -477,157 +559,172 @@ cat > "${STATE_FILE}.tmp" <<'STATE_EOF'
 STATE_EOF
 
 mv "${STATE_FILE}.tmp" "$STATE_FILE"
-
-echo "[OK] Đã cấu hình máy:"
-echo "device_id=$NAME"
-echo "device_group=$GROUP"
-echo "[OK] Chỉ cần đặt tên một lần."
-echo "[OK] State cũ đã được sao lưu và làm sạch."
+echo "[OK] Đã cấu hình máy: $NAME / $GROUP"
 SETDEVICE_EOF
 
 chmod 700 "$SETDEVICE_TMP"
 
 if [ -f "$SETDEVICE_CMD" ] &&
-   cmp -s \
-     "$SETDEVICE_TMP" \
-     "$SETDEVICE_CMD"
-then
+   cmp -s "$SETDEVICE_TMP" "$SETDEVICE_CMD"; then
   rm -f "$SETDEVICE_TMP"
   ok "Lệnh setdevice đã đúng"
 else
-  if [ -f "$SETDEVICE_CMD" ]; then
-    cp -p \
-      "$SETDEVICE_CMD" \
-      "${SETDEVICE_CMD}.bak-${STAMP}"
-  fi
-
-  mv \
-    "$SETDEVICE_TMP" \
-    "$SETDEVICE_CMD"
-
+  [ ! -f "$SETDEVICE_CMD" ] ||
+    cp -p "$SETDEVICE_CMD" "${SETDEVICE_CMD}.bak-${STAMP}"
+  mv "$SETDEVICE_TMP" "$SETDEVICE_CMD" ||
+    die "Không cài được setdevice"
   chmod 700 "$SETDEVICE_CMD"
   ok "Đã cài lệnh: setdevice"
 fi
 
-# ---------------------------------------------------------
-# Agent boot an toàn
-# ---------------------------------------------------------
-AGENT_BOOT="$HOME/.termux/boot/01-agent.sh"
-AGENT_BOOT_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/01-agent.sh.$$"
+"$SETDEVICE_CMD" "$DEVICE_ID" "$DEVICE_GROUP" ||
+  die "setdevice thất bại"
 
-cat > "$AGENT_BOOT_TMP" <<'AGENT_BOOT_EOF'
-#!/data/data/com.termux/files/usr/bin/bash
+install_termux_boot_app() {
+  local package="com.termux.boot"
+  local meta="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/termux-boot-meta.$$"
+  local apk="$DL/Termux-Boot.apk"
+  local apk_part="${apk}.part.$$"
+  local apk_url=""
+  local archive_entry=""
+  local source_name=""
+  local install_source=""
+  local version_code=""
 
-export PATH="/data/data/com.termux/files/usr/bin:$PATH"
-
-PYTHON="/data/data/com.termux/files/usr/bin/python"
-CURL="/data/data/com.termux/files/usr/bin/curl"
-
-AGENT="/sdcard/Download/Agent_Core.py"
-TEMP="/sdcard/Download/Agent_Core.py.tmp"
-LOG="/sdcard/Download/Agent_Log.txt"
-
-ID_FILE="/sdcard/Download/Shouko/device_id.txt"
-GROUP_FILE="/sdcard/Download/Shouko/device_group.txt"
-
-mkdir -p "/sdcard/Download/Shouko"
-
-{
-  echo
-  echo "===== AGENT BOOT $(date '+%Y-%m-%d %H:%M:%S') ====="
-
-  termux-wake-lock 2>/dev/null || true
-  sleep 15
-
-  # Không tắt Agent đang hoạt động.
-  if pgrep -af '[/]sdcard/Download/Agent_Core.py' >/dev/null 2>&1; then
-    echo "[SKIP] Agent đang chạy, không khởi động thêm:"
-    pgrep -af '[/]sdcard/Download/Agent_Core.py'
-    exit 0
+  if root "pm path $package" >/dev/null 2>&1; then
+    ok "Termux:Boot đã được cài"
+    return 0
   fi
 
-  if [ ! -s "$ID_FILE" ]; then
-    echo "[SKIP] Chưa có hoặc file trống: $ID_FILE"
-    exit 0
-  fi
+  rm -f "$meta" "$apk_part"
 
-  if [ ! -s "$GROUP_FILE" ]; then
-    echo "[SKIP] Chưa có hoặc file trống: $GROUP_FILE"
-    exit 0
-  fi
-
-  DEVICE_ID="$(
-    tr -d '\r\n ' < "$ID_FILE" |
-      tr '[:lower:]' '[:upper:]'
+  archive_entry="$(
+    unzip -Z1 "$SHOUKO_ZIP" |
+      awk 'tolower($0) ~ /termux[^/]*boot[^/]*\.apk$/ {print; exit}'
   )"
 
-  DEVICE_GROUP="$(
-    tr -d '\r\n ' < "$GROUP_FILE" |
-      tr '[:lower:]' '[:upper:]'
-  )"
-
-
-  if [[ "$DEVICE_ID" =~ ^M[1-9][0-9]{0,5}$ ]]; then
-    echo "[OK] device_id động=$DEVICE_ID"
+  if [ -n "$archive_entry" ]; then
+    unzip -p "$SHOUKO_ZIP" "$archive_entry" > "$apk_part" ||
+      die "Không lấy được Termux:Boot từ Shouko.zip"
+    source_name="Shouko.zip riêng tư"
   else
-    case "$DEVICE_ID" in
-      MARMOT-0[1-9]|MARMOT-10|NOVA-0[1-9]|NOVA-10)
-        echo "[OK] device_id cũ=$DEVICE_ID"
-        ;;
-      *)
-        echo "[SKIP] device_id không hợp lệ: $DEVICE_ID"
-        echo "[SKIP] Dùng: setdevice m62 MARMOT"
-        exit 0
-        ;;
-    esac
-  fi
+    install_source="$(
+      root "cmd package get-install-source com.termux" 2>/dev/null || true
+    )"
 
-  case "$DEVICE_GROUP" in
-    MARMOT|NOVA)
-      echo "[OK] device_group=$DEVICE_GROUP"
-      ;;
-    *)
-      echo "[SKIP] device_group không hợp lệ: $DEVICE_GROUP"
-      exit 0
-      ;;
-  esac
+    if printf '%s\n' "$install_source" |
+         grep -q 'org\.fdroid\.fdroid'; then
+      echo "[*] Đang lấy Termux:Boot từ F-Droid..."
+      curl -fsSL \
+        --retry 3 \
+        --connect-timeout 15 \
+        "https://f-droid.org/api/v1/packages/com.termux.boot" \
+        -o "$meta" ||
+          die "Không lấy được metadata Termux:Boot từ F-Droid"
 
-  rm -f "$TEMP"
-
-  if ! "$CURL" -fsSL \
-    --retry 3 \
-    --connect-timeout 15 \
-    "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/agent?t=$(date +%s)" \
-    -o "$TEMP"
-  then
-    echo "[LỖI] Không tải được Agent từ GitHub."
-    rm -f "$TEMP"
-    exit 1
-  fi
-
-  if ! "$PYTHON" -c '
+      version_code="$(
+        python - "$meta" <<'PY'
+import json
 import pathlib
 import sys
 
-file = pathlib.Path(sys.argv[1])
-source = file.read_text(encoding="utf-8")
-compile(source, str(file), "exec")
-' "$TEMP"
-  then
-    echo "[LỖI] Agent tải về sai cú pháp."
-    rm -f "$TEMP"
-    exit 1
+data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = data.get("suggestedVersionCode")
+if not isinstance(value, int) or value <= 0:
+    raise SystemExit(1)
+print(value)
+PY
+      )" || {
+        rm -f "$meta"
+        die "Metadata F-Droid của Termux:Boot không hợp lệ"
+      }
+
+      apk_url="https://f-droid.org/repo/com.termux.boot_${version_code}.apk"
+      source_name="F-Droid"
+    else
+      echo "[*] Đang lấy Termux:Boot từ GitHub chính thức..."
+      curl -fsSL \
+        --retry 3 \
+        --connect-timeout 15 \
+        "https://api.github.com/repos/termux/termux-boot/releases/latest" \
+        -o "$meta" ||
+          die "Không lấy được metadata Termux:Boot từ GitHub"
+
+      apk_url="$(
+        python - "$meta" <<'PY'
+import json
+import pathlib
+import sys
+
+data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assets = data.get("assets") or []
+apks = [
+    item for item in assets
+    if str(item.get("name", "")).lower().endswith(".apk")
+    and item.get("browser_download_url")
+]
+if not apks:
+    raise SystemExit(1)
+preferred = [
+    item for item in apks
+    if "universal" in str(item.get("name", "")).lower()
+]
+print((preferred or apks)[0]["browser_download_url"])
+PY
+      )" || {
+        rm -f "$meta"
+        die "Không tìm thấy APK Termux:Boot trên GitHub"
+      }
+
+      source_name="GitHub chính thức"
+    fi
+
+    rm -f "$meta"
+
+    curl -fsSL \
+      --retry 3 \
+      --connect-timeout 15 \
+      "$apk_url" \
+      -o "$apk_part" ||
+        die "Tải Termux:Boot thất bại"
   fi
 
-  mv -f "$TEMP" "$AGENT"
-  chmod 600 "$AGENT"
+  [ -s "$apk_part" ] ||
+    die "APK Termux:Boot bị trống"
 
-  nohup "$PYTHON" -u "$AGENT" >> "$LOG" 2>&1 &
-  PID=$!
+  unzip -t "$apk_part" >/dev/null 2>&1 ||
+    die "APK Termux:Boot không hợp lệ"
 
-  echo "[OK] Đã khởi động Agent PID=$PID"
-} >> "$LOG" 2>&1
-AGENT_BOOT_EOF
+  mv -f "$apk_part" "$apk"
+
+  root "pm install -r '$apk'" >/dev/null ||
+    die "Cài Termux:Boot thất bại; hãy dùng APK cùng nguồn ký với ứng dụng Termux"
+
+  root "pm path $package" >/dev/null 2>&1 ||
+    die "Không xác nhận được Termux:Boot sau khi cài"
+
+  root "monkey -p $package -c android.intent.category.LAUNCHER 1" \
+    >/dev/null 2>&1 || true
+
+  ok "Đã cài và mở Termux:Boot từ $source_name"
+}
+install_termux_boot_app
+
+AGENT_BOOT="$HOME/.termux/boot/01-agent.sh"
+AGENT_BOOT_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/01-agent.sh.$$"
+
+curl -fsSL \
+  --retry 3 \
+  --connect-timeout 15 \
+  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/Termuxboot?t=$(date +%s)" \
+  -o "$AGENT_BOOT_TMP" ||
+    die "Không tải được Termuxboot mới nhất"
+
+[ -s "$AGENT_BOOT_TMP" ] ||
+  die "Termuxboot tải về bị trống"
+
+bash -n "$AGENT_BOOT_TMP" ||
+  die "Termuxboot tải về sai cú pháp"
 
 chmod 700 "$AGENT_BOOT_TMP"
 
@@ -636,19 +733,163 @@ if [ -f "$AGENT_BOOT" ] &&
   rm -f "$AGENT_BOOT_TMP"
   ok "01-agent.sh đã đúng"
 else
-  if [ -f "$AGENT_BOOT" ]; then
+  [ ! -f "$AGENT_BOOT" ] ||
     cp -p "$AGENT_BOOT" "${AGENT_BOOT}.bak-${STAMP}"
-  fi
-
-  mv "$AGENT_BOOT_TMP" "$AGENT_BOOT"
+  mv "$AGENT_BOOT_TMP" "$AGENT_BOOT" ||
+    die "Không cài được 01-agent.sh"
   chmod 700 "$AGENT_BOOT"
-  ok "Đã tạo 01-agent.sh an toàn"
+  ok "Đã cài 01-agent.sh an toàn"
 fi
 
-echo "[+] Dùng Toolcheck bằng lệnh: toolcheck"
-echo "[+] Agent đang chạy sẽ được giữ nguyên."
-echo "[+] Agent hỗ trợ tên động như m62, m166."
-echo "[+] Đặt tên một lần bằng: setdevice m62 MARMOT"
+AGENT_TARGET="$DL/Agent_Core.py"
+AGENT_STAGE="${AGENT_TARGET}.msetup.tmp"
+AGENT_LOG="$DL/Agent_Log.txt"
+AGENT_BACKUP=""
+
+rm -f "$AGENT_STAGE"
+
+curl -fsSL \
+  --retry 3 \
+  --connect-timeout 15 \
+  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/agent?t=$(date +%s)" \
+  -o "$AGENT_STAGE" ||
+    die "Không tải được Agent mới nhất"
+
+[ -s "$AGENT_STAGE" ] ||
+  die "Agent tải về bị trống"
+
+python -c '
+import pathlib
+import sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+compile(source, sys.argv[1], "exec")
+' "$AGENT_STAGE" ||
+  die "Agent tải về sai cú pháp"
+
+if [ -f "$AGENT_TARGET" ] &&
+   cmp -s "$AGENT_STAGE" "$AGENT_TARGET"; then
+  rm -f "$AGENT_STAGE"
+  ok "Agent hiện tại đã là bản mới nhất"
+else
+  if [ -f "$AGENT_TARGET" ]; then
+    AGENT_BACKUP="${AGENT_TARGET}.bak-${STAMP}"
+    cp -p "$AGENT_TARGET" "$AGENT_BACKUP" ||
+      die "Không backup được Agent hiện tại"
+  fi
+fi
+
+mapfile -t OLD_AGENT_PIDS < <(
+  pgrep -f '[/]sdcard/Download/Agent_Core.py' 2>/dev/null || true
+)
+
+if [ "${#OLD_AGENT_PIDS[@]}" -gt 0 ]; then
+  echo "[*] Đang dừng Agent cũ an toàn..."
+  for pid in "${OLD_AGENT_PIDS[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 1
+    mapfile -t REMAINING_PIDS < <(
+      pgrep -f '[/]sdcard/Download/Agent_Core.py' 2>/dev/null || true
+    )
+    [ "${#REMAINING_PIDS[@]}" -eq 0 ] && break
+  done
+  mapfile -t REMAINING_PIDS < <(
+    pgrep -f '[/]sdcard/Download/Agent_Core.py' 2>/dev/null || true
+  )
+  [ "${#REMAINING_PIDS[@]}" -eq 0 ] ||
+    die "Agent cũ chưa dừng; không khởi động thêm tiến trình"
+fi
+
+if [ -f "$AGENT_STAGE" ]; then
+  mv -f "$AGENT_STAGE" "$AGENT_TARGET" ||
+    die "Không thay được Agent sau khi đã kiểm tra"
+  chmod 600 "$AGENT_TARGET"
+  ok "Đã thay Agent bằng bản hợp lệ mới nhất"
+fi
+
+nohup python -u "$AGENT_TARGET" >> "$AGENT_LOG" 2>&1 &
+NEW_AGENT_PID=$!
+sleep 2
+
+if ! kill -0 "$NEW_AGENT_PID" 2>/dev/null; then
+  if [ -n "$AGENT_BACKUP" ] &&
+     [ -f "$AGENT_BACKUP" ]; then
+    cp -p "$AGENT_BACKUP" "$AGENT_TARGET" || true
+    nohup python -u "$AGENT_TARGET" >> "$AGENT_LOG" 2>&1 &
+  fi
+  die "Agent mới thoát ngay sau khi khởi động"
+fi
+
+mapfile -t NEW_AGENT_PIDS < <(
+  pgrep -f '[/]sdcard/Download/Agent_Core.py' 2>/dev/null || true
+)
+
+[ "${#NEW_AGENT_PIDS[@]}" -eq 1 ] ||
+  die "Số tiến trình Agent không hợp lệ: ${#NEW_AGENT_PIDS[@]}"
+
+python - "$AGENT_CONFIG" "$DEVICE_ID" "$DEVICE_GROUP" <<'PY' ||
+import datetime
+import json
+import pathlib
+import sys
+import urllib.error
+import urllib.request
+
+config_path = pathlib.Path(sys.argv[1])
+device_id = sys.argv[2]
+device_group = sys.argv[3]
+
+try:
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    url = config["worker_report_url"].strip()
+    secret = config["agent_report_secret"].strip()
+    payload = {
+        "device_id": device_id,
+        "device_group": device_group,
+        "timestamp": datetime.datetime.now(
+            datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": "heartbeat",
+        "command_id": "",
+        "last_result": "msetup",
+    }
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Aotscript-msetup/1",
+            "X-Agent-Secret": secret,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        status = response.status
+        response.read()
+except urllib.error.HTTPError as exc:
+    print(f"[LỖI] Worker trả HTTP {exc.code}")
+    raise SystemExit(1)
+except Exception as exc:
+    print(f"[LỖI] Heartbeat thất bại: {type(exc).__name__}")
+    raise SystemExit(1)
+
+if status != 200:
+    print(f"[LỖI] Worker trả HTTP {status}, yêu cầu HTTP 200")
+    raise SystemExit(1)
+
+print("[OK] Worker heartbeat HTTP 200")
+PY
+  die "Không xác nhận được heartbeat HTTP 200"
+
 echo
-echo "CHƯA REBOOT MÁY."
+echo "========== HOÀN TẤT =========="
+ok "device_id=$DEVICE_ID"
+ok "device_group=$DEVICE_GROUP"
+ok "agent_config.json hợp lệ; secret không được hiển thị"
+ok "Agent đang chạy đúng 1 tiến trình"
+ok "Worker heartbeat HTTP 200"
+ok "Lần sau dùng: msetup $DEVICE_ID $DEVICE_GROUP"
+echo "Không reboot máy."
 BASH

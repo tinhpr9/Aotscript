@@ -11,6 +11,7 @@ import traceback
 import datetime
 import hashlib
 import threading
+import shutil
 import urllib.error
 
 # ==========================================
@@ -31,6 +32,7 @@ GROUP_PATH = "/storage/emulated/0/Download/Shouko/device_group.txt"
 STATE_PATH = "/storage/emulated/0/Download/Shouko/agent_state.json"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
+AGENT_CONFIG_PATH = "/storage/emulated/0/Download/Shouko/agent_config.json"
 AUTOEXECUTE_DIR = "/storage/emulated/0/Delta/Autoexecute"
 GROUP_SCRIPT_FILE = os.path.join(AUTOEXECUTE_DIR, "group_script.lua")
 
@@ -74,16 +76,37 @@ def command_timestamp_for_sort(text):
     return max(timestamps) if timestamps else 0
 
 
-def load_config():
-    try:
-        if not os.path.exists(CONFIG_PATH):
-            return {}
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception as e:
-        log_error("load_config", e)
+def load_agent_config():
+    if not os.path.exists(AGENT_CONFIG_PATH):
         return {}
 
+    try:
+        with open(AGENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict):
+            return {}
+
+        report_url = data.get("worker_report_url")
+        secret = data.get("agent_report_secret")
+
+        if not isinstance(report_url, str) or not report_url.strip():
+            return {}
+
+        parsed = urllib.parse.urlparse(report_url.strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return {}
+
+        if not isinstance(secret, str) or not secret.strip():
+            return {}
+
+        return {
+            "worker_report_url": report_url.strip(),
+            "agent_report_secret": secret.strip(),
+        }
+    except Exception:
+        # Không ghi nội dung cấu hình hoặc secret vào log.
+        return {}
 
 
 def load_device_id():
@@ -174,7 +197,7 @@ def heartbeat_loop(stop_event, device_id, state):
             stop_event.wait(30)
             continue
 
-        current_cfg = load_config()
+        current_cfg = load_agent_config()
         report_url = current_cfg.get("worker_report_url")
         secret = current_cfg.get("agent_report_secret")
         timestamp = datetime.datetime.utcnow().strftime(
@@ -508,18 +531,82 @@ def setup_termux_caylapbu():
 
 # Hàm 8: KÉO FILE BOOT TỪ GITHUB
 def setup_termux_boot():
-    print(f"\n[*] ĐANG TẢI CẤU HÌNH BOOT TỪ GITHUB (Termuxboot)...")
-    raw_termuxboot_url = "https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Termuxboot"
-    cmd = f"""
-    mkdir -p /data/data/com.termux/files/home/.termux/boot
-    curl -sL "{raw_termuxboot_url}" -o /data/data/com.termux/files/home/.termux/boot/01-agent.sh
-    chmod +x /data/data/com.termux/files/home/.termux/boot/01-agent.sh
-    """
+    print("\n[*] ĐANG CÀI BOOT SCRIPT AN TOÀN TỪ GITHUB...")
+
+    raw_url = (
+        "https://raw.githubusercontent.com/"
+        "tinhpr9/Aotscript/main/Termuxboot"
+        f"?t={int(time.time())}"
+    )
+    boot_dir = "/data/data/com.termux/files/home/.termux/boot"
+    target = os.path.join(boot_dir, "01-agent.sh")
+    temp = target + ".tmp"
+    backup = (
+        target
+        + ".bak-"
+        + datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    )
+
     try:
-        os.system(cmd)
-        print("[+] Thiết lập Termux Boot hoàn tất! Đã kéo ruột từ Termuxboot về máy.")
+        os.makedirs(boot_dir, exist_ok=True)
+        req = urllib.request.Request(
+            raw_url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Cache-Control": "no-cache",
+            },
+        )
+
+        with urllib.request.urlopen(req, timeout=15) as response:
+            content = response.read()
+
+        if not content.strip():
+            raise RuntimeError("Empty Termuxboot response")
+
+        with open(temp, "wb") as f:
+            f.write(content)
+
+        syntax = subprocess.run(
+            [
+                "/data/data/com.termux/files/usr/bin/bash",
+                "-n",
+                temp,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        if syntax.returncode != 0:
+            raise RuntimeError("Downloaded Termuxboot failed bash -n")
+
+        if os.path.exists(target):
+            with open(target, "rb") as f:
+                current = f.read()
+
+            if current == content:
+                os.remove(temp)
+                os.chmod(target, 0o700)
+                print("[+] 01-agent.sh đã là bản an toàn mới nhất.")
+                return
+
+            shutil.copy2(target, backup)
+
+        os.replace(temp, target)
+        os.chmod(target, 0o700)
+        print("[+] Đã cài 01-agent.sh an toàn; giữ nguyên boot script khác.")
     except Exception as e:
-        log_error("setup_termux_boot", e)
+        if os.path.exists(temp):
+            try:
+                os.remove(temp)
+            except Exception:
+                pass
+
+        log_error(
+            "setup_termux_boot",
+            RuntimeError(type(e).__name__),
+        )
+
 
 # Hàm 9: TỰ ĐỘNG BỐC THĂM LINK VIP (KHÔNG CẦN CÀI ĐẶT TAY)
 def setup_vip_servers():
@@ -572,7 +659,7 @@ if __name__ == "__main__":
     state = load_state()
 
     # load runtime config and device id
-    cfg = load_config()
+    cfg = load_agent_config()
     device_id = load_device_id()
 
     # start heartbeat background thread
@@ -700,7 +787,7 @@ if __name__ == "__main__":
                         total_detected += len(group_cmds)
                         print(f"\n[!] PHÁT HIỆN COMMAND_ID={cmd_id} with {len(group_cmds)} lệnh (group={group})")
                         # report received for this command id
-                        cfg = cfg if 'cfg' in globals() else load_config()
+                        cfg = cfg if 'cfg' in globals() else load_agent_config()
                         report_url = cfg.get("worker_report_url")
                         secret = cfg.get("agent_report_secret")
                         ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -828,7 +915,7 @@ if __name__ == "__main__":
             single_cmd = raw
             total_detected += 1
             # report running
-            cfg = cfg if 'cfg' in globals() else load_config()
+            cfg = cfg if 'cfg' in globals() else load_agent_config()
             report_url = cfg.get("worker_report_url")
             secret = cfg.get("agent_report_secret")
             ts_run = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")

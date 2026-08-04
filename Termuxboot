@@ -1,34 +1,191 @@
-mkdir -p ~/.termux/boot
-
-cat << 'EOF' > ~/.termux/boot/01-agent.sh
 #!/data/data/com.termux/files/usr/bin/bash
-export PATH=/data/data/com.termux/files/usr/bin:$PATH
 
-termux-wake-lock
-sleep 15
+export PATH="/data/data/com.termux/files/usr/bin:$PATH"
 
+PYTHON="/data/data/com.termux/files/usr/bin/python"
+CURL="/data/data/com.termux/files/usr/bin/curl"
 AGENT="/sdcard/Download/Agent_Core.py"
 TEMP="/sdcard/Download/Agent_Core.py.tmp"
 LOG="/sdcard/Download/Agent_Log.txt"
+ID_FILE="/sdcard/Download/Shouko/device_id.txt"
+GROUP_FILE="/sdcard/Download/Shouko/device_group.txt"
+CONFIG_FILE="/sdcard/Download/Shouko/agent_config.json"
+LOCK_DIR="$HOME/.cache/aotscript-agent-start.lock"
 
-# Ngăn nhiều Agent chạy cùng lúc
-pkill -f "$AGENT" 2>/dev/null || true
-sleep 2
+mkdir -p "/sdcard/Download/Shouko" "$HOME/.cache"
 
-# Chỉ thay Agent cũ khi tải bản mới thành công
-if curl -fsSL \
-  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/agent?t=$(date +%s)" \
-  -o "$TEMP"; then
+{
+  echo
+  echo "===== AGENT BOOT $(date '+%Y-%m-%d %H:%M:%S') ====="
 
-    mv "$TEMP" "$AGENT"
+  termux-wake-lock 2>/dev/null || true
+  sleep 15
 
-    nohup python -u "$AGENT" \
-      > "$LOG" 2>&1 &
-else
-    echo "$(date) - Không tải được Agent từ GitHub" >> "$LOG"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    LOCK_PID="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$LOCK_PID" ] &&
+       kill -0 "$LOCK_PID" 2>/dev/null; then
+      echo "[SKIP] Tiến trình khác đang xử lý Agent."
+      exit 0
+    fi
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || {
+      echo "[SKIP] Không lấy được khóa khởi động Agent."
+      exit 0
+    }
+  fi
+
+  echo "$$" > "$LOCK_DIR/pid"
+
+  cleanup_lock() {
+    rm -f "$LOCK_DIR/pid"
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+  }
+  trap cleanup_lock EXIT INT TERM
+
+  if pgrep -af '[/]sdcard/Download/Agent_Core.py' >/dev/null 2>&1; then
+    echo "[SKIP] Agent đang chạy, không khởi động thêm:"
+    pgrep -af '[/]sdcard/Download/Agent_Core.py'
+    exit 0
+  fi
+
+  if [ ! -s "$ID_FILE" ]; then
+    echo "[SKIP] Chưa có hoặc file trống: $ID_FILE"
+    exit 0
+  fi
+
+  if [ ! -s "$GROUP_FILE" ]; then
+    echo "[SKIP] Chưa có hoặc file trống: $GROUP_FILE"
+    exit 0
+  fi
+
+  DEVICE_ID_RAW="$(
+    tr -d '\r\n ' < "$ID_FILE"
+  )"
+
+  DEVICE_ID="$(
+    printf '%s' "$DEVICE_ID_RAW" |
+      tr '[:upper:]' '[:lower:]'
+  )"
+
+  if [[ "$DEVICE_ID" =~ ^m[1-9][0-9]{0,5}$ ]]; then
+    echo "[OK] device_id=$DEVICE_ID"
+  else
+    LEGACY_ID="$(
+      printf '%s' "$DEVICE_ID_RAW" |
+        tr '[:lower:]' '[:upper:]'
+    )"
+    case "$LEGACY_ID" in
+      MARMOT-0[1-9]|MARMOT-10|NOVA-0[1-9]|NOVA-10)
+        echo "[OK] device_id cũ=$LEGACY_ID"
+        ;;
+      *)
+        echo "[SKIP] device_id không hợp lệ: $DEVICE_ID_RAW"
+        exit 0
+        ;;
+    esac
+  fi
+
+  DEVICE_GROUP="$(
+    tr -d '\r\n ' < "$GROUP_FILE" |
+      tr '[:lower:]' '[:upper:]'
+  )"
+
+  case "$DEVICE_GROUP" in
+    MARMOT|NOVA)
+      echo "[OK] device_group=$DEVICE_GROUP"
+      ;;
+    *)
+      echo "[SKIP] device_group không hợp lệ: $DEVICE_GROUP"
+      exit 0
+      ;;
+  esac
+
+  if [ ! -s "$CONFIG_FILE" ]; then
+    echo "[SKIP] Chưa có hoặc file trống: $CONFIG_FILE"
+    exit 0
+  fi
+
+  if ! "$PYTHON" - "$CONFIG_FILE" <<'PY'
+import json
+import pathlib
+import sys
+import urllib.parse
+
+try:
+    data = json.loads(
+        pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+    )
+except Exception:
+    raise SystemExit(1)
+
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+url = data.get("worker_report_url")
+secret = data.get("agent_report_secret")
+
+if not isinstance(url, str) or not url.strip():
+    raise SystemExit(1)
+
+parsed = urllib.parse.urlparse(url.strip())
+
+if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    raise SystemExit(1)
+
+if not isinstance(secret, str) or not secret.strip():
+    raise SystemExit(1)
+PY
+  then
+    echo "[SKIP] agent_config.json không hợp lệ."
+    exit 0
+  fi
+
+  rm -f "$TEMP"
+
+  if ! "$CURL" -fsSL \
+    --retry 3 \
+    --connect-timeout 15 \
+    "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/agent?t=$(date +%s)" \
+    -o "$TEMP"
+  then
+    echo "[LỖI] Không tải được Agent từ GitHub."
     rm -f "$TEMP"
-fi
-EOF
+    exit 1
+  fi
 
-chmod +x ~/.termux/boot/01-agent.sh
-ls -l ~/.termux/boot/
+  if ! "$PYTHON" -c '
+import pathlib
+import sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+compile(source, sys.argv[1], "exec")
+' "$TEMP"
+  then
+    echo "[LỖI] Agent tải về sai cú pháp."
+    rm -f "$TEMP"
+    exit 1
+  fi
+
+  if [ -f "$AGENT" ] &&
+     cmp -s "$TEMP" "$AGENT"; then
+    rm -f "$TEMP"
+    echo "[OK] Agent hiện tại đã là bản mới nhất."
+  else
+    [ ! -f "$AGENT" ] ||
+      cp -p "$AGENT" "${AGENT}.bak"
+    mv -f "$TEMP" "$AGENT"
+    chmod 600 "$AGENT"
+    echo "[OK] Đã thay Agent bằng bản hợp lệ mới nhất."
+  fi
+
+  nohup "$PYTHON" -u "$AGENT" >> "$LOG" 2>&1 &
+  PID=$!
+  sleep 2
+
+  if kill -0 "$PID" 2>/dev/null; then
+    echo "[OK] Đã khởi động Agent PID=$PID"
+  else
+    echo "[LỖI] Agent thoát ngay sau khi khởi động."
+    exit 1
+  fi
+} >> "$LOG" 2>&1
