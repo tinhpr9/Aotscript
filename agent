@@ -97,6 +97,13 @@ def send_report_to_worker(report_url, secret, payload):
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(report_url, data=data, method="POST")
         req.add_header("Content-Type", "application/json")
+        req.add_header(
+            "User-Agent",
+            "Mozilla/5.0 (Linux; Android 14) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Mobile Safari/537.36"
+        )
+        req.add_header("Accept", "application/json")
         req.add_header("X-Agent-Secret", secret)
         # Do not log secret
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -110,15 +117,23 @@ def send_report_to_worker(report_url, secret, payload):
         return False
 
 
-def heartbeat_loop(stop_event, device_id, device_group, cfg, state):
-    report_url = cfg.get("worker_report_url")
-    secret = cfg.get("agent_report_secret")
+def heartbeat_loop(stop_event, device_id, state):
     while not stop_event.is_set():
-        ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        current_group = get_device_group()
+        if current_group not in GROUP_COMMAND_URLS:
+            stop_event.wait(30)
+            continue
+
+        current_cfg = load_config()
+        report_url = current_cfg.get("worker_report_url")
+        secret = current_cfg.get("agent_report_secret")
+        timestamp = datetime.datetime.utcnow().strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
         payload = {
             "device_id": device_id,
-            "device_group": device_group,
-            "timestamp": ts,
+            "device_group": current_group,
+            "timestamp": timestamp,
             "status": "heartbeat",
             "last_command_id": state.get("last_command_id", ""),
             "last_result": state.get("last_result", ""),
@@ -127,37 +142,34 @@ def heartbeat_loop(stop_event, device_id, device_group, cfg, state):
             send_report_to_worker(report_url, secret, payload)
         except Exception:
             pass
-        # Sleep for 30 seconds or until stopped
-        stop_event.wait(30)
 
+        stop_event.wait(30)
 
 def load_state():
     ensure_parent_dir(STATE_PATH)
+    default_state = {
+        "device_group": "",
+        "common_command_hash": "",
+        "group_command_hash": "",
+        "last_processed_at": "",
+        "last_command_id": "",
+        "last_result": "",
+    }
+
     if not os.path.exists(STATE_PATH):
-        return {
-            "device_group": "",
-            "common_command_hash": "",
-            "group_command_hash": "",
-            "last_processed_at": "",
-        }
+        return default_state.copy()
+
     try:
         with open(STATE_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return {
-            "device_group": data.get("device_group", ""),
-            "common_command_hash": data.get("common_command_hash", ""),
-            "group_command_hash": data.get("group_command_hash", ""),
-            "last_processed_at": data.get("last_processed_at", ""),
-        }
+
+        state = default_state.copy()
+        for key in state:
+            state[key] = data.get(key, state[key])
+        return state
     except Exception as e:
         log_error("load_state", e)
-        return {
-            "device_group": "",
-            "common_command_hash": "",
-            "group_command_hash": "",
-            "last_processed_at": "",
-        }
-
+        return default_state.copy()
 
 def save_state(state):
     ensure_parent_dir(STATE_PATH)
@@ -517,7 +529,11 @@ if __name__ == "__main__":
     stop_event = threading.Event()
     hb_thread = None
     if device_id:
-        hb_thread = threading.Thread(target=heartbeat_loop, args=(stop_event, device_id, state.get("device_group", ""), cfg, state), daemon=True)
+        hb_thread = threading.Thread(
+            target=heartbeat_loop,
+            args=(stop_event, device_id, state),
+            daemon=True,
+        )
         hb_thread.start()
 
     while True:
