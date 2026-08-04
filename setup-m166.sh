@@ -351,6 +351,164 @@ case ":$PATH:" in
     ;;
 esac
 
+
+# ---------------------------------------------------------
+# Lệnh tắt: setdevice
+# Chạy một lần cho mỗi máy:
+#   setdevice m62 MARMOT
+#   setdevice m166 NOVA
+# ---------------------------------------------------------
+SETDEVICE_CMD="$HOME/bin/setdevice"
+SETDEVICE_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/setdevice.$$"
+
+cat > "$SETDEVICE_TMP" <<'SETDEVICE_EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+set -e
+
+NAME_RAW="${1:-}"
+GROUP_RAW="${2:-}"
+
+DIR="/sdcard/Download/Shouko"
+ID_FILE="$DIR/device_id.txt"
+GROUP_FILE="$DIR/device_group.txt"
+STATE_FILE="$DIR/agent_state.json"
+
+usage() {
+  echo "Cách dùng:"
+  echo "  setdevice m62 MARMOT"
+  echo "  setdevice m166 NOVA"
+}
+
+if [ -z "$NAME_RAW" ]; then
+  usage
+  exit 1
+fi
+
+NAME="$(
+  printf '%s' "$NAME_RAW" |
+    tr '[:upper:]' '[:lower:]'
+)"
+
+if [[ ! "$NAME" =~ ^m[1-9][0-9]{0,5}$ ]]; then
+  echo "[LỖI] Tên máy không hợp lệ: $NAME_RAW"
+  echo "Ví dụ: m62, m166, m1000"
+  exit 1
+fi
+
+mkdir -p "$DIR"
+
+if [ -z "$GROUP_RAW" ] &&
+   [ -s "$GROUP_FILE" ]; then
+  GROUP_RAW="$(cat "$GROUP_FILE")"
+fi
+
+if [ -z "$GROUP_RAW" ]; then
+  read -r -p \
+    "Nhập profile MARMOT hoặc NOVA: " \
+    GROUP_RAW
+fi
+
+GROUP="$(
+  printf '%s' "$GROUP_RAW" |
+    tr -d '\r\n ' |
+    tr '[:lower:]' '[:upper:]'
+)"
+
+case "$GROUP" in
+  MARMOT|NOVA) ;;
+  *)
+    echo "[LỖI] Profile không hợp lệ: $GROUP_RAW"
+    usage
+    exit 1
+    ;;
+esac
+
+OLD_ID="$(
+  cat "$ID_FILE" 2>/dev/null |
+    tr -d '\r\n ' || true
+)"
+
+OLD_GROUP="$(
+  cat "$GROUP_FILE" 2>/dev/null |
+    tr -d '\r\n ' |
+    tr '[:lower:]' '[:upper:]' || true
+)"
+
+if [ "$OLD_ID" = "$NAME" ] &&
+   [ "$OLD_GROUP" = "$GROUP" ]; then
+  echo "[OK] Máy đã được cấu hình:"
+  echo "device_id=$NAME"
+  echo "device_group=$GROUP"
+  exit 0
+fi
+
+STAMP="$(date +%Y%m%d-%H%M%S)"
+
+for file in \
+  "$ID_FILE" \
+  "$GROUP_FILE" \
+  "$STATE_FILE"
+do
+  if [ -f "$file" ]; then
+    cp -p \
+      "$file" \
+      "${file}.bak-${STAMP}"
+  fi
+done
+
+printf '%s\n' "$NAME" \
+  > "${ID_FILE}.tmp"
+
+printf '%s\n' "$GROUP" \
+  > "${GROUP_FILE}.tmp"
+
+mv "${ID_FILE}.tmp" "$ID_FILE"
+mv "${GROUP_FILE}.tmp" "$GROUP_FILE"
+
+cat > "${STATE_FILE}.tmp" <<'STATE_EOF'
+{
+  "device_group": "",
+  "common_command_hash": "",
+  "group_command_hash": "",
+  "last_processed_at": "",
+  "last_command_id": "",
+  "last_result": ""
+}
+STATE_EOF
+
+mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+echo "[OK] Đã cấu hình máy:"
+echo "device_id=$NAME"
+echo "device_group=$GROUP"
+echo "[OK] Chỉ cần đặt tên một lần."
+echo "[OK] State cũ đã được sao lưu và làm sạch."
+SETDEVICE_EOF
+
+chmod 700 "$SETDEVICE_TMP"
+
+if [ -f "$SETDEVICE_CMD" ] &&
+   cmp -s \
+     "$SETDEVICE_TMP" \
+     "$SETDEVICE_CMD"
+then
+  rm -f "$SETDEVICE_TMP"
+  ok "Lệnh setdevice đã đúng"
+else
+  if [ -f "$SETDEVICE_CMD" ]; then
+    cp -p \
+      "$SETDEVICE_CMD" \
+      "${SETDEVICE_CMD}.bak-${STAMP}"
+  fi
+
+  mv \
+    "$SETDEVICE_TMP" \
+    "$SETDEVICE_CMD"
+
+  chmod 700 "$SETDEVICE_CMD"
+  ok "Đã cài lệnh: setdevice"
+fi
+
 # ---------------------------------------------------------
 # Agent boot an toàn
 # ---------------------------------------------------------
@@ -408,16 +566,21 @@ mkdir -p "/sdcard/Download/Shouko"
       tr '[:lower:]' '[:upper:]'
   )"
 
-  case "$DEVICE_ID" in
-    MARMOT-0[1-9]|MARMOT-10|NOVA-0[1-9]|NOVA-10)
-      echo "[OK] device_id=$DEVICE_ID"
-      ;;
-    *)
-      echo "[SKIP] Agent hiện tại chưa hỗ trợ device_id=$DEVICE_ID"
-      echo "[SKIP] Máy không bị chạy Agent sai cấu hình."
-      exit 0
-      ;;
-  esac
+
+  if [[ "$DEVICE_ID" =~ ^M[1-9][0-9]{0,5}$ ]]; then
+    echo "[OK] device_id động=$DEVICE_ID"
+  else
+    case "$DEVICE_ID" in
+      MARMOT-0[1-9]|MARMOT-10|NOVA-0[1-9]|NOVA-10)
+        echo "[OK] device_id cũ=$DEVICE_ID"
+        ;;
+      *)
+        echo "[SKIP] device_id không hợp lệ: $DEVICE_ID"
+        echo "[SKIP] Dùng: setdevice m62 MARMOT"
+        exit 0
+        ;;
+    esac
+  fi
 
   case "$DEVICE_GROUP" in
     MARMOT|NOVA)
@@ -484,7 +647,8 @@ fi
 
 echo "[+] Dùng Toolcheck bằng lệnh: toolcheck"
 echo "[+] Agent đang chạy sẽ được giữ nguyên."
-echo "[+] device_id=m166 sẽ được bỏ qua an toàn."
+echo "[+] Agent hỗ trợ tên động như m62, m166."
+echo "[+] Đặt tên một lần bằng: setdevice m62 MARMOT"
 echo
 echo "CHƯA REBOOT MÁY."
 BASH

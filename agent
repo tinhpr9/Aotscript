@@ -85,26 +85,60 @@ def load_config():
         return {}
 
 
+
 def load_device_id():
     path = "/storage/emulated/0/Download/Shouko/device_id.txt"
+
     try:
         if not os.path.exists(path):
-            log_error("load_device_id", FileNotFoundError(path))
+            log_error(
+                "load_device_id",
+                FileNotFoundError(path),
+            )
             return None
+
         with open(path, "r", encoding="utf-8") as f:
-            did = f.read().strip().upper()
-        # Validate format
-        m = re.match(r"^(MARMOT|NOVA)-(\d{2})$", did)
-        if not m:
-            raise ValueError(f"Invalid device_id format: {did}")
-        prefix, num = m.group(1), int(m.group(2))
-        if num < 1 or num > 10:
-            raise ValueError(f"Device index out of range: {did}")
-        return did
+            raw_device_id = f.read().strip()
+
+        # Tên động: m1 ... m999999.
+        dynamic_match = re.fullmatch(
+            r"m([1-9]\d{0,5})",
+            raw_device_id,
+            re.IGNORECASE,
+        )
+
+        if dynamic_match:
+            return f"m{dynamic_match.group(1)}"
+
+        # Giữ tương thích với 20 ID cũ.
+        legacy_device_id = raw_device_id.upper()
+
+        legacy_match = re.fullmatch(
+            r"(MARMOT|NOVA)-(\d{2})",
+            legacy_device_id,
+        )
+
+        if not legacy_match:
+            raise ValueError(
+                "Invalid device_id format: "
+                f"{raw_device_id}. "
+                "Expected m<number>, "
+                "MARMOT-01..10 or NOVA-01..10"
+            )
+
+        number = int(legacy_match.group(2))
+
+        if number < 1 or number > 10:
+            raise ValueError(
+                f"Device index out of range: "
+                f"{legacy_device_id}"
+            )
+
+        return legacy_device_id
+
     except Exception as e:
         log_error("load_device_id", e)
         return None
-
 
 def send_report_to_worker(report_url, secret, payload):
     try:

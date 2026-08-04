@@ -36,37 +36,181 @@ const COMMAND_ORDER = [
 
 const ALLOWED_REPORT_STATUSES = ["heartbeat", "received", "running", "success", "error"];
 
-function deviceIdsForTarget(target) {
+
+function legacyDeviceIdsForTarget(target) {
   const groups =
     target === "all"
       ? ["MARMOT", "NOVA"]
       : [String(target).toUpperCase()];
 
+  if (
+    groups.some(
+      (group) => !["MARMOT", "NOVA"].includes(group)
+    )
+  ) {
+    return [];
+  }
+
   const ids = [];
+
   for (const group of groups) {
     for (let index = 1; index <= 10; index += 1) {
-      ids.push(`${group}-${String(index).padStart(2, "0")}`);
+      ids.push(
+        `${group}-${String(index).padStart(2, "0")}`
+      );
     }
   }
+
   return ids;
 }
 
-async function storeCommandMetadata(env, commandId, target, commands) {
-  if (!TARGET_FILES[target]) {
-    throw new Error(`Invalid command target: ${target}`);
+function normalizeDeviceId(value) {
+  const raw = String(value || "").trim();
+
+  const dynamicMatch =
+    raw.match(/^m([1-9]\d{0,5})$/i);
+
+  if (dynamicMatch) {
+    return `m${dynamicMatch[1]}`;
   }
 
-  const commandList = Array.isArray(commands)
-    ? commands
-    : [String(commands)];
+  const legacyMatch =
+    raw.match(/^(MARMOT|NOVA)-(\d{2})$/i);
+
+  if (!legacyMatch) return null;
+
+  const group = legacyMatch[1].toUpperCase();
+  const index = Number(legacyMatch[2]);
+
+  if (index < 1 || index > 10) {
+    return null;
+  }
+
+  return `${group}-${String(index).padStart(2, "0")}`;
+}
+
+function normalizeDeviceGroup(value) {
+  const group =
+    String(value || "").trim().toUpperCase();
+
+  return ["MARMOT", "NOVA"].includes(group)
+    ? group
+    : null;
+}
+
+function compareDeviceIds(left, right) {
+  return left.localeCompare(
+    right,
+    undefined,
+    {
+      numeric: true,
+      sensitivity: "base",
+    }
+  );
+}
+
+async function deviceIdsForTarget(target, env) {
+  const wantedGroup =
+    target === "all"
+      ? null
+      : normalizeDeviceGroup(target);
+
+  if (target !== "all" && !wantedGroup) {
+    throw new Error(
+      `Invalid device target: ${target}`
+    );
+  }
+
+  // Luôn giữ 20 máy cũ trong danh sách dự kiến.
+  const ids = new Set(
+    legacyDeviceIdsForTarget(target)
+  );
+
+  // Tự thêm mọi máy m<number> đã gửi heartbeat.
+  let cursor;
+
+  do {
+    const page = await env.DEVICE_STATUS.list({
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    });
+
+    for (const item of page.keys || []) {
+      if (
+        item.name === "latest_command" ||
+        item.name.startsWith("cmd:")
+      ) {
+        continue;
+      }
+
+      const record =
+        await getDeviceRecord(item.name, env);
+
+      if (!record) continue;
+
+      const deviceId =
+        normalizeDeviceId(
+          record.device_id || item.name
+        );
+
+      const deviceGroup =
+        normalizeDeviceGroup(
+          record.device_group
+        );
+
+      if (!deviceId || !deviceGroup) {
+        continue;
+      }
+
+      if (
+        wantedGroup &&
+        deviceGroup !== wantedGroup
+      ) {
+        continue;
+      }
+
+      ids.add(deviceId);
+    }
+
+    cursor =
+      page.list_complete
+        ? undefined
+        : page.cursor;
+  } while (cursor);
+
+  return [...ids].sort(compareDeviceIds);
+}
+
+
+async function storeCommandMetadata(
+  env,
+  commandId,
+  target,
+  commands
+) {
+  if (!TARGET_FILES[target]) {
+    throw new Error(
+      `Invalid command target: ${target}`
+    );
+  }
+
+  const commandList =
+    Array.isArray(commands)
+      ? commands
+      : [String(commands)];
+
   const created = Date.now();
-  const deviceIds = deviceIdsForTarget(target);
+
+  const deviceIds =
+    await deviceIdsForTarget(target, env);
+
   const metadata = {
     command_id: commandId,
     target,
     commands: commandList,
     command_count: commandList.length,
     device_count: deviceIds.length,
+    device_ids: deviceIds,
     created,
   };
 
@@ -74,9 +218,13 @@ async function storeCommandMetadata(env, commandId, target, commands) {
     `cmd:${commandId}`,
     JSON.stringify(metadata)
   );
+
   await env.DEVICE_STATUS.put(
     "latest_command",
-    JSON.stringify({ command_id: commandId, created })
+    JSON.stringify({
+      command_id: commandId,
+      created,
+    })
   );
 
   return metadata;
@@ -1069,77 +1217,199 @@ function decodeBase64(value) {
 }
 
 // -------------------- Agent reporting and device helpers --------------------
+
 async function handleAgentReport(request, env) {
-  const secret = request.headers.get("X-Agent-Secret");
-  if (!secret || secret !== env.AGENT_REPORT_SECRET) {
-    return new Response("Unauthorized", { status: 401 });
+  const secret =
+    request.headers.get("X-Agent-Secret");
+
+  if (
+    !secret ||
+    secret !== env.AGENT_REPORT_SECRET
+  ) {
+    return new Response(
+      "Unauthorized",
+      { status: 401 }
+    );
   }
 
   let body;
+
   try {
     body = await request.json();
-  } catch (e) {
-    return json({ ok: false, error: "invalid_json" }, 400);
+  } catch (error) {
+    return json(
+      {
+        ok: false,
+        error: "invalid_json",
+      },
+      400
+    );
   }
 
-  const { device_id, device_group, timestamp, status, command_id, command, command_index, command_total, last_result } = body;
+  const {
+    device_id: reportedDeviceId,
+    device_group: reportedDeviceGroup,
+    timestamp,
+    status,
+    command_id,
+    command,
+    command_index,
+    command_total,
+    last_result,
+  } = body;
 
-  if (!device_id || !device_group || !timestamp || !status) {
-    return json({ ok: false, error: "missing_fields" }, 400);
+  if (
+    !reportedDeviceId ||
+    !reportedDeviceGroup ||
+    !timestamp ||
+    !status
+  ) {
+    return json(
+      {
+        ok: false,
+        error: "missing_fields",
+      },
+      400
+    );
   }
 
-  // Validate status
-  if (!ALLOWED_REPORT_STATUSES.includes(status)) {
-    return json({ ok: false, error: "invalid_status" }, 400);
+  if (
+    !ALLOWED_REPORT_STATUSES.includes(status)
+  ) {
+    return json(
+      {
+        ok: false,
+        error: "invalid_status",
+      },
+      400
+    );
   }
 
-  // Validate device_id and group
-  const didMatch = device_id.match(/^(MARMOT|NOVA)-(\d{2})$/);
-  if (!didMatch) return json({ ok: false, error: "invalid_device_id" }, 400);
-  const prefix = didMatch[1];
-  const idx = parseInt(didMatch[2], 10);
-  if (idx < 1 || idx > 10) return json({ ok: false, error: "device_index_out_of_range" }, 400);
-  if (device_group !== prefix) return json({ ok: false, error: "group_mismatch" }, 400);
+  const deviceId =
+    normalizeDeviceId(reportedDeviceId);
 
-  // store/update device record in KV
+  const deviceGroup =
+    normalizeDeviceGroup(
+      reportedDeviceGroup
+    );
+
+  if (!deviceId) {
+    return json(
+      {
+        ok: false,
+        error: "invalid_device_id",
+      },
+      400
+    );
+  }
+
+  if (!deviceGroup) {
+    return json(
+      {
+        ok: false,
+        error: "invalid_device_group",
+      },
+      400
+    );
+  }
+
+  // ID cũ phải khớp nhóm trong tên.
+  // ID m<number> dùng device_group.txt làm profile.
+  const legacyPrefix =
+    deviceId.match(/^(MARMOT|NOVA)-/);
+
+  if (
+    legacyPrefix &&
+    legacyPrefix[1] !== deviceGroup
+  ) {
+    return json(
+      {
+        ok: false,
+        error: "group_mismatch",
+      },
+      400
+    );
+  }
+
   try {
-    const key = device_id;
-    let rec = {};
+    const key = deviceId;
+    let record = {};
+
     try {
-      const existing = await env.DEVICE_STATUS.get(key);
-      if (existing) rec = JSON.parse(existing);
-    } catch (e) {
-      rec = {};
+      const existing =
+        await env.DEVICE_STATUS.get(key);
+
+      if (existing) {
+        record = JSON.parse(existing);
+      }
+    } catch (error) {
+      record = {};
     }
 
     const now = Date.now();
-    rec.device_id = device_id;
-    rec.device_group = device_group;
-    rec.last_seen = now;
-    rec.last_report_status = status;
+
+    record.device_id = deviceId;
+    record.device_group = deviceGroup;
+    record.last_seen = now;
+    record.last_report_status = status;
 
     if (status === "heartbeat") {
-      if (!rec.last_status) {
-        rec.last_status = "heartbeat";
+      if (!record.last_status) {
+        record.last_status = "heartbeat";
       }
     } else {
-      rec.last_status = status;
+      record.last_status = status;
     }
 
     if (command_id) {
-      rec.last_command_id = command_id;
-      rec.last_command = command || rec.last_command || null;
-      rec.last_command_index = command_index || rec.last_command_index || null;
-      rec.last_command_total = command_total || rec.last_command_total || null;
-      rec.last_command_ts = Date.parse(timestamp) || now;
-    }
-    if (last_result) rec.last_result = last_result;
+      record.last_command_id = command_id;
 
-    await env.DEVICE_STATUS.put(key, JSON.stringify(rec));
-    return json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    return json({ ok: false, error: String(e?.message || e) }, 500);
+      record.last_command =
+        command ??
+        record.last_command ??
+        null;
+
+      record.last_command_index =
+        command_index ??
+        record.last_command_index ??
+        null;
+
+      record.last_command_total =
+        command_total ??
+        record.last_command_total ??
+        null;
+
+      record.last_command_ts =
+        Date.parse(timestamp) || now;
+    }
+
+    if (last_result) {
+      record.last_result = last_result;
+    }
+
+    await env.DEVICE_STATUS.put(
+      key,
+      JSON.stringify(record)
+    );
+
+    return json({
+      ok: true,
+      device_id: deviceId,
+      device_group: deviceGroup,
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    return json(
+      {
+        ok: false,
+        error: String(
+          error?.message || error
+        ),
+      },
+      500
+    );
   }
 }
 
@@ -1161,25 +1431,78 @@ function formatTimestamp(ms) {
   }
 }
 
+
 async function showDevices(chatId, env) {
   const now = Date.now();
-  const lines = ["📋 Danh sách 20 thiết bị:"];
-  const ids = [];
-  for (let i = 1; i <= 10; i++) ids.push(`MARMOT-${String(i).padStart(2,'0')}`);
-  for (let i = 1; i <= 10; i++) ids.push(`NOVA-${String(i).padStart(2,'0')}`);
+
+  const ids =
+    await deviceIdsForTarget("all", env);
+
+  const lines = [
+    `📋 Danh sách ${ids.length} thiết bị:`,
+  ];
 
   for (const id of ids) {
-    const rec = await getDeviceRecord(id, env);
-    if (!rec) {
-      lines.push(`${id} — offline — group: ${id.split('-')[0]} — last_seen: -`);
+    const record =
+      await getDeviceRecord(id, env);
+
+    if (!record) {
+      const legacyGroup =
+        id.startsWith("MARMOT-")
+          ? "MARMOT"
+          : id.startsWith("NOVA-")
+            ? "NOVA"
+            : "-";
+
+      lines.push(
+        `${id} — offline — ` +
+        `profile: ${legacyGroup} — ` +
+        "last_seen: -"
+      );
+
       continue;
     }
-    const online = now - (rec.last_seen || 0) <= 90 * 1000;
-    lines.push(`${id} — ${online ? 'online' : 'offline'} — group: ${rec.device_group} — last_seen: ${formatTimestamp(rec.last_seen)} — status: ${rec.last_status || '-'}${rec.last_command_id ? ' — cmd:' + rec.last_command_id : ''}`);
+
+    const online =
+      now - Number(record.last_seen || 0)
+      <= 90 * 1000;
+
+    lines.push(
+      `${id} — ` +
+      `${online ? "online" : "offline"} — ` +
+      `profile: ${record.device_group || "-"} — ` +
+      `last_seen: ${formatTimestamp(record.last_seen)} — ` +
+      `status: ${record.last_status || "-"}` +
+      (
+        record.last_command_id
+          ? ` — cmd:${record.last_command_id}`
+          : ""
+      )
+    );
   }
 
-  await sendMessage(chatId, env, lines.join('\n'));
+  // Chia tin nhắn để không vượt giới hạn Telegram.
+  let chunk = "";
+
+  for (const line of lines) {
+    const next =
+      chunk
+        ? `${chunk}\n${line}`
+        : line;
+
+    if (next.length > 3500) {
+      await sendMessage(chatId, env, chunk);
+      chunk = line;
+    } else {
+      chunk = next;
+    }
+  }
+
+  if (chunk) {
+    await sendMessage(chatId, env, chunk);
+  }
 }
+
 
 async function sendProgress(chatId, env) {
   try {
@@ -1187,50 +1510,82 @@ async function sendProgress(chatId, env) {
     let metadata = null;
 
     const latestRaw =
-      await env.DEVICE_STATUS.get("latest_command");
+      await env.DEVICE_STATUS.get(
+        "latest_command"
+      );
 
     if (latestRaw) {
       try {
-        const latest = JSON.parse(latestRaw);
-        commandId = latest.command_id || null;
+        const latest =
+          JSON.parse(latestRaw);
+
+        commandId =
+          latest.command_id || null;
       } catch (error) {
-        commandId = latestRaw.trim() || null;
+        commandId =
+          latestRaw.trim() || null;
       }
     }
 
     if (commandId) {
       const metadataRaw =
-        await env.DEVICE_STATUS.get(`cmd:${commandId}`);
+        await env.DEVICE_STATUS.get(
+          `cmd:${commandId}`
+        );
+
       if (metadataRaw) {
         try {
-          metadata = JSON.parse(metadataRaw);
+          metadata =
+            JSON.parse(metadataRaw);
         } catch (error) {
           metadata = null;
         }
       }
     }
 
-    // Fallback for commands created before latest_command existed.
+    // Fallback cho command cũ chưa có latest_command.
     if (!commandId) {
       let newestTimestamp = 0;
 
-      for (const deviceId of deviceIdsForTarget("all")) {
-        const record = await getDeviceRecord(deviceId, env);
+      const allDeviceIds =
+        await deviceIdsForTarget(
+          "all",
+          env
+        );
+
+      for (const deviceId of allDeviceIds) {
+        const record =
+          await getDeviceRecord(
+            deviceId,
+            env
+          );
+
         if (
           record?.last_command_id &&
-          Number(record.last_command_ts || 0) > newestTimestamp
+          Number(
+            record.last_command_ts || 0
+          ) > newestTimestamp
         ) {
-          commandId = record.last_command_id;
-          newestTimestamp = Number(record.last_command_ts || 0);
+          commandId =
+            record.last_command_id;
+
+          newestTimestamp =
+            Number(
+              record.last_command_ts || 0
+            );
         }
       }
 
       if (commandId) {
         const metadataRaw =
-          await env.DEVICE_STATUS.get(`cmd:${commandId}`);
+          await env.DEVICE_STATUS.get(
+            `cmd:${commandId}`
+          );
+
         if (metadataRaw) {
           try {
-            metadata = JSON.parse(metadataRaw);
+            metadata =
+              JSON.parse(metadataRaw);
           } catch (error) {
             metadata = null;
           }
@@ -1242,8 +1597,12 @@ async function sendProgress(chatId, env) {
             target: "all",
             commands: [],
             command_count: 0,
-            device_count: 20,
-            created: newestTimestamp,
+            device_count:
+              allDeviceIds.length,
+            device_ids:
+              allDeviceIds,
+            created:
+              newestTimestamp,
           };
         }
       }
@@ -1259,13 +1618,32 @@ async function sendProgress(chatId, env) {
     }
 
     const target =
-      ["all", "marmot", "nova"].includes(metadata?.target)
+      ["all", "marmot", "nova"].includes(
+        metadata?.target
+      )
         ? metadata.target
         : "all";
-    const deviceIds = deviceIdsForTarget(target);
-    const commands = Array.isArray(metadata?.commands)
-      ? metadata.commands
-      : [];
+
+    const deviceIds =
+      Array.isArray(metadata?.device_ids) &&
+      metadata.device_ids.length > 0
+        ? [
+            ...new Set(
+              metadata.device_ids
+                .map(normalizeDeviceId)
+                .filter(Boolean)
+            ),
+          ].sort(compareDeviceIds)
+        : await deviceIdsForTarget(
+            target,
+            env
+          );
+
+    const commands =
+      Array.isArray(metadata?.commands)
+        ? metadata.commands
+        : [];
+
     const counts = {
       received: 0,
       running: 0,
@@ -1274,20 +1652,30 @@ async function sendProgress(chatId, env) {
       offline: 0,
       no_response: 0,
     };
+
     const now = Date.now();
 
     for (const deviceId of deviceIds) {
-      const record = await getDeviceRecord(deviceId, env);
+      const record =
+        await getDeviceRecord(
+          deviceId,
+          env
+        );
 
       if (
         !record ||
-        now - Number(record.last_seen || 0) > 90 * 1000
+        now - Number(
+          record.last_seen || 0
+        ) > 90 * 1000
       ) {
         counts.offline += 1;
         continue;
       }
 
-      if (record.last_command_id !== commandId) {
+      if (
+        record.last_command_id !==
+        commandId
+      ) {
         counts.no_response += 1;
         continue;
       }
@@ -1296,15 +1684,19 @@ async function sendProgress(chatId, env) {
         case "received":
           counts.received += 1;
           break;
+
         case "running":
           counts.running += 1;
           break;
+
         case "success":
           counts.success += 1;
           break;
+
         case "error":
           counts.error += 1;
           break;
+
         default:
           counts.no_response += 1;
           break;
@@ -1314,16 +1706,22 @@ async function sendProgress(chatId, env) {
     const lines = [
       `📊 Tiến độ command: ${commandId}`,
       `Nhóm: ${target.toUpperCase()}`,
-      `Thời gian tạo: ${formatTimestamp(metadata?.created)}`,
+      `Thời gian tạo: ${
+        formatTimestamp(metadata?.created)
+      }`,
     ];
 
     if (commands.length > 0) {
       lines.push(
         `Lệnh (${commands.length}):`,
-        ...commands.map((command) => `- ${command}`)
+        ...commands.map(
+          (command) => `- ${command}`
+        )
       );
     } else {
-      lines.push("Lệnh: chưa có metadata của command cũ");
+      lines.push(
+        "Lệnh: chưa có metadata của command cũ"
+      );
     }
 
     lines.push(
@@ -1336,7 +1734,12 @@ async function sendProgress(chatId, env) {
       `No response: ${counts.no_response}`
     );
 
-    await sendMessage(chatId, env, lines.join("\n"));
+    await sendMessage(
+      chatId,
+      env,
+      lines.join("\n")
+    );
+
   } catch (error) {
     await sendMessage(
       chatId,
