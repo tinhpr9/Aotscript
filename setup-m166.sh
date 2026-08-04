@@ -325,10 +325,61 @@ extract_safe() {
   ok "Đã giải nén: $target"
 }
 
+extract_agent_config_keys() {
+  local source="$1"
+  local output="$2"
+  python - "$source" "$output" <<'PY'
+import json
+import pathlib
+import sys
+import urllib.parse
+
+source = pathlib.Path(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
+
+try:
+    data = json.loads(source.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+url = data.get("worker_report_url")
+secret = data.get("agent_report_secret")
+
+if not isinstance(url, str) or not url.strip():
+    raise SystemExit(1)
+
+parsed = urllib.parse.urlparse(url.strip())
+if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    raise SystemExit(1)
+
+if not isinstance(secret, str) or not secret.strip():
+    raise SystemExit(1)
+
+temporary = output.with_name(output.name + ".write")
+temporary.write_text(
+    json.dumps(
+        {
+            "worker_report_url": url.strip(),
+            "agent_report_secret": secret.strip(),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+temporary.replace(output)
+PY
+}
+
 install_agent_config() {
   local tmp="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/agent_config.$$"
+  local legacy_tmp="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/shouko_config.$$"
   local source_name=""
-  rm -f "$tmp"
+  rm -f "$tmp" "$legacy_tmp"
 
   if unzip -Z1 "$SHOUKO_ZIP" |
        tr -d '\r' |
@@ -341,6 +392,41 @@ install_agent_config() {
       rm -f "$tmp"
       warn "agent_config.json trong Shouko.zip chưa hợp lệ"
     fi
+  fi
+
+  if [ -z "$source_name" ] &&
+     [ -s "$SHOUKO_DIR/config.json" ]; then
+    if extract_agent_config_keys \
+         "$SHOUKO_DIR/config.json" \
+         "$tmp" &&
+       validate_agent_config "$tmp"; then
+      source_name="Shouko/config.json hiện có (chuyển một lần)"
+    else
+      rm -f "$tmp"
+      warn "config.json hiện có không chứa cấu hình Agent hợp lệ"
+    fi
+  fi
+
+  if [ -z "$source_name" ] &&
+     unzip -Z1 "$SHOUKO_ZIP" |
+       tr -d '\r' |
+       grep -Fxq 'Shouko/config.json'; then
+    rm -f "$legacy_tmp"
+    if unzip -p \
+         "$SHOUKO_ZIP" \
+         'Shouko/config.json' \
+         > "$legacy_tmp" &&
+       [ -s "$legacy_tmp" ] &&
+       extract_agent_config_keys \
+         "$legacy_tmp" \
+         "$tmp" &&
+       validate_agent_config "$tmp"; then
+      source_name="Shouko/config.json trong ZIP (chuyển một lần)"
+    else
+      rm -f "$tmp"
+      warn "config.json trong Shouko.zip không chứa cấu hình Agent hợp lệ"
+    fi
+    rm -f "$legacy_tmp"
   fi
 
   if [ -z "$source_name" ] &&
@@ -365,7 +451,7 @@ install_agent_config() {
 
   [ -n "$source_name" ] || {
     rm -f "$tmp"
-    die "Không tìm thấy agent_config.json hợp lệ trong Shouko.zip, backup riêng tư hoặc máy hiện tại"
+    die "Không tìm thấy cấu hình Agent hợp lệ trong agent_config.json, backup riêng tư hoặc config.json cũ"
   }
 
   mkdir -p "$SHOUKO_DIR"

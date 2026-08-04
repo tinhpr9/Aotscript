@@ -8,6 +8,9 @@ const TARGET_FILES = {
   nova: "lenh_nova.txt",
 };
 
+const DEVICE_ALIAS_PREFIX = "device_alias:";
+const GROUP_LABEL_PREFIX = "group_label:";
+
 const COMMANDS = {
   idle: { value: "IDLE", bit: 1, label: "💤 IDLE" },
   setup_vip: { value: "SETUP_VIP", bit: 2, label: "⚙️ VIP" },
@@ -37,32 +40,6 @@ const COMMAND_ORDER = [
 const ALLOWED_REPORT_STATUSES = ["heartbeat", "received", "running", "success", "error"];
 
 
-function legacyDeviceIdsForTarget(target) {
-  const groups =
-    target === "all"
-      ? ["MARMOT", "NOVA"]
-      : [String(target).toUpperCase()];
-
-  if (
-    groups.some(
-      (group) => !["MARMOT", "NOVA"].includes(group)
-    )
-  ) {
-    return [];
-  }
-
-  const ids = [];
-
-  for (const group of groups) {
-    for (let index = 1; index <= 10; index += 1) {
-      ids.push(
-        `${group}-${String(index).padStart(2, "0")}`
-      );
-    }
-  }
-
-  return ids;
-}
 
 function normalizeDeviceId(value) {
   const raw = String(value || "").trim();
@@ -98,6 +75,63 @@ function normalizeDeviceGroup(value) {
     : null;
 }
 
+
+function sanitizeLabel(value, maxLength = 48) {
+  const label = String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!label || label.length > maxLength) {
+    return null;
+  }
+
+  return label;
+}
+
+function isDeviceStatusMetadataKey(name) {
+  return (
+    name === "latest_command" ||
+    name.startsWith("cmd:") ||
+    name.startsWith(DEVICE_ALIAS_PREFIX) ||
+    name.startsWith(GROUP_LABEL_PREFIX)
+  );
+}
+
+async function getDeviceAlias(deviceId, env) {
+  try {
+    const value = await env.DEVICE_STATUS.get(
+      `${DEVICE_ALIAS_PREFIX}${deviceId}`
+    );
+    return sanitizeLabel(value, 48);
+  } catch (error) {
+    return null;
+  }
+}
+
+async function getGroupLabel(group, env) {
+  const normalized = normalizeDeviceGroup(group);
+  if (!normalized) {
+    return String(group || "-").toUpperCase();
+  }
+
+  try {
+    const value = await env.DEVICE_STATUS.get(
+      `${GROUP_LABEL_PREFIX}${normalized}`
+    );
+    return sanitizeLabel(value, 32) || normalized;
+  } catch (error) {
+    return normalized;
+  }
+}
+
+async function getTargetLabel(target, env) {
+  if (target === "all") {
+    return "TẤT CẢ";
+  }
+  return getGroupLabel(target, env);
+}
+
 function compareDeviceIds(left, right) {
   return left.localeCompare(
     right,
@@ -121,12 +155,9 @@ async function deviceIdsForTarget(target, env) {
     );
   }
 
-  // Luôn giữ 20 máy cũ trong danh sách dự kiến.
-  const ids = new Set(
-    legacyDeviceIdsForTarget(target)
-  );
+  // Chỉ lấy thiết bị đã thực sự gửi heartbeat/report vào KV.
+  const ids = new Set();
 
-  // Tự thêm mọi máy m<number> đã gửi heartbeat.
   let cursor;
 
   do {
@@ -136,10 +167,7 @@ async function deviceIdsForTarget(target, env) {
     });
 
     for (const item of page.keys || []) {
-      if (
-        item.name === "latest_command" ||
-        item.name.startsWith("cmd:")
-      ) {
+      if (isDeviceStatusMetadataKey(item.name)) {
         continue;
       }
 
@@ -230,6 +258,164 @@ async function storeCommandMetadata(
   return metadata;
 }
 
+
+async function renameDevice(
+  chatId,
+  rawDeviceId,
+  rawLabel,
+  env
+) {
+  const deviceId = normalizeDeviceId(rawDeviceId);
+
+  if (!deviceId) {
+    await sendMessage(
+      chatId,
+      env,
+      "Device ID không hợp lệ."
+    );
+    return;
+  }
+
+  const record = await getDeviceRecord(deviceId, env);
+
+  if (!record) {
+    await sendMessage(
+      chatId,
+      env,
+      `Không tìm thấy thiết bị ${deviceId}.`
+    );
+    return;
+  }
+
+  if (String(rawLabel || "").trim() === "-") {
+    await env.DEVICE_STATUS.delete(
+      `${DEVICE_ALIAS_PREFIX}${deviceId}`
+    );
+    await sendMessage(
+      chatId,
+      env,
+      `Đã xóa tên riêng của ${deviceId}.`
+    );
+    return;
+  }
+
+  const label = sanitizeLabel(rawLabel, 48);
+
+  if (!label) {
+    await sendMessage(
+      chatId,
+      env,
+      "Tên phải từ 1 đến 48 ký tự."
+    );
+    return;
+  }
+
+  await env.DEVICE_STATUS.put(
+    `${DEVICE_ALIAS_PREFIX}${deviceId}`,
+    label
+  );
+
+  await sendMessage(
+    chatId,
+    env,
+    `Đã đổi tên ${deviceId} thành: ${label}`
+  );
+}
+
+async function deleteDevice(
+  chatId,
+  rawDeviceId,
+  env
+) {
+  const deviceId = normalizeDeviceId(rawDeviceId);
+
+  if (!deviceId) {
+    await sendMessage(
+      chatId,
+      env,
+      "Device ID không hợp lệ."
+    );
+    return;
+  }
+
+  const record = await getDeviceRecord(deviceId, env);
+
+  if (!record) {
+    await sendMessage(
+      chatId,
+      env,
+      `Không tìm thấy thiết bị ${deviceId}.`
+    );
+    return;
+  }
+
+  await Promise.all([
+    env.DEVICE_STATUS.delete(deviceId),
+    env.DEVICE_STATUS.delete(
+      `${DEVICE_ALIAS_PREFIX}${deviceId}`
+    ),
+  ]);
+
+  await sendMessage(
+    chatId,
+    env,
+    `Đã xóa ${deviceId} khỏi danh sách. ` +
+      "Nếu Agent còn chạy, thiết bị sẽ tự xuất hiện lại."
+  );
+}
+
+async function setGroupLabel(
+  chatId,
+  rawGroup,
+  rawLabel,
+  env
+) {
+  const group = normalizeDeviceGroup(rawGroup);
+
+  if (!group) {
+    await sendMessage(
+      chatId,
+      env,
+      "Nhóm phải là MARMOT hoặc NOVA."
+    );
+    return;
+  }
+
+  if (String(rawLabel || "").trim() === "-") {
+    await env.DEVICE_STATUS.delete(
+      `${GROUP_LABEL_PREFIX}${group}`
+    );
+    await sendMessage(
+      chatId,
+      env,
+      `Đã khôi phục tên nhóm ${group}.`
+    );
+    return;
+  }
+
+  const label = sanitizeLabel(rawLabel, 32);
+
+  if (!label) {
+    await sendMessage(
+      chatId,
+      env,
+      "Tên nhóm phải từ 1 đến 32 ký tự."
+    );
+    return;
+  }
+
+  await env.DEVICE_STATUS.put(
+    `${GROUP_LABEL_PREFIX}${group}`,
+    label
+  );
+
+  await sendMessage(
+    chatId,
+    env,
+    `Đã đặt tên nhóm ${group}: ${label}`
+  );
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -253,6 +439,9 @@ export default {
             { command: "start", description: "Mở bảng điều khiển" },
             { command: "status", description: "Xem lệnh hiện tại" },
             { command: "devices", description: "Danh sách thiết bị" },
+            { command: "rename", description: "Đổi tên thiết bị" },
+            { command: "delete", description: "Xóa thiết bị khỏi danh sách" },
+            { command: "groupname", description: "Đổi tên hiển thị nhóm" },
             { command: "progress", description: "Xem tiến độ lệnh gần nhất" },
             { command: "solver", description: "Cập nhật URL Solver" },
             { command: "script", description: "Cập nhật URL script" },
@@ -325,6 +514,44 @@ async function handleUpdate(update, env) {
 
   if (input === "/devices") {
     await showDevices(chatId, env);
+    return;
+  }
+
+  const renameMatch =
+    input.match(/^\/rename\s+(\S+)\s+(.+)$/i);
+
+  if (renameMatch) {
+    await renameDevice(
+      chatId,
+      renameMatch[1],
+      renameMatch[2],
+      env
+    );
+    return;
+  }
+
+  const deleteMatch =
+    input.match(/^\/delete\s+(\S+)$/i);
+
+  if (deleteMatch) {
+    await deleteDevice(
+      chatId,
+      deleteMatch[1],
+      env
+    );
+    return;
+  }
+
+  const groupNameMatch =
+    input.match(/^\/groupname\s+(marmot|nova)\s+(.+)$/i);
+
+  if (groupNameMatch) {
+    await setGroupLabel(
+      chatId,
+      groupNameMatch[1],
+      groupNameMatch[2],
+      env
+    );
     return;
   }
 
@@ -437,15 +664,30 @@ async function promptTargetSelection(chatId, command, url, env) {
   await saveShortCommand(token, command, url);
 
   const title = command === "solver" ? "/solver" : "/script";
+  const marmotLabel = await getGroupLabel("MARMOT", env);
+  const novaLabel = await getGroupLabel("NOVA", env);
+
   const replyMarkup = {
     inline_keyboard: [
       [
-        { text: "🌍 TẤT CẢ", callback_data: `shortcmd:${command}:${token}:all` },
-        { text: "🦫 MARMOT", callback_data: `shortcmd:${command}:${token}:marmot` },
+        {
+          text: "🌍 TẤT CẢ",
+          callback_data: `shortcmd:${command}:${token}:all`,
+        },
+        {
+          text: `🦫 ${marmotLabel}`,
+          callback_data: `shortcmd:${command}:${token}:marmot`,
+        },
       ],
       [
-        { text: "✨ NOVA", callback_data: `shortcmd:${command}:${token}:nova` },
-        { text: "❌ HỦY", callback_data: `cancel:${token}` },
+        {
+          text: `✨ ${novaLabel}`,
+          callback_data: `shortcmd:${command}:${token}:nova`,
+        },
+        {
+          text: "❌ HỦY",
+          callback_data: `cancel:${token}`,
+        },
       ],
     ],
   };
@@ -896,29 +1138,55 @@ function commandKeysFromMask(mask) {
 }
 
 async function showTargets(chatId, env, messageId) {
+  const marmotLabel = await getGroupLabel("MARMOT", env);
+  const novaLabel = await getGroupLabel("NOVA", env);
   const textValue = "Chọn nhóm máy:";
+
   const replyMarkup = {
     inline_keyboard: [
       [
-        { text: "🌍 TẤT CẢ", callback_data: "target:all" },
-        { text: "🦫 MARMOT", callback_data: "target:marmot" },
+        {
+          text: "🌍 TẤT CẢ",
+          callback_data: "target:all",
+        },
+        {
+          text: `🦫 ${marmotLabel}`,
+          callback_data: "target:marmot",
+        },
       ],
       [
-        { text: "✨ NOVA", callback_data: "target:nova" },
-        { text: "📋 TRẠNG THÁI", callback_data: "status" },
+        {
+          text: `✨ ${novaLabel}`,
+          callback_data: "target:nova",
+        },
+        {
+          text: "📋 TRẠNG THÁI",
+          callback_data: "status",
+        },
       ],
     ],
   };
 
   if (messageId) {
-    await editMessage(chatId, messageId, env, textValue, replyMarkup);
+    await editMessage(
+      chatId,
+      messageId,
+      env,
+      textValue,
+      replyMarkup
+    );
   } else {
-    await sendMessage(chatId, env, textValue, replyMarkup);
+    await sendMessage(
+      chatId,
+      env,
+      textValue,
+      replyMarkup
+    );
   }
 }
 
 async function showCommands(chatId, target, mask, env, messageId) {
-  const label = target.toUpperCase();
+  const label = await getTargetLabel(target, env);
   const selected = commandKeysFromMask(mask);
   const selectedText = selected.length
     ? selected.map((key) => COMMANDS[key].value).join(", ")
@@ -1434,43 +1702,44 @@ function formatTimestamp(ms) {
 
 async function showDevices(chatId, env) {
   const now = Date.now();
+  const ids = await deviceIdsForTarget("all", env);
 
-  const ids =
-    await deviceIdsForTarget("all", env);
+  if (ids.length === 0) {
+    await sendMessage(
+      chatId,
+      env,
+      "Chưa có thiết bị nào gửi heartbeat hợp lệ."
+    );
+    return;
+  }
 
   const lines = [
-    `📋 Danh sách ${ids.length} thiết bị:`,
+    `📋 Danh sách ${ids.length} thiết bị đã phát hiện:`,
   ];
 
   for (const id of ids) {
-    const record =
-      await getDeviceRecord(id, env);
-
-    if (!record) {
-      const legacyGroup =
-        id.startsWith("MARMOT-")
-          ? "MARMOT"
-          : id.startsWith("NOVA-")
-            ? "NOVA"
-            : "-";
-
-      lines.push(
-        `${id} — offline — ` +
-        `profile: ${legacyGroup} — ` +
-        "last_seen: -"
-      );
-
-      continue;
-    }
+    const record = await getDeviceRecord(id, env);
+    if (!record) continue;
 
     const online =
       now - Number(record.last_seen || 0)
       <= 90 * 1000;
 
+    const alias = await getDeviceAlias(id, env);
+    const groupLabel = await getGroupLabel(
+      record.device_group,
+      env
+    );
+
+    const displayName =
+      alias
+        ? `${alias} [${id}]`
+        : id;
+
     lines.push(
-      `${id} — ` +
+      `${displayName} — ` +
       `${online ? "online" : "offline"} — ` +
-      `profile: ${record.device_group || "-"} — ` +
+      `nhóm: ${groupLabel} — ` +
       `last_seen: ${formatTimestamp(record.last_seen)} — ` +
       `status: ${record.last_status || "-"}` +
       (
@@ -1481,13 +1750,20 @@ async function showDevices(chatId, env) {
     );
   }
 
-  // Chia tin nhắn để không vượt giới hạn Telegram.
+  lines.push("");
+  lines.push("Đổi tên máy: /rename m166 Tên dễ nhớ");
+  lines.push("Xóa tên máy: /rename m166 -");
+  lines.push("Xóa thiết bị: /delete m166");
+  lines.push("Đổi tên nhóm: /groupname nova Tên mới");
+  lines.push("Khôi phục tên nhóm: /groupname nova -");
+
   let chunk = "";
 
   for (const line of lines) {
     const next =
       chunk
-        ? `${chunk}\n${line}`
+        ? `${chunk}
+${line}`
         : line;
 
     if (next.length > 3500) {
