@@ -270,5 +270,221 @@ do
 done
 
 echo
+
+# ===== TIỆN ÍCH M166: TOOLCHECK + AGENT BOOT AN TOÀN =====
+echo
+echo "=== CÀI TOOLCHECK VÀ AGENT BOOT AN TOÀN ==="
+
+mkdir -p "$HOME/bin" "$HOME/.termux/boot"
+
+# ---------------------------------------------------------
+# Lệnh tắt: toolcheck
+# ---------------------------------------------------------
+TOOLCHECK_CMD="$HOME/bin/toolcheck"
+TOOLCHECK_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/toolcheck.$$"
+
+cat > "$TOOLCHECK_TMP" <<'TOOLCHECK_EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+set -e
+
+PYTHON="/data/data/com.termux/files/usr/bin/python"
+CURL="/data/data/com.termux/files/usr/bin/curl"
+TMP="$(mktemp)"
+
+cleanup() {
+  rm -f "$TMP"
+}
+trap cleanup EXIT
+
+if ! "$PYTHON" -c 'import requests' >/dev/null 2>&1; then
+  echo "[*] Đang cài requests..."
+  "$PYTHON" -m pip install --upgrade requests
+fi
+
+echo "[*] Đang tải Toolcheck mới nhất..."
+
+"$CURL" -fsSL \
+  --retry 3 \
+  --connect-timeout 15 \
+  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/Toolcheck?t=$(date +%s)" \
+  -o "$TMP"
+
+[ -s "$TMP" ] || {
+  echo "[LỖI] Toolcheck tải về bị trống."
+  exit 1
+}
+
+"$PYTHON" -c '
+import pathlib
+import sys
+
+file = pathlib.Path(sys.argv[1])
+source = file.read_text(encoding="utf-8")
+compile(source, str(file), "exec")
+' "$TMP"
+
+"$PYTHON" "$TMP"
+TOOLCHECK_EOF
+
+chmod 700 "$TOOLCHECK_TMP"
+
+if [ -f "$TOOLCHECK_CMD" ] &&
+   cmp -s "$TOOLCHECK_TMP" "$TOOLCHECK_CMD"; then
+  rm -f "$TOOLCHECK_TMP"
+  ok "Lệnh toolcheck đã đúng"
+else
+  if [ -f "$TOOLCHECK_CMD" ]; then
+    cp -p "$TOOLCHECK_CMD" "${TOOLCHECK_CMD}.bak-${STAMP}"
+  fi
+
+  mv "$TOOLCHECK_TMP" "$TOOLCHECK_CMD"
+  chmod 700 "$TOOLCHECK_CMD"
+  ok "Đã cài lệnh: toolcheck"
+fi
+
+case ":$PATH:" in
+  *":$HOME/bin:"*) ;;
+  *)
+    grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null ||
+      echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+    export PATH="$HOME/bin:$PATH"
+    ;;
+esac
+
+# ---------------------------------------------------------
+# Agent boot an toàn
+# ---------------------------------------------------------
+AGENT_BOOT="$HOME/.termux/boot/01-agent.sh"
+AGENT_BOOT_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/01-agent.sh.$$"
+
+cat > "$AGENT_BOOT_TMP" <<'AGENT_BOOT_EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+
+export PATH="/data/data/com.termux/files/usr/bin:$PATH"
+
+PYTHON="/data/data/com.termux/files/usr/bin/python"
+CURL="/data/data/com.termux/files/usr/bin/curl"
+
+AGENT="/sdcard/Download/Agent_Core.py"
+TEMP="/sdcard/Download/Agent_Core.py.tmp"
+LOG="/sdcard/Download/Agent_Log.txt"
+
+ID_FILE="/sdcard/Download/Shouko/device_id.txt"
+GROUP_FILE="/sdcard/Download/Shouko/device_group.txt"
+
+mkdir -p "/sdcard/Download/Shouko"
+
+{
+  echo
+  echo "===== AGENT BOOT $(date '+%Y-%m-%d %H:%M:%S') ====="
+
+  termux-wake-lock 2>/dev/null || true
+  sleep 15
+
+  # Không tắt Agent đang hoạt động.
+  if pgrep -af '[/]sdcard/Download/Agent_Core.py' >/dev/null 2>&1; then
+    echo "[SKIP] Agent đang chạy, không khởi động thêm:"
+    pgrep -af '[/]sdcard/Download/Agent_Core.py'
+    exit 0
+  fi
+
+  if [ ! -s "$ID_FILE" ]; then
+    echo "[SKIP] Chưa có hoặc file trống: $ID_FILE"
+    exit 0
+  fi
+
+  if [ ! -s "$GROUP_FILE" ]; then
+    echo "[SKIP] Chưa có hoặc file trống: $GROUP_FILE"
+    exit 0
+  fi
+
+  DEVICE_ID="$(
+    tr -d '\r\n ' < "$ID_FILE" |
+      tr '[:lower:]' '[:upper:]'
+  )"
+
+  DEVICE_GROUP="$(
+    tr -d '\r\n ' < "$GROUP_FILE" |
+      tr '[:lower:]' '[:upper:]'
+  )"
+
+  case "$DEVICE_ID" in
+    MARMOT-0[1-9]|MARMOT-10|NOVA-0[1-9]|NOVA-10)
+      echo "[OK] device_id=$DEVICE_ID"
+      ;;
+    *)
+      echo "[SKIP] Agent hiện tại chưa hỗ trợ device_id=$DEVICE_ID"
+      echo "[SKIP] Máy không bị chạy Agent sai cấu hình."
+      exit 0
+      ;;
+  esac
+
+  case "$DEVICE_GROUP" in
+    MARMOT|NOVA)
+      echo "[OK] device_group=$DEVICE_GROUP"
+      ;;
+    *)
+      echo "[SKIP] device_group không hợp lệ: $DEVICE_GROUP"
+      exit 0
+      ;;
+  esac
+
+  rm -f "$TEMP"
+
+  if ! "$CURL" -fsSL \
+    --retry 3 \
+    --connect-timeout 15 \
+    "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/agent?t=$(date +%s)" \
+    -o "$TEMP"
+  then
+    echo "[LỖI] Không tải được Agent từ GitHub."
+    rm -f "$TEMP"
+    exit 1
+  fi
+
+  if ! "$PYTHON" -c '
+import pathlib
+import sys
+
+file = pathlib.Path(sys.argv[1])
+source = file.read_text(encoding="utf-8")
+compile(source, str(file), "exec")
+' "$TEMP"
+  then
+    echo "[LỖI] Agent tải về sai cú pháp."
+    rm -f "$TEMP"
+    exit 1
+  fi
+
+  mv -f "$TEMP" "$AGENT"
+  chmod 600 "$AGENT"
+
+  nohup "$PYTHON" -u "$AGENT" >> "$LOG" 2>&1 &
+  PID=$!
+
+  echo "[OK] Đã khởi động Agent PID=$PID"
+} >> "$LOG" 2>&1
+AGENT_BOOT_EOF
+
+chmod 700 "$AGENT_BOOT_TMP"
+
+if [ -f "$AGENT_BOOT" ] &&
+   cmp -s "$AGENT_BOOT_TMP" "$AGENT_BOOT"; then
+  rm -f "$AGENT_BOOT_TMP"
+  ok "01-agent.sh đã đúng"
+else
+  if [ -f "$AGENT_BOOT" ]; then
+    cp -p "$AGENT_BOOT" "${AGENT_BOOT}.bak-${STAMP}"
+  fi
+
+  mv "$AGENT_BOOT_TMP" "$AGENT_BOOT"
+  chmod 700 "$AGENT_BOOT"
+  ok "Đã tạo 01-agent.sh an toàn"
+fi
+
+echo "[+] Dùng Toolcheck bằng lệnh: toolcheck"
+echo "[+] Agent đang chạy sẽ được giữ nguyên."
+echo "[+] device_id=m166 sẽ được bỏ qua an toàn."
+echo
 echo "CHƯA REBOOT MÁY."
 BASH
