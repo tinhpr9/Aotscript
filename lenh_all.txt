@@ -1,2 +1,2 @@
-# telegram_command_id=1785824618083-0e103a80
-REBOOT
+# telegram_command_id=1785824933890-2241abc3
+IDLE
