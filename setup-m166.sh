@@ -80,6 +80,7 @@ DL="$SD/Download"
 SHOUKO_DIR="$DL/Shouko"
 AGENT_CONFIG="$SHOUKO_DIR/agent_config.json"
 PRIVATE_AGENT_CONFIG="$HOME/.config/aotscript/agent_config.json"
+WORKER_ORIGIN="https://billowing-haze-0cafaotscript-control.tinh1020pr.workers.dev"
 BACKUP="$DL/msetup_settings_before_${STAMP}.txt"
 DISABLED="$HOME/.termux/boot-disabled/$STAMP"
 
@@ -325,66 +326,314 @@ extract_safe() {
   ok "Đã giải nén: $target"
 }
 
-extract_agent_config_keys() {
-  local source="$1"
-  local output="$2"
-  python - "$source" "$output" <<'PY'
+pair_agent_config() {
+  local output="$1"
+
+  python - \
+    "$WORKER_ORIGIN" \
+    "$DEVICE_ID" \
+    "$DEVICE_GROUP" \
+    "$output" <<'PY'
 import json
+import os
 import pathlib
 import sys
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
-source = pathlib.Path(sys.argv[1])
-output = pathlib.Path(sys.argv[2])
+worker_origin = sys.argv[1].rstrip("/")
+device_id = sys.argv[2]
+device_group = sys.argv[3]
+output = pathlib.Path(sys.argv[4])
+
+request_url = worker_origin + "/agent/pair/request"
+status_url = worker_origin + "/agent/pair/status"
+
+def post_json(url, payload, timeout=20):
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Cache-Control": "no-store",
+            "User-Agent": "Aotscript-msetup-pair/1",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=timeout,
+        ) as response:
+            status = response.status
+            raw = response.read(65536)
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        raw = exc.read(65536)
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+    ):
+        return None, {}
+
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        data = {}
+
+    if not isinstance(data, dict):
+        data = {}
+
+    return status, data
+
+status, data = post_json(
+    request_url,
+    {
+        "device_id": device_id,
+        "device_group": device_group,
+    },
+)
+
+if status not in {200, 201} or not data.get("ok"):
+    error_code = data.get(
+        "error",
+        "pair_request_failed",
+    )
+
+    if status == 429:
+        retry_after = data.get("retry_after", 60)
+        print(
+            "[LỖI] Yêu cầu ghép nối quá nhanh; "
+            f"thử lại sau khoảng {retry_after} giây."
+        )
+    elif status is None:
+        print(
+            "[LỖI] Không kết nối được Worker "
+            "để tạo yêu cầu ghép nối."
+        )
+    else:
+        print(
+            "[LỖI] Không tạo được yêu cầu ghép nối: "
+            f"HTTP {status}, {error_code}"
+        )
+
+    raise SystemExit(1)
+
+pair_id = data.get("pair_id")
+pair_token = data.get("pair_token")
+verification_code = data.get(
+    "verification_code"
+)
+expires_in = data.get("expires_in", 600)
+poll_after = data.get("poll_after", 3)
+
+if (
+    not isinstance(pair_id, str)
+    or not pair_id
+    or not isinstance(pair_token, str)
+    or len(pair_token) < 40
+    or not isinstance(verification_code, str)
+    or len(verification_code) != 6
+    or not verification_code.isdigit()
+):
+    print(
+        "[LỖI] Worker trả dữ liệu ghép nối "
+        "không hợp lệ."
+    )
+    raise SystemExit(1)
 
 try:
-    data = json.loads(source.read_text(encoding="utf-8"))
-except Exception:
-    raise SystemExit(1)
-
-if not isinstance(data, dict):
-    raise SystemExit(1)
-
-url = data.get("worker_report_url")
-secret = data.get("agent_report_secret")
-
-if not isinstance(url, str) or not url.strip():
-    raise SystemExit(1)
-
-parsed = urllib.parse.urlparse(url.strip())
-if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-    raise SystemExit(1)
-
-if not isinstance(secret, str) or not secret.strip():
-    raise SystemExit(1)
-
-temporary = output.with_name(output.name + ".write")
-temporary.write_text(
-    json.dumps(
-        {
-            "worker_report_url": url.strip(),
-            "agent_report_secret": secret.strip(),
-        },
-        ensure_ascii=False,
-        indent=2,
+    expires_in = int(expires_in)
+    poll_after = int(poll_after)
+except (TypeError, ValueError):
+    print(
+        "[LỖI] Thời hạn ghép nối không hợp lệ."
     )
-    + "\n",
-    encoding="utf-8",
+    raise SystemExit(1)
+
+expires_in = min(max(expires_in, 60), 600)
+poll_after = min(max(poll_after, 2), 10)
+
+print("[*] Đã gửi yêu cầu ghép nối tới Telegram.")
+print(
+    "[*] Mã xác minh trên máy: "
+    f"{verification_code}"
 )
-temporary.replace(output)
+print(
+    "[*] Mở bot Telegram, đối chiếu đúng mã "
+    "rồi bấm CHẤP NHẬN."
+)
+print(
+    "[*] Đang chờ phê duyệt, tối đa 10 phút..."
+)
+
+deadline = time.monotonic() + expires_in + 10
+
+while time.monotonic() < deadline:
+    time.sleep(poll_after)
+
+    status, data = post_json(
+        status_url,
+        {
+            "pair_id": pair_id,
+            "pair_token": pair_token,
+        },
+    )
+
+    if status is None:
+        continue
+
+    if status == 202:
+        continue
+
+    if (
+        status == 200
+        and data.get("ok")
+        and data.get("status") == "approved"
+    ):
+        report_url = data.get(
+            "worker_report_url"
+        )
+        secret = data.get(
+            "agent_report_secret"
+        )
+
+        expected_report_url = (
+            worker_origin + "/agent/report"
+        )
+
+        if (
+            not isinstance(report_url, str)
+            or report_url.strip()
+            != expected_report_url
+            or not isinstance(secret, str)
+            or not secret.strip()
+        ):
+            print(
+                "[LỖI] Cấu hình ghép nối "
+                "không hợp lệ."
+            )
+            raise SystemExit(1)
+
+        parsed = urllib.parse.urlparse(
+            report_url.strip()
+        )
+
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+        ):
+            print(
+                "[LỖI] URL Worker ghép nối "
+                "không dùng HTTPS hợp lệ."
+            )
+            raise SystemExit(1)
+
+        temporary = output.with_name(
+            output.name + ".pair-write"
+        )
+
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+        temporary.write_text(
+            json.dumps(
+                {
+                    "worker_report_url":
+                        report_url.strip(),
+                    "agent_report_secret":
+                        secret.strip(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+
+        temporary.replace(output)
+
+        print(
+            "[OK] Ghép nối Telegram thành công; "
+            "không hiển thị secret."
+        )
+        raise SystemExit(0)
+
+    error_code = data.get(
+        "error",
+        "pair_status_failed",
+    )
+
+    if status == 403:
+        print(
+            "[LỖI] Yêu cầu ghép nối "
+            "đã bị từ chối."
+        )
+        raise SystemExit(1)
+
+    if status == 410:
+        print(
+            "[LỖI] Yêu cầu ghép nối "
+            "đã hết hạn."
+        )
+        raise SystemExit(1)
+
+    if status in {404, 409}:
+        print(
+            "[LỖI] Yêu cầu ghép nối "
+            f"không còn dùng được: {error_code}"
+        )
+        raise SystemExit(1)
+
+    if status >= 500:
+        continue
+
+    print(
+        "[LỖI] Kiểm tra ghép nối thất bại: "
+        f"HTTP {status}, {error_code}"
+    )
+    raise SystemExit(1)
+
+print(
+    "[LỖI] Hết thời gian chờ phê duyệt "
+    "ghép nối Telegram."
+)
+raise SystemExit(1)
 PY
 }
 
 install_agent_config() {
   local tmp="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/agent_config.$$"
-  local legacy_tmp="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/shouko_config.$$"
   local source_name=""
-  rm -f "$tmp" "$legacy_tmp"
+
+  rm -f "$tmp" "${tmp}.pair-write"
+
+  if [ -s "$AGENT_CONFIG" ] &&
+     validate_agent_config "$AGENT_CONFIG"; then
+    chmod 600 "$AGENT_CONFIG" 2>/dev/null || true
+    ok "Giữ nguyên agent_config.json hợp lệ hiện có"
+    return 0
+  fi
 
   if unzip -Z1 "$SHOUKO_ZIP" |
        tr -d '\r' |
        grep -Fxq 'Shouko/agent_config.json'; then
-    if unzip -p "$SHOUKO_ZIP" 'Shouko/agent_config.json' > "$tmp" &&
+    if unzip -p \
+         "$SHOUKO_ZIP" \
+         'Shouko/agent_config.json' \
+         > "$tmp" &&
        [ -s "$tmp" ] &&
        validate_agent_config "$tmp"; then
       source_name="Shouko.zip riêng tư"
@@ -395,44 +644,10 @@ install_agent_config() {
   fi
 
   if [ -z "$source_name" ] &&
-     [ -s "$SHOUKO_DIR/config.json" ]; then
-    if extract_agent_config_keys \
-         "$SHOUKO_DIR/config.json" \
-         "$tmp" &&
-       validate_agent_config "$tmp"; then
-      source_name="Shouko/config.json hiện có (chuyển một lần)"
-    else
-      rm -f "$tmp"
-      warn "config.json hiện có không chứa cấu hình Agent hợp lệ"
-    fi
-  fi
-
-  if [ -z "$source_name" ] &&
-     unzip -Z1 "$SHOUKO_ZIP" |
-       tr -d '\r' |
-       grep -Fxq 'Shouko/config.json'; then
-    rm -f "$legacy_tmp"
-    if unzip -p \
-         "$SHOUKO_ZIP" \
-         'Shouko/config.json' \
-         > "$legacy_tmp" &&
-       [ -s "$legacy_tmp" ] &&
-       extract_agent_config_keys \
-         "$legacy_tmp" \
-         "$tmp" &&
-       validate_agent_config "$tmp"; then
-      source_name="Shouko/config.json trong ZIP (chuyển một lần)"
-    else
-      rm -f "$tmp"
-      warn "config.json trong Shouko.zip không chứa cấu hình Agent hợp lệ"
-    fi
-    rm -f "$legacy_tmp"
-  fi
-
-  if [ -z "$source_name" ] &&
      [ -s "$PRIVATE_AGENT_CONFIG" ]; then
     cp -p "$PRIVATE_AGENT_CONFIG" "$tmp" ||
       die "Không đọc được backup Agent riêng tư"
+
     if validate_agent_config "$tmp"; then
       source_name="backup riêng tư trong Termux"
     else
@@ -441,18 +656,19 @@ install_agent_config() {
     fi
   fi
 
-  if [ -z "$source_name" ] &&
-     [ -s "$AGENT_CONFIG" ] &&
-     validate_agent_config "$AGENT_CONFIG"; then
-    chmod 600 "$AGENT_CONFIG" 2>/dev/null || true
-    ok "Giữ nguyên agent_config.json hợp lệ hiện có"
-    return 0
-  fi
+  if [ -z "$source_name" ]; then
+    echo
+    echo "=== GHÉP NỐI AGENT QUA TELEGRAM ==="
 
-  [ -n "$source_name" ] || {
-    rm -f "$tmp"
-    die "Không tìm thấy cấu hình Agent hợp lệ trong agent_config.json, backup riêng tư hoặc config.json cũ"
-  }
+    if pair_agent_config "$tmp" &&
+       [ -s "$tmp" ] &&
+       validate_agent_config "$tmp"; then
+      source_name="ghép nối Telegram một lần"
+    else
+      rm -f "$tmp" "${tmp}.pair-write"
+      die "Không hoàn tất được ghép nối Telegram"
+    fi
+  fi
 
   mkdir -p "$SHOUKO_DIR"
 
@@ -465,16 +681,22 @@ install_agent_config() {
   fi
 
   if [ -f "$AGENT_CONFIG" ]; then
-    cp -p "$AGENT_CONFIG" "${AGENT_CONFIG}.bak-${STAMP}" ||
+    cp -p \
+      "$AGENT_CONFIG" \
+      "${AGENT_CONFIG}.bak-${STAMP}" ||
       die "Không backup được agent_config.json"
   fi
 
   chmod 600 "$tmp" 2>/dev/null || true
+
   mv -f "$tmp" "$AGENT_CONFIG" ||
     die "Không cài được agent_config.json"
+
   chmod 600 "$AGENT_CONFIG" 2>/dev/null || true
+
   validate_agent_config "$AGENT_CONFIG" ||
     die "agent_config.json sau khi cài không hợp lệ"
+
   ok "Đã cài agent_config.json từ $source_name; không hiển thị nội dung"
 }
 

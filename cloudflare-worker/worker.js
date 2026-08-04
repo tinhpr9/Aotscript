@@ -10,6 +10,11 @@ const TARGET_FILES = {
 
 const DEVICE_ALIAS_PREFIX = "device_alias:";
 const GROUP_LABEL_PREFIX = "group_label:";
+const PAIR_PREFIX = "pair:";
+const PAIR_DEVICE_PREFIX = "pair_device:";
+const PAIR_RATE_PREFIX = "pair_rate:";
+const PAIR_TTL_SECONDS = 10 * 60;
+const PAIR_RATE_SECONDS = 60;
 
 const COMMANDS = {
   idle: { value: "IDLE", bit: 1, label: "💤 IDLE" },
@@ -94,7 +99,10 @@ function isDeviceStatusMetadataKey(name) {
     name === "latest_command" ||
     name.startsWith("cmd:") ||
     name.startsWith(DEVICE_ALIAS_PREFIX) ||
-    name.startsWith(GROUP_LABEL_PREFIX)
+    name.startsWith(GROUP_LABEL_PREFIX) ||
+    name.startsWith(PAIR_PREFIX) ||
+    name.startsWith(PAIR_DEVICE_PREFIX) ||
+    name.startsWith(PAIR_RATE_PREFIX)
   );
 }
 
@@ -258,6 +266,664 @@ async function storeCommandMetadata(
   return metadata;
 }
 
+
+
+function randomBase64Url(byteLength = 32) {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+
+  let binary = "";
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+async function sha256Hex(value) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    bytes
+  );
+
+  return Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, "0")
+  ).join("");
+}
+
+async function readSmallJson(request) {
+  let raw;
+
+  try {
+    raw = await request.text();
+  } catch (error) {
+    return {
+      error: "invalid_body",
+    };
+  }
+
+  if (raw.length > 4096) {
+    return {
+      error: "body_too_large",
+    };
+  }
+
+  try {
+    const value = JSON.parse(raw);
+
+    if (!value || typeof value !== "object") {
+      return {
+        error: "invalid_json",
+      };
+    }
+
+    return {
+      value,
+    };
+  } catch (error) {
+    return {
+      error: "invalid_json",
+    };
+  }
+}
+
+function normalizePairId(value) {
+  const raw = String(value || "").trim();
+
+  return /^[A-Za-z0-9_-]{20,40}$/.test(raw)
+    ? raw
+    : null;
+}
+
+function normalizePairToken(value) {
+  const raw = String(value || "").trim();
+
+  return /^[A-Za-z0-9_-]{40,100}$/.test(raw)
+    ? raw
+    : null;
+}
+
+function pairRecordKey(pairId) {
+  return `${PAIR_PREFIX}${pairId}`;
+}
+
+function pairDeviceKey(deviceId) {
+  return `${PAIR_DEVICE_PREFIX}${deviceId}`;
+}
+
+async function clearPairDeviceIndex(
+  record,
+  pairId,
+  env
+) {
+  if (!record?.device_id) return;
+
+  const key = pairDeviceKey(record.device_id);
+  const current = await env.DEVICE_STATUS.get(key);
+
+  if (current === pairId) {
+    await env.DEVICE_STATUS.delete(key);
+  }
+}
+
+async function handlePairRequest(
+  request,
+  env,
+  workerOrigin
+) {
+  if (
+    !String(env.AGENT_REPORT_SECRET || "").trim() ||
+    !String(env.TELEGRAM_BOT_TOKEN || "").trim() ||
+    !String(env.TELEGRAM_ADMIN_USER_ID || "").trim()
+  ) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "pairing_not_configured",
+      },
+      503
+    );
+  }
+
+  const parsed = await readSmallJson(request);
+
+  if (parsed.error) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: parsed.error,
+      },
+      400
+    );
+  }
+
+  const deviceId = normalizeDeviceId(
+    parsed.value.device_id
+  );
+  const deviceGroup = normalizeDeviceGroup(
+    parsed.value.device_group
+  );
+
+  if (!deviceId) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_device_id",
+      },
+      400
+    );
+  }
+
+  if (!deviceGroup) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_device_group",
+      },
+      400
+    );
+  }
+
+  const legacyPrefix =
+    deviceId.match(/^(MARMOT|NOVA)-/);
+
+  if (
+    legacyPrefix &&
+    legacyPrefix[1] !== deviceGroup
+  ) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "group_mismatch",
+      },
+      400
+    );
+  }
+
+  const clientIp =
+    request.headers.get("CF-Connecting-IP") ||
+    "unknown";
+
+  const ipHash = (
+    await sha256Hex(clientIp)
+  ).slice(0, 20);
+
+  const rateKey =
+    `${PAIR_RATE_PREFIX}${deviceId}:${ipHash}`;
+
+  if (await env.DEVICE_STATUS.get(rateKey)) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "pair_rate_limited",
+        retry_after: PAIR_RATE_SECONDS,
+      },
+      429
+    );
+  }
+
+  await env.DEVICE_STATUS.put(
+    rateKey,
+    "1",
+    {
+      expirationTtl: PAIR_RATE_SECONDS,
+    }
+  );
+
+  const previousPairId =
+    await env.DEVICE_STATUS.get(
+      pairDeviceKey(deviceId)
+    );
+
+  if (previousPairId) {
+    await env.DEVICE_STATUS.delete(
+      pairRecordKey(previousPairId)
+    );
+  }
+
+  const pairId = randomBase64Url(18);
+  const pairToken = randomBase64Url(32);
+  const tokenHash = await sha256Hex(pairToken);
+
+  const randomNumber = new Uint32Array(1);
+  crypto.getRandomValues(randomNumber);
+
+  const verificationCode = String(
+    randomNumber[0] % 1000000
+  ).padStart(6, "0");
+
+  const createdAt = Date.now();
+  const expiresAt =
+    createdAt + PAIR_TTL_SECONDS * 1000;
+
+  const record = {
+    pair_id: pairId,
+    device_id: deviceId,
+    device_group: deviceGroup,
+    verification_code: verificationCode,
+    token_hash: tokenHash,
+    status: "pending",
+    created_at: createdAt,
+    expires_at: expiresAt,
+  };
+
+  await env.DEVICE_STATUS.put(
+    pairRecordKey(pairId),
+    JSON.stringify(record),
+    {
+      expirationTtl: PAIR_TTL_SECONDS,
+    }
+  );
+
+  await env.DEVICE_STATUS.put(
+    pairDeviceKey(deviceId),
+    pairId,
+    {
+      expirationTtl: PAIR_TTL_SECONDS,
+    }
+  );
+
+  const expiresText =
+    new Date(expiresAt)
+      .toISOString()
+      .replace("T", " ")
+      .replace("Z", " UTC");
+
+  try {
+    await sendMessage(
+      String(env.TELEGRAM_ADMIN_USER_ID),
+      env,
+      `🔐 Yêu cầu ghép nối Agent\n` +
+        `Thiết bị: ${deviceId}\n` +
+        `Profile: ${deviceGroup}\n` +
+        `Mã xác minh: ${verificationCode}\n` +
+        `Hết hạn: ${expiresText}\n\n` +
+        "Chỉ chấp nhận nếu mã trên Termux trùng khớp.",
+      {
+        inline_keyboard: [
+          [
+            {
+              text: "✅ CHẤP NHẬN",
+              callback_data:
+                `pair_approve:${pairId}`,
+            },
+            {
+              text: "❌ TỪ CHỐI",
+              callback_data:
+                `pair_deny:${pairId}`,
+            },
+          ],
+        ],
+      }
+    );
+  } catch (error) {
+    await env.DEVICE_STATUS.delete(
+      pairRecordKey(pairId)
+    );
+    await env.DEVICE_STATUS.delete(
+      pairDeviceKey(deviceId)
+    );
+
+    console.error(
+      "pair_notification_failed",
+      error?.message || error
+    );
+
+    return noStoreJson(
+      {
+        ok: false,
+        error: "pair_notification_failed",
+      },
+      502
+    );
+  }
+
+  return noStoreJson(
+    {
+      ok: true,
+      status: "pending",
+      pair_id: pairId,
+      pair_token: pairToken,
+      verification_code: verificationCode,
+      expires_in: PAIR_TTL_SECONDS,
+      poll_after: 3,
+    },
+    201
+  );
+}
+
+async function handlePairStatus(
+  request,
+  env,
+  workerOrigin
+) {
+  if (!String(env.AGENT_REPORT_SECRET || "").trim()) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "pairing_not_configured",
+      },
+      503
+    );
+  }
+
+  const parsed = await readSmallJson(request);
+
+  if (parsed.error) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: parsed.error,
+      },
+      400
+    );
+  }
+
+  const pairId = normalizePairId(
+    parsed.value.pair_id
+  );
+  const pairToken = normalizePairToken(
+    parsed.value.pair_token
+  );
+
+  if (!pairId || !pairToken) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_pair_credentials",
+      },
+      400
+    );
+  }
+
+  const raw = await env.DEVICE_STATUS.get(
+    pairRecordKey(pairId)
+  );
+
+  if (!raw) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "pair_not_found",
+      },
+      404
+    );
+  }
+
+  let record;
+
+  try {
+    record = JSON.parse(raw);
+  } catch (error) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_pair_record",
+      },
+      500
+    );
+  }
+
+  const now = Date.now();
+
+  if (
+    !Number(record.expires_at) ||
+    now > Number(record.expires_at)
+  ) {
+    await env.DEVICE_STATUS.delete(
+      pairRecordKey(pairId)
+    );
+    await clearPairDeviceIndex(
+      record,
+      pairId,
+      env
+    );
+
+    return noStoreJson(
+      {
+        ok: false,
+        error: "pair_expired",
+      },
+      410
+    );
+  }
+
+  const tokenHash = await sha256Hex(pairToken);
+
+  if (tokenHash !== record.token_hash) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_pair_credentials",
+      },
+      401
+    );
+  }
+
+  if (record.status === "pending") {
+    return noStoreJson(
+      {
+        ok: true,
+        status: "pending",
+      },
+      202
+    );
+  }
+
+  if (record.status === "denied") {
+    return noStoreJson(
+      {
+        ok: false,
+        status: "denied",
+        error: "pair_denied",
+      },
+      403
+    );
+  }
+
+  if (record.status === "consumed") {
+    return noStoreJson(
+      {
+        ok: false,
+        status: "consumed",
+        error: "pair_already_consumed",
+      },
+      409
+    );
+  }
+
+  if (record.status !== "approved") {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_pair_status",
+      },
+      409
+    );
+  }
+
+  const consumedRecord = {
+    ...record,
+    status: "consumed",
+    consumed_at: now,
+  };
+
+  delete consumedRecord.token_hash;
+
+  await env.DEVICE_STATUS.put(
+    pairRecordKey(pairId),
+    JSON.stringify(consumedRecord),
+    {
+      expirationTtl: 60,
+    }
+  );
+
+  await clearPairDeviceIndex(
+    record,
+    pairId,
+    env
+  );
+
+  return noStoreJson({
+    ok: true,
+    status: "approved",
+    worker_report_url:
+      `${workerOrigin}/agent/report`,
+    agent_report_secret:
+      String(env.AGENT_REPORT_SECRET),
+  });
+}
+
+async function handlePairDecision(
+  pairIdValue,
+  approve,
+  callback,
+  chatId,
+  messageId,
+  env,
+  fromId
+) {
+  const pairId = normalizePairId(pairIdValue);
+
+  if (!pairId) {
+    await answerCallback(
+      callback.id,
+      env,
+      "Yêu cầu ghép nối không hợp lệ.",
+      true
+    );
+    return;
+  }
+
+  const key = pairRecordKey(pairId);
+  const raw = await env.DEVICE_STATUS.get(key);
+
+  if (!raw) {
+    await answerCallback(
+      callback.id,
+      env,
+      "Yêu cầu không tồn tại hoặc đã hết hạn.",
+      true
+    );
+    return;
+  }
+
+  let record;
+
+  try {
+    record = JSON.parse(raw);
+  } catch (error) {
+    await answerCallback(
+      callback.id,
+      env,
+      "Dữ liệu yêu cầu không hợp lệ.",
+      true
+    );
+    return;
+  }
+
+  const now = Date.now();
+
+  if (
+    !Number(record.expires_at) ||
+    now > Number(record.expires_at)
+  ) {
+    await env.DEVICE_STATUS.delete(key);
+    await clearPairDeviceIndex(
+      record,
+      pairId,
+      env
+    );
+
+    await answerCallback(
+      callback.id,
+      env,
+      "Yêu cầu đã hết hạn.",
+      true
+    );
+    return;
+  }
+
+  if (record.status !== "pending") {
+    await answerCallback(
+      callback.id,
+      env,
+      `Yêu cầu đã ở trạng thái: ${record.status}`,
+      true
+    );
+    return;
+  }
+
+  record.status =
+    approve ? "approved" : "denied";
+  record.decided_at = now;
+  record.decided_by = String(fromId);
+
+  const remainingTtl = Math.max(
+    60,
+    Math.ceil(
+      (Number(record.expires_at) - now) / 1000
+    )
+  );
+
+  await env.DEVICE_STATUS.put(
+    key,
+    JSON.stringify(record),
+    {
+      expirationTtl:
+        approve ? remainingTtl : 60,
+    }
+  );
+
+  if (!approve) {
+    await clearPairDeviceIndex(
+      record,
+      pairId,
+      env
+    );
+  }
+
+  await answerCallback(
+    callback.id,
+    env,
+    approve
+      ? "Đã chấp nhận ghép nối."
+      : "Đã từ chối ghép nối."
+  );
+
+  const statusText =
+    approve
+      ? "✅ ĐÃ CHẤP NHẬN"
+      : "❌ ĐÃ TỪ CHỐI";
+
+  if (messageId) {
+    try {
+      await editMessage(
+        chatId,
+        messageId,
+        env,
+        `${statusText} GHÉP NỐI\n` +
+          `Thiết bị: ${record.device_id}\n` +
+          `Profile: ${record.device_group}\n` +
+          `Mã xác minh: ${record.verification_code}`,
+        {
+          inline_keyboard: [],
+        }
+      );
+    } catch (error) {
+      console.error(
+        "pair_message_edit_failed",
+        error?.message || error
+      );
+    }
+  }
+}
 
 async function renameDevice(
   chatId,
@@ -460,6 +1126,28 @@ export default {
         const update = await request.json();
         await handleUpdate(update, env);
         return text("ok");
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/agent/pair/request"
+      ) {
+        return await handlePairRequest(
+          request,
+          env,
+          url.origin
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/agent/pair/status"
+      ) {
+        return await handlePairStatus(
+          request,
+          env,
+          url.origin
+        );
       }
 
       // Agent report endpoint
@@ -941,6 +1629,32 @@ async function executeSessionCommands(chatId, state, env) {
 
 async function handleCallback(callback, chatId, messageId, env, fromId) {
   const data = callback.data || "";
+
+  if (data.startsWith("pair_approve:")) {
+    await handlePairDecision(
+      data.slice("pair_approve:".length),
+      true,
+      callback,
+      chatId,
+      messageId,
+      env,
+      fromId
+    );
+    return;
+  }
+
+  if (data.startsWith("pair_deny:")) {
+    await handlePairDecision(
+      data.slice("pair_deny:".length),
+      false,
+      callback,
+      chatId,
+      messageId,
+      env,
+      fromId
+    );
+    return;
+  }
 
   if (data.startsWith("target:")) {
     const target = data.slice(7);
@@ -2036,5 +2750,18 @@ function json(value, status = 200) {
   return new Response(JSON.stringify(value, null, 2), {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
+function noStoreJson(value, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: {
+      "Content-Type":
+        "application/json; charset=utf-8",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate",
+      Pragma: "no-cache",
+    },
   });
 }
