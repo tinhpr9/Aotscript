@@ -36,6 +36,52 @@ const COMMAND_ORDER = [
 
 const ALLOWED_REPORT_STATUSES = ["heartbeat", "received", "running", "success", "error"];
 
+function deviceIdsForTarget(target) {
+  const groups =
+    target === "all"
+      ? ["MARMOT", "NOVA"]
+      : [String(target).toUpperCase()];
+
+  const ids = [];
+  for (const group of groups) {
+    for (let index = 1; index <= 10; index += 1) {
+      ids.push(`${group}-${String(index).padStart(2, "0")}`);
+    }
+  }
+  return ids;
+}
+
+async function storeCommandMetadata(env, commandId, target, commands) {
+  if (!TARGET_FILES[target]) {
+    throw new Error(`Invalid command target: ${target}`);
+  }
+
+  const commandList = Array.isArray(commands)
+    ? commands
+    : [String(commands)];
+  const created = Date.now();
+  const deviceIds = deviceIdsForTarget(target);
+  const metadata = {
+    command_id: commandId,
+    target,
+    commands: commandList,
+    command_count: commandList.length,
+    device_count: deviceIds.length,
+    created,
+  };
+
+  await env.DEVICE_STATUS.put(
+    `cmd:${commandId}`,
+    JSON.stringify(metadata)
+  );
+  await env.DEVICE_STATUS.put(
+    "latest_command",
+    JSON.stringify({ command_id: commandId, created })
+  );
+
+  return metadata;
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -479,12 +525,12 @@ async function executeSessionCommands(chatId, state, env) {
         ]],
       };
 
-      try {
-        const pseudoCommandId = content.match(/telegram_command_id=([\w\-]+)/)?.[1] || `${Date.now()}-${crypto.randomUUID().slice(0,8)}`;
-        await env.DEVICE_STATUS.put(`cmd:${pseudoCommandId}`, JSON.stringify({ target: state.target, total_expected: commandLines.length, created: Date.now() }));
-      } catch (e) {
-        console.error('KV put cmd meta failed', e);
-      }
+      await storeCommandMetadata(
+        env,
+        commandId,
+        state.target,
+        commandLines
+      );
 
       await sendMessage(
         chatId,
@@ -804,12 +850,12 @@ async function executeCommands(chatId, target, commandKeys, env) {
         ]],
       };
 
-      // store command metadata for progress aggregation
-      try {
-        await env.DEVICE_STATUS.put(`cmd:${commandId}`, JSON.stringify({ target, total_expected: commandValues.length, created: Date.now() }));
-      } catch (e) {
-        console.error('KV put cmd meta failed', e);
-      }
+      await storeCommandMetadata(
+        env,
+        commandId,
+        target,
+        commandValues
+      );
 
       await sendMessage(
         chatId,
@@ -901,27 +947,67 @@ function isValidUrl(u) {
 
 async function executeSolverCommand(chatId, target, url, env) {
   const file = TARGET_FILES[target];
-  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const commandId =
+    `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   const line = `/solver ${target} ${url}`;
-  const content = `# telegram_command_id=${commandId}\n${line}\n`;
+  const content =
+    `# telegram_command_id=${commandId}\n${line}\n`;
+
   try {
-    const commit = await updateGitHubFile(file, content, `bot: ${target.toUpperCase()} /solver`, env);
-    await sendMessage(chatId, env, `✅ Đã gửi lệnh /solver\nNhóm: ${target}\nURL: ${url}\nCommit: ${commit.slice(0,7)}`);
-  } catch (err) {
-    await sendMessage(chatId, env, `❌ Không gửi được /solver: ${err.message}`);
+    const commit = await updateGitHubFile(
+      file,
+      content,
+      `bot: ${target.toUpperCase()} /solver`,
+      env
+    );
+    await storeCommandMetadata(env, commandId, target, [line]);
+    await sendMessage(
+      chatId,
+      env,
+      `✅ Đã gửi lệnh /solver\n` +
+        `Nhóm: ${target.toUpperCase()}\n` +
+        `URL: ${url}\n` +
+        `Commit: ${commit.slice(0, 7)}`
+    );
+  } catch (error) {
+    await sendMessage(
+      chatId,
+      env,
+      `❌ Không gửi được /solver: ${error.message}`
+    );
   }
 }
 
 async function executeScriptCommand(chatId, target, url, env) {
   const file = TARGET_FILES[target];
-  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const commandId =
+    `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   const line = `/script ${target} ${url}`;
-  const content = `# telegram_command_id=${commandId}\n${line}\n`;
+  const content =
+    `# telegram_command_id=${commandId}\n${line}\n`;
+
   try {
-    const commit = await updateGitHubFile(file, content, `bot: ${target.toUpperCase()} /script`, env);
-    await sendMessage(chatId, env, `✅ Đã gửi lệnh /script\nNhóm: ${target}\nURL: ${url}\nCommit: ${commit.slice(0,7)}`);
-  } catch (err) {
-    await sendMessage(chatId, env, `❌ Không gửi được /script: ${err.message}`);
+    const commit = await updateGitHubFile(
+      file,
+      content,
+      `bot: ${target.toUpperCase()} /script`,
+      env
+    );
+    await storeCommandMetadata(env, commandId, target, [line]);
+    await sendMessage(
+      chatId,
+      env,
+      `✅ Đã gửi lệnh /script\n` +
+        `Nhóm: ${target.toUpperCase()}\n` +
+        `URL: ${url}\n` +
+        `Commit: ${commit.slice(0, 7)}`
+    );
+  } catch (error) {
+    await sendMessage(
+      chatId,
+      env,
+      `❌ Không gửi được /script: ${error.message}`
+    );
   }
 }
 
@@ -1028,7 +1114,16 @@ async function handleAgentReport(request, env) {
     rec.device_id = device_id;
     rec.device_group = device_group;
     rec.last_seen = now;
-    rec.last_status = status;
+    rec.last_report_status = status;
+
+    if (status === "heartbeat") {
+      if (!rec.last_status) {
+        rec.last_status = "heartbeat";
+      }
+    } else {
+      rec.last_status = status;
+    }
+
     if (command_id) {
       rec.last_command_id = command_id;
       rec.last_command = command || rec.last_command || null;
@@ -1085,80 +1180,169 @@ async function showDevices(chatId, env) {
 }
 
 async function sendProgress(chatId, env) {
-  // find latest command meta stored in KV
   try {
-    // scan known cmd keys by listing (KV list), fallback: scan devices to find newest last_command_ts
-    let latest = { cmd: null, ts: 0 };
-    // check device records
-    const ids = [];
-    for (let i = 1; i <= 10; i++) ids.push(`MARMOT-${String(i).padStart(2,'0')}`);
-    for (let i = 1; i <= 10; i++) ids.push(`NOVA-${String(i).padStart(2,'0')}`);
-    const recs = [];
-    for (const id of ids) {
-      const r = await getDeviceRecord(id, env);
-      if (r) recs.push(r);
-      if (r && r.last_command_ts && r.last_command_ts > latest.ts) {
-        latest = { cmd: r.last_command_id, ts: r.last_command_ts };
+    let commandId = null;
+    let metadata = null;
+
+    const latestRaw =
+      await env.DEVICE_STATUS.get("latest_command");
+
+    if (latestRaw) {
+      try {
+        const latest = JSON.parse(latestRaw);
+        commandId = latest.command_id || null;
+      } catch (error) {
+        commandId = latestRaw.trim() || null;
       }
     }
 
-    if (!latest.cmd) {
-      return sendMessage(chatId, env, 'Không tìm thấy command gần đây để báo tiến độ.');
+    if (commandId) {
+      const metadataRaw =
+        await env.DEVICE_STATUS.get(`cmd:${commandId}`);
+      if (metadataRaw) {
+        try {
+          metadata = JSON.parse(metadataRaw);
+        } catch (error) {
+          metadata = null;
+        }
+      }
     }
 
-    // try load command meta
-    let meta = null;
-    try {
-      const mraw = await env.DEVICE_STATUS.get(`cmd:${latest.cmd}`);
-      if (mraw) meta = JSON.parse(mraw);
-    } catch (e) {}
+    // Fallback for commands created before latest_command existed.
+    if (!commandId) {
+      let newestTimestamp = 0;
 
-    const target = meta?.target || 'unknown';
-    const total_expected = meta?.total_expected || (target === 'marmot' || target === 'nova' ? 10 : 20);
+      for (const deviceId of deviceIdsForTarget("all")) {
+        const record = await getDeviceRecord(deviceId, env);
+        if (
+          record?.last_command_id &&
+          Number(record.last_command_ts || 0) > newestTimestamp
+        ) {
+          commandId = record.last_command_id;
+          newestTimestamp = Number(record.last_command_ts || 0);
+        }
+      }
 
-    const counts = { received: 0, running: 0, success: 0, error: 0, offline: 0, no_response: 0 };
+      if (commandId) {
+        const metadataRaw =
+          await env.DEVICE_STATUS.get(`cmd:${commandId}`);
+        if (metadataRaw) {
+          try {
+            metadata = JSON.parse(metadataRaw);
+          } catch (error) {
+            metadata = null;
+          }
+        }
+
+        if (!metadata) {
+          metadata = {
+            command_id: commandId,
+            target: "all",
+            commands: [],
+            command_count: 0,
+            device_count: 20,
+            created: newestTimestamp,
+          };
+        }
+      }
+    }
+
+    if (!commandId) {
+      await sendMessage(
+        chatId,
+        env,
+        "Không tìm thấy command gần đây để báo tiến độ."
+      );
+      return;
+    }
+
+    const target =
+      ["all", "marmot", "nova"].includes(metadata?.target)
+        ? metadata.target
+        : "all";
+    const deviceIds = deviceIdsForTarget(target);
+    const commands = Array.isArray(metadata?.commands)
+      ? metadata.commands
+      : [];
+    const counts = {
+      received: 0,
+      running: 0,
+      success: 0,
+      error: 0,
+      offline: 0,
+      no_response: 0,
+    };
     const now = Date.now();
-    for (const id of ids) {
-      const r = await getDeviceRecord(id, env);
-      if (!r) {
+
+    for (const deviceId of deviceIds) {
+      const record = await getDeviceRecord(deviceId, env);
+
+      if (
+        !record ||
+        now - Number(record.last_seen || 0) > 90 * 1000
+      ) {
         counts.offline += 1;
         continue;
       }
-      // if device is offline
-      if (now - (r.last_seen || 0) > 90 * 1000) {
-        counts.offline += 1;
-        continue;
-      }
-      if (r.last_command_id !== latest.cmd) {
+
+      if (record.last_command_id !== commandId) {
         counts.no_response += 1;
         continue;
       }
-      const s = r.last_status;
-      if (s === 'received') counts.received += 1;
-      else if (s === 'running') counts.running += 1;
-      else if (s === 'success') counts.success += 1;
-      else if (s === 'error') counts.error += 1;
-      else counts.no_response += 1;
+
+      switch (record.last_status) {
+        case "received":
+          counts.received += 1;
+          break;
+        case "running":
+          counts.running += 1;
+          break;
+        case "success":
+          counts.success += 1;
+          break;
+        case "error":
+          counts.error += 1;
+          break;
+        default:
+          counts.no_response += 1;
+          break;
+      }
     }
 
     const lines = [
-      `📊 Tiến độ cho command: ${latest.cmd}`,
+      `📊 Tiến độ command: ${commandId}`,
       `Nhóm: ${target.toUpperCase()}`,
-      `Tổng máy dự kiến: ${total_expected}`,
+      `Thời gian tạo: ${formatTimestamp(metadata?.created)}`,
+    ];
+
+    if (commands.length > 0) {
+      lines.push(
+        `Lệnh (${commands.length}):`,
+        ...commands.map((command) => `- ${command}`)
+      );
+    } else {
+      lines.push("Lệnh: chưa có metadata của command cũ");
+    }
+
+    lines.push(
+      `Tổng máy dự kiến: ${deviceIds.length}`,
       `Received: ${counts.received}`,
       `Running: ${counts.running}`,
       `Success: ${counts.success}`,
       `Error: ${counts.error}`,
       `Offline: ${counts.offline}`,
-      `No response / other: ${counts.no_response}`,
-    ];
+      `No response: ${counts.no_response}`
+    );
 
-    await sendMessage(chatId, env, lines.join('\n'));
-  } catch (e) {
-    await sendMessage(chatId, env, `Lỗi khi tổng hợp tiến độ: ${e.message}`);
+    await sendMessage(chatId, env, lines.join("\n"));
+  } catch (error) {
+    await sendMessage(
+      chatId,
+      env,
+      `Lỗi khi tổng hợp tiến độ: ${error.message}`
+    );
   }
 }
-
 
 function text(value, status = 200) {
   return new Response(value, {
