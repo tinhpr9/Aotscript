@@ -2413,27 +2413,94 @@ function formatTimestamp(ms) {
   }
 }
 
+function formatRelativeDeviceTime(ms, now = Date.now()) {
+  const timestamp = Number(ms);
+
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return "chưa rõ";
+  }
+
+  const elapsed = Math.max(0, now - timestamp);
+
+  if (elapsed < 15 * 1000) {
+    return "vừa xong";
+  }
+
+  if (elapsed < 60 * 1000) {
+    return `${Math.floor(elapsed / 1000)} giây trước`;
+  }
+
+  if (elapsed < 60 * 60 * 1000) {
+    return `${Math.floor(elapsed / (60 * 1000))} phút trước`;
+  }
+
+  if (elapsed < 24 * 60 * 60 * 1000) {
+    return `${Math.floor(elapsed / (60 * 60 * 1000))} giờ trước`;
+  }
+
+  if (elapsed < 7 * 24 * 60 * 60 * 1000) {
+    return `${Math.floor(elapsed / (24 * 60 * 60 * 1000))} ngày trước`;
+  }
+
+  try {
+    return new Intl.DateTimeFormat(
+      "vi-VN",
+      {
+        timeZone: "Asia/Ho_Chi_Minh",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }
+    ).format(new Date(timestamp));
+  } catch (error) {
+    return "chưa rõ";
+  }
+}
+
+function deviceStatusLabel(record, online) {
+  if (!online) {
+    return "Mất kết nối";
+  }
+
+  const status =
+    record?.last_status ||
+    record?.last_report_status ||
+    "heartbeat";
+
+  switch (status) {
+    case "received":
+      return "Đã nhận lệnh";
+
+    case "running":
+      return "Đang chạy lệnh";
+
+    case "success":
+      return "Đã hoàn tất lệnh";
+
+    case "error":
+      return "Có lỗi";
+
+    case "heartbeat":
+    default:
+      return "Đang kết nối";
+  }
+}
+
 
 async function showDevices(chatId, env) {
   const now = Date.now();
   const ids = await deviceIdsForTarget("all", env);
-
-  if (ids.length === 0) {
-    await sendMessage(
-      chatId,
-      env,
-      "Chưa có thiết bị nào gửi heartbeat hợp lệ."
-    );
-    return;
-  }
-
-  const lines = [
-    `📋 Danh sách ${ids.length} thiết bị đã phát hiện:`,
-  ];
+  const devices = [];
 
   for (const id of ids) {
     const record = await getDeviceRecord(id, env);
-    if (!record) continue;
+
+    if (!record) {
+      continue;
+    }
 
     const online =
       now - Number(record.last_seen || 0)
@@ -2445,43 +2512,85 @@ async function showDevices(chatId, env) {
       env
     );
 
-    const displayName =
-      alias
-        ? `${alias} [${id}]`
-        : id;
+    const usefulAlias =
+      alias &&
+      alias.trim().toLowerCase() !==
+        id.toLowerCase();
 
-    lines.push(
-      `${displayName} — ` +
-      `${online ? "online" : "offline"} — ` +
-      `nhóm: ${groupLabel} — ` +
-      `last_seen: ${formatTimestamp(record.last_seen)} — ` +
-      `status: ${record.last_status || "-"}` +
-      (
-        record.last_command_id
-          ? ` — cmd:${record.last_command_id}`
-          : ""
-      )
-    );
+    devices.push({
+      id,
+      online,
+      name: usefulAlias
+        ? alias.trim()
+        : `Máy ${id}`,
+      groupLabel,
+      activity:
+        formatRelativeDeviceTime(
+          record.last_seen,
+          now
+        ),
+      status:
+        deviceStatusLabel(record, online),
+    });
   }
 
-  lines.push("");
-  lines.push("Đổi tên máy: /rename m166 Tên dễ nhớ");
-  lines.push("Xóa tên máy: /rename m166 -");
-  lines.push("Xóa thiết bị: /delete m166");
-  lines.push("Đổi tên nhóm: /groupname nova Tên mới");
-  lines.push("Khôi phục tên nhóm: /groupname nova -");
+  if (devices.length === 0) {
+    await sendMessage(
+      chatId,
+      env,
+      "📋 THIẾT BỊ: 0\n\nChưa có thiết bị nào kết nối."
+    );
+    return;
+  }
+
+  devices.sort((left, right) => {
+    if (left.online !== right.online) {
+      return left.online ? -1 : 1;
+    }
+
+    return left.name.localeCompare(
+      right.name,
+      "vi",
+      {
+        numeric: true,
+        sensitivity: "base",
+      }
+    );
+  });
+
+  const lines = [
+    `📋 THIẾT BỊ: ${devices.length}`,
+    "",
+  ];
+
+  devices.forEach((device, index) => {
+    lines.push(
+      `${device.online ? "🟢" : "⚪"} ${device.name}`,
+      `ID: ${device.id}`,
+      `Nhóm: ${device.groupLabel}`,
+      `Hoạt động: ${device.activity}`,
+      `Trạng thái: ${device.status}`
+    );
+
+    if (index < devices.length - 1) {
+      lines.push("");
+    }
+  });
 
   let chunk = "";
 
   for (const line of lines) {
     const next =
       chunk
-        ? `${chunk}
-${line}`
+        ? `${chunk}\n${line}`
         : line;
 
     if (next.length > 3500) {
-      await sendMessage(chatId, env, chunk);
+      await sendMessage(
+        chatId,
+        env,
+        chunk
+      );
       chunk = line;
     } else {
       chunk = next;
@@ -2489,7 +2598,11 @@ ${line}`
   }
 
   if (chunk) {
-    await sendMessage(chatId, env, chunk);
+    await sendMessage(
+      chatId,
+      env,
+      chunk
+    );
   }
 }
 
