@@ -33,6 +33,7 @@ STATE_PATH = "/storage/emulated/0/Download/Shouko/agent_state.json"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
 AGENT_CONFIG_PATH = "/storage/emulated/0/Download/Shouko/agent_config.json"
+AGENT_VERSION = "fleet-ops-1"
 AUTOEXECUTE_DIR = "/storage/emulated/0/Delta/Autoexecute"
 GROUP_SCRIPT_FILE = os.path.join(AUTOEXECUTE_DIR, "group_script.lua")
 
@@ -74,6 +75,111 @@ def command_timestamp_for_sort(text):
             continue
 
     return max(timestamps) if timestamps else 0
+
+
+def normalize_command_device_id(value):
+    raw = str(value or "").strip()
+
+    dynamic_match = re.fullmatch(
+        r"m([1-9]\d{0,5})",
+        raw,
+        re.IGNORECASE,
+    )
+
+    if dynamic_match:
+        return f"m{dynamic_match.group(1)}"
+
+    legacy_match = re.fullmatch(
+        r"(MARMOT|NOVA)-(\d{2})",
+        raw,
+        re.IGNORECASE,
+    )
+
+    if not legacy_match:
+        return None
+
+    index = int(
+        legacy_match.group(2)
+    )
+
+    if index < 1 or index > 10:
+        return None
+
+    return (
+        f"{legacy_match.group(1).upper()}-"
+        f"{index:02d}"
+    )
+
+
+def command_metadata_before(
+    lines,
+    command_index,
+):
+    metadata = {
+        "target_ids": None,
+        "expires_at": 0,
+    }
+
+    cursor = command_index - 1
+
+    while cursor >= 0:
+        raw = lines[cursor].strip()
+
+        if not raw:
+            cursor -= 1
+            continue
+
+        if not raw.startswith("#"):
+            break
+
+        target_match = re.search(
+            r"telegram_target_ids\s*=\s*(.*)",
+            raw,
+            re.IGNORECASE,
+        )
+
+        if target_match:
+            target_ids = set()
+
+            for item in (
+                target_match.group(1)
+                .split(",")
+            ):
+                normalized = (
+                    normalize_command_device_id(
+                        item
+                    )
+                )
+
+                if normalized:
+                    target_ids.add(
+                        normalized
+                    )
+
+            metadata["target_ids"] = (
+                target_ids
+            )
+
+        expiry_match = re.search(
+            r"telegram_expires_at\s*=\s*(\d+)",
+            raw,
+            re.IGNORECASE,
+        )
+
+        if expiry_match:
+            try:
+                metadata["expires_at"] = int(
+                    expiry_match.group(1)
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                metadata["expires_at"] = 0
+
+        cursor -= 1
+
+    return metadata
 
 
 def load_agent_config():
@@ -163,6 +269,113 @@ def load_device_id():
         log_error("load_device_id", e)
         return None
 
+def read_first_text(path):
+    try:
+        with open(
+            path,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            return file.read().strip()
+    except Exception:
+        return ""
+
+
+def run_short_command(command):
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    return ""
+
+
+def collect_device_metrics():
+    metrics = {
+        "agent_version":
+            AGENT_VERSION,
+    }
+
+    capacity = read_first_text(
+        "/sys/class/power_supply/"
+        "battery/capacity"
+    )
+
+    if capacity.isdigit():
+        value = int(capacity)
+
+        if 0 <= value <= 100:
+            metrics["battery_level"] = value
+
+    battery_status = read_first_text(
+        "/sys/class/power_supply/"
+        "battery/status"
+    ).lower()
+
+    if battery_status:
+        metrics["charging"] = (
+            battery_status in {
+                "charging",
+                "full",
+            }
+        )
+
+    getprop = (
+        "/system/bin/getprop"
+        if os.path.exists(
+            "/system/bin/getprop"
+        )
+        else "getprop"
+    )
+
+    android_version = run_short_command(
+        [
+            getprop,
+            "ro.build.version.release",
+        ]
+    )
+
+    if android_version:
+        metrics["android_version"] = (
+            android_version[:32]
+        )
+
+    uptime_text = read_first_text(
+        "/proc/uptime"
+    )
+
+    if uptime_text:
+        try:
+            metrics["uptime_seconds"] = int(
+                float(
+                    uptime_text.split()[0]
+                )
+            )
+        except Exception:
+            pass
+
+    try:
+        storage = shutil.disk_usage(
+            "/storage/emulated/0"
+        )
+
+        metrics["storage_free_bytes"] = int(
+            storage.free
+        )
+    except Exception:
+        pass
+
+    return metrics
+
+
 def send_report_to_worker(report_url, secret, payload):
     try:
         if not report_url or not secret:
@@ -190,29 +403,66 @@ def send_report_to_worker(report_url, secret, payload):
         return False
 
 
-def heartbeat_loop(stop_event, device_id, state):
+
+def heartbeat_loop(
+    stop_event,
+    device_id,
+    state,
+):
     while not stop_event.is_set():
         current_group = get_device_group()
-        if current_group not in GROUP_COMMAND_URLS:
+
+        if (
+            current_group
+            not in GROUP_COMMAND_URLS
+        ):
             stop_event.wait(30)
             continue
 
         current_cfg = load_agent_config()
-        report_url = current_cfg.get("worker_report_url")
-        secret = current_cfg.get("agent_report_secret")
-        timestamp = datetime.datetime.utcnow().strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
+
+        report_url = current_cfg.get(
+            "worker_report_url"
         )
+
+        secret = current_cfg.get(
+            "agent_report_secret"
+        )
+
+        timestamp = (
+            datetime.datetime.utcnow()
+            .strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+        )
+
         payload = {
             "device_id": device_id,
             "device_group": current_group,
             "timestamp": timestamp,
             "status": "heartbeat",
-            "command_id": state.get("last_command_id", ""),
-            "last_result": state.get("last_result", ""),
+            "command_id":
+                state.get(
+                    "last_command_id",
+                    "",
+                ),
+            "last_result":
+                state.get(
+                    "last_result",
+                    "",
+                ),
         }
+
+        payload.update(
+            collect_device_metrics()
+        )
+
         try:
-            send_report_to_worker(report_url, secret, payload)
+            send_report_to_worker(
+                report_url,
+                secret,
+                payload,
+            )
         except Exception:
             pass
 
@@ -784,6 +1034,93 @@ if __name__ == "__main__":
                             group_cmds.append(line_j)
                             j += 1
 
+                        metadata = command_metadata_before(
+                            command_lines,
+                            i,
+                        )
+
+                        target_ids = metadata.get(
+                            "target_ids"
+                        )
+
+                        if (
+                            target_ids is not None
+                            and device_id not in target_ids
+                        ):
+                            print(
+                                f"[*] Bỏ qua COMMAND_ID={cmd_id}: "
+                                f"không nhắm tới {device_id}"
+                            )
+                            i = j
+                            continue
+
+                        expires_at = int(
+                            metadata.get(
+                                "expires_at",
+                                0,
+                            )
+                            or 0
+                        )
+
+                        if (
+                            expires_at > 0
+                            and int(time.time() * 1000)
+                            > expires_at
+                        ):
+                            current_cfg = load_agent_config()
+
+                            report_url = current_cfg.get(
+                                "worker_report_url"
+                            )
+
+                            secret = current_cfg.get(
+                                "agent_report_secret"
+                            )
+
+                            timestamp_expired = (
+                                datetime.datetime.utcnow()
+                                .strftime(
+                                    "%Y-%m-%dT%H:%M:%SZ"
+                                )
+                            )
+
+                            payload_expired = {
+                                "device_id": device_id,
+                                "device_group": group,
+                                "timestamp":
+                                    timestamp_expired,
+                                "status": "expired",
+                                "command_id": cmd_id,
+                                "command": None,
+                                "last_result": "expired",
+                            }
+
+                            try:
+                                send_report_to_worker(
+                                    report_url,
+                                    secret,
+                                    payload_expired,
+                                )
+                            except Exception:
+                                pass
+
+                            state["last_command_id"] = (
+                                cmd_id
+                            )
+
+                            state["last_result"] = (
+                                "expired"
+                            )
+
+                            save_state(state)
+
+                            print(
+                                f"[!] COMMAND_ID={cmd_id} "
+                                "đã hết hạn; không thực thi."
+                            )
+
+                            i = j
+                            continue
                         total_detected += len(group_cmds)
                         print(f"\n[!] PHÁT HIỆN COMMAND_ID={cmd_id} with {len(group_cmds)} lệnh (group={group})")
                         # report received for this command id

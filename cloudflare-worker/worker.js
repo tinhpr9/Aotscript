@@ -15,6 +15,18 @@ const PAIR_DEVICE_PREFIX = "pair_device:";
 const PAIR_RATE_PREFIX = "pair_rate:";
 const PAIR_TTL_SECONDS = 10 * 60;
 const PAIR_RATE_SECONDS = 60;
+const MAINTENANCE_PREFIX = "maintenance:";
+const COMMAND_TTL_MS = 5 * 60 * 1000;
+const COMMAND_METADATA_TTL_SECONDS = 30 * 24 * 60 * 60;
+const ONLINE_WINDOW_MS = 90 * 1000;
+const TARGETING_AGENT_VERSION = "fleet-ops-1";
+const DANGEROUS_COMMAND_KEYS = new Set([
+  "setup_boot",
+  "setup_caylapbu",
+  "run_caylapbu",
+  "update_delta",
+  "reboot",
+]);
 
 const COMMANDS = {
   idle: { value: "IDLE", bit: 1, label: "💤 IDLE" },
@@ -42,7 +54,14 @@ const COMMAND_ORDER = [
   "reboot",
 ];
 
-const ALLOWED_REPORT_STATUSES = ["heartbeat", "received", "running", "success", "error"];
+const ALLOWED_REPORT_STATUSES = [
+  "heartbeat",
+  "received",
+  "running",
+  "success",
+  "error",
+  "expired",
+];
 
 
 
@@ -102,7 +121,8 @@ function isDeviceStatusMetadataKey(name) {
     name.startsWith(GROUP_LABEL_PREFIX) ||
     name.startsWith(PAIR_PREFIX) ||
     name.startsWith(PAIR_DEVICE_PREFIX) ||
-    name.startsWith(PAIR_RATE_PREFIX)
+    name.startsWith(PAIR_RATE_PREFIX) ||
+    name.startsWith(MAINTENANCE_PREFIX)
   );
 }
 
@@ -218,13 +238,667 @@ async function deviceIdsForTarget(target, env) {
 }
 
 
+
+function maintenanceKey(deviceId) {
+  return `${MAINTENANCE_PREFIX}${deviceId}`;
+}
+
+async function isDeviceMaintenance(deviceId, env) {
+  return (
+    await env.DEVICE_STATUS.get(
+      maintenanceKey(deviceId)
+    )
+  ) === "1";
+}
+
+async function setDeviceMaintenance(
+  deviceId,
+  enabled,
+  env
+) {
+  if (enabled) {
+    await env.DEVICE_STATUS.put(
+      maintenanceKey(deviceId),
+      "1"
+    );
+  } else {
+    await env.DEVICE_STATUS.delete(
+      maintenanceKey(deviceId)
+    );
+  }
+}
+
+function normalizeDeviceIdList(values) {
+  const rawValues = Array.isArray(values)
+    ? values
+    : String(values || "").split(",");
+
+  const result = [];
+  const seen = new Set();
+
+  for (const rawValue of rawValues) {
+    const deviceId = normalizeDeviceId(
+      rawValue
+    );
+
+    if (!deviceId) {
+      throw new Error(
+        `Device ID không hợp lệ: ${rawValue}`
+      );
+    }
+
+    if (seen.has(deviceId)) {
+      throw new Error(
+        `Device ID bị lặp: ${deviceId}`
+      );
+    }
+
+    seen.add(deviceId);
+    result.push(deviceId);
+  }
+
+  return result.sort(compareDeviceIds);
+}
+
+async function activeDeviceIdsForTarget(
+  target,
+  env
+) {
+  const ids = await deviceIdsForTarget(
+    target,
+    env
+  );
+
+  const result = [];
+
+  for (const deviceId of ids) {
+    if (
+      !(await isDeviceMaintenance(
+        deviceId,
+        env
+      ))
+    ) {
+      result.push(deviceId);
+    }
+  }
+
+  return result;
+}
+
+async function validateDirectDeviceIds(
+  values,
+  env
+) {
+  const ids = normalizeDeviceIdList(
+    values
+  );
+
+  for (const deviceId of ids) {
+    const record = await getDeviceRecord(
+      deviceId,
+      env
+    );
+
+    if (!record) {
+      throw new Error(
+        `${deviceId} chưa từng kết nối`
+      );
+    }
+
+    if (
+      await isDeviceMaintenance(
+        deviceId,
+        env
+      )
+    ) {
+      throw new Error(
+        `${deviceId} đang ở chế độ bảo trì`
+      );
+    }
+
+    if (
+      record.agent_version !==
+      TARGETING_AGENT_VERSION
+    ) {
+      throw new Error(
+        `${deviceId} chưa cập nhật Agent hỗ trợ gửi riêng. ` +
+        "Hãy chạy lại msetup trên máy và chờ heartbeat."
+      );
+    }
+  }
+
+  return ids;
+}
+
+async function revalidateGroupDeviceIds(
+  values,
+  env
+) {
+  const ids = normalizeDeviceIdList(
+    values
+  );
+
+  const result = [];
+
+  for (const deviceId of ids) {
+    const record = await getDeviceRecord(
+      deviceId,
+      env
+    );
+
+    if (
+      record &&
+      !(await isDeviceMaintenance(
+        deviceId,
+        env
+      ))
+    ) {
+      result.push(deviceId);
+    }
+  }
+
+  return result;
+}
+
+async function deviceDisplayName(
+  deviceId,
+  env
+) {
+  const alias = await getDeviceAlias(
+    deviceId,
+    env
+  );
+
+  if (
+    alias &&
+    alias.trim().toLowerCase() !==
+      deviceId.toLowerCase()
+  ) {
+    return alias.trim();
+  }
+
+  return `Máy ${deviceId}`;
+}
+
+function commandEnvelope(
+  commandId,
+  deviceIds,
+  expiresAt,
+  commandLines
+) {
+  return [
+    `# telegram_target_ids=${deviceIds.join(",")}`,
+    `# telegram_expires_at=${expiresAt}`,
+    `# telegram_command_id=${commandId}`,
+    ...commandLines,
+    "",
+  ].join("\n");
+}
+
+function pendingDispatchCacheKey(token) {
+  return (
+    `https://aotscript.local/` +
+    `pending-dispatch/${token}`
+  );
+}
+
+async function savePendingDispatch(
+  token,
+  spec
+) {
+  await caches.default.put(
+    new Request(
+      pendingDispatchCacheKey(token)
+    ),
+    new Response(
+      JSON.stringify({
+        ...spec,
+        created: Date.now(),
+      }),
+      {
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+      }
+    )
+  );
+}
+
+async function loadPendingDispatch(token) {
+  const response = await caches.default.match(
+    new Request(
+      pendingDispatchCacheKey(token)
+    )
+  );
+
+  if (!response) return null;
+
+  try {
+    const value = JSON.parse(
+      await response.text()
+    );
+
+    if (
+      !value ||
+      typeof value.created !== "number" ||
+      Date.now() - value.created >
+        COMMAND_TTL_MS
+    ) {
+      await clearPendingDispatch(token);
+      return null;
+    }
+
+    return value;
+  } catch (error) {
+    await clearPendingDispatch(token);
+    return null;
+  }
+}
+
+async function clearPendingDispatch(token) {
+  await caches.default.delete(
+    new Request(
+      pendingDispatchCacheKey(token)
+    )
+  );
+}
+
+function parseCommandKeysText(value) {
+  const keys = String(value || "")
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
+
+  if (keys.length === 0) {
+    return null;
+  }
+
+  const unique = [...new Set(keys)];
+
+  if (
+    unique.some(
+      (key) => !COMMANDS[key]
+    )
+  ) {
+    return null;
+  }
+
+  if (
+    unique.includes("idle") &&
+    unique.length > 1
+  ) {
+    return null;
+  }
+
+  return unique;
+}
+
+function orderedCommandKeys(commandKeys) {
+  const selected = [
+    ...new Set(commandKeys || []),
+  ];
+
+  let ordered = COMMAND_ORDER.filter(
+    (key) => selected.includes(key)
+  );
+
+  if (ordered.includes("reboot")) {
+    ordered = ordered.filter(
+      (key) => key !== "reboot"
+    );
+    ordered.push("reboot");
+  }
+
+  return ordered;
+}
+
+function buildCommandLinesFromKeys(
+  commandKeys
+) {
+  return orderedCommandKeys(
+    commandKeys
+  ).map((key) => {
+    if (
+      key === "update_solver" ||
+      key === "update_script"
+    ) {
+      throw new Error(
+        "Lệnh Solver hoặc Script cần URL."
+      );
+    }
+
+    return COMMANDS[key].value;
+  });
+}
+
+async function resolveCommandSpec(
+  spec,
+  env
+) {
+  const commandLines = (
+    Array.isArray(spec.commandLines)
+      ? spec.commandLines
+      : []
+  )
+    .map((line) => String(line).trim())
+    .filter(Boolean);
+
+  if (
+    commandLines.length === 0 ||
+    commandLines.length > 20 ||
+    commandLines.some(
+      (line) =>
+        line.includes("\n") ||
+        line.includes("\r") ||
+        line.length > 2000
+    )
+  ) {
+    throw new Error(
+      "Nội dung lệnh không hợp lệ."
+    );
+  }
+
+  const commandKeys = [
+    ...new Set(
+      Array.isArray(spec.commandKeys)
+        ? spec.commandKeys
+        : []
+    ),
+  ];
+
+  if (
+    commandKeys.length === 0 ||
+    commandKeys.some(
+      (key) => !COMMANDS[key]
+    )
+  ) {
+    throw new Error(
+      "Loại lệnh không hợp lệ."
+    );
+  }
+
+  if (
+    Array.isArray(spec.deviceIds) &&
+    spec.deviceIds.length > 0
+  ) {
+    const deviceIds =
+      await validateDirectDeviceIds(
+        spec.deviceIds,
+        env
+      );
+
+    return {
+      target: "devices",
+      fileTarget: "all",
+      targetLabel:
+        deviceIds.length === 1
+          ? await deviceDisplayName(
+              deviceIds[0],
+              env
+            )
+          : `${deviceIds.length} máy đã chọn`,
+      deviceIds,
+      commandKeys,
+      commandLines,
+    };
+  }
+
+  const target = String(
+    spec.target || ""
+  ).toLowerCase();
+
+  if (!TARGET_FILES[target]) {
+    throw new Error(
+      "Nhóm máy không hợp lệ."
+    );
+  }
+
+  const deviceIds =
+    await activeDeviceIdsForTarget(
+      target,
+      env
+    );
+
+  if (deviceIds.length === 0) {
+    throw new Error(
+      "Không có thiết bị đủ điều kiện nhận lệnh."
+    );
+  }
+
+  return {
+    target,
+    fileTarget: target,
+    targetLabel:
+      await getTargetLabel(target, env),
+    deviceIds,
+    commandKeys,
+    commandLines,
+  };
+}
+
+async function requestCommandDispatch(
+  chatId,
+  spec,
+  env,
+  options = {}
+) {
+  let resolved;
+
+  try {
+    resolved = await resolveCommandSpec(
+      spec,
+      env
+    );
+  } catch (error) {
+    await sendMessage(
+      chatId,
+      env,
+      `❌ Không thể chuẩn bị lệnh: ${error.message}`
+    );
+    return null;
+  }
+
+  const dangerous =
+    resolved.commandKeys.some(
+      (key) =>
+        DANGEROUS_COMMAND_KEYS.has(key)
+    );
+
+  if (
+    dangerous &&
+    !options.confirmed
+  ) {
+    const token =
+      crypto.randomUUID()
+        .replace(/-/g, "")
+        .slice(0, 12);
+
+    await savePendingDispatch(
+      token,
+      resolved
+    );
+
+    const summary =
+      resolved.commandLines
+        .map((line) => {
+          const shortLine =
+            line.length > 240
+              ? line.slice(0, 237) + "..."
+              : line;
+
+          return `- ${shortLine}`;
+        })
+        .join("\n");
+
+    await sendMessage(
+      chatId,
+      env,
+      `⚠️ XÁC NHẬN LỆNH\n\n` +
+        `Đích: ${resolved.targetLabel}\n` +
+        `Số máy: ${resolved.deviceIds.length}\n` +
+        `Lệnh:\n${summary}\n\n` +
+        "Lệnh hết hạn sau 5 phút.",
+      {
+        inline_keyboard: [
+          [
+            {
+              text: "✅ XÁC NHẬN",
+              callback_data:
+                `dispatch_ok:${token}`,
+            },
+            {
+              text: "❌ HỦY",
+              callback_data:
+                `dispatch_cancel:${token}`,
+            },
+          ],
+        ],
+      }
+    );
+
+    return null;
+  }
+
+  try {
+    return await dispatchCommandSpec(
+      chatId,
+      resolved,
+      env
+    );
+  } catch (error) {
+    await sendMessage(
+      chatId,
+      env,
+      `❌ Không gửi được lệnh: ${error.message}`
+    );
+    return null;
+  }
+}
+
+async function dispatchCommandSpec(
+  chatId,
+  spec,
+  env
+) {
+  const deviceIds =
+    spec.target === "devices"
+      ? await validateDirectDeviceIds(
+          spec.deviceIds,
+          env
+        )
+      : await revalidateGroupDeviceIds(
+          spec.deviceIds,
+          env
+        );
+
+  if (deviceIds.length === 0) {
+    throw new Error(
+      "Không còn thiết bị đủ điều kiện nhận lệnh."
+    );
+  }
+
+  const file =
+    TARGET_FILES[spec.fileTarget];
+
+  if (!file) {
+    throw new Error(
+      "Không xác định được file lệnh."
+    );
+  }
+
+  const commandId =
+    `${Date.now()}-` +
+    crypto.randomUUID().slice(0, 8);
+
+  const created = Date.now();
+  const expiresAt =
+    created + COMMAND_TTL_MS;
+
+  const content = commandEnvelope(
+    commandId,
+    deviceIds,
+    expiresAt,
+    spec.commandLines
+  );
+
+  const commandName =
+    spec.commandKeys
+      .map(
+        (key) => COMMANDS[key].value
+      )
+      .join(" + ");
+
+  const commit = await updateGitHubFile(
+    file,
+    content,
+    `bot: ${spec.targetLabel} ${commandName}`,
+    env
+  );
+
+  await storeCommandMetadata(
+    env,
+    commandId,
+    spec.target,
+    spec.commandLines,
+    {
+      targetLabel:
+        spec.targetLabel,
+      fileTarget:
+        spec.fileTarget,
+      deviceIds,
+      commandKeys:
+        spec.commandKeys,
+      created,
+      expiresAt,
+    }
+  );
+
+  await sendMessage(
+    chatId,
+    env,
+    `✅ Đã gửi tới ${deviceIds.length} máy\n` +
+      `Đích: ${spec.targetLabel}\n` +
+      `Lệnh:\n- ${spec.commandLines.join("\n- ")}\n` +
+      `Hết hạn: 5 phút\n` +
+      `Commit: ${commit.slice(0, 7)}`,
+    {
+      inline_keyboard: [
+        [
+          {
+            text: "CẬP NHẬT TIẾN ĐỘ",
+            callback_data:
+              "show_progress",
+          },
+          {
+            text: "DANH SÁCH MÁY",
+            callback_data:
+              "show_devices",
+          },
+        ],
+      ],
+    }
+  );
+
+  return {
+    commandId,
+    deviceIds,
+    commit,
+  };
+}
+
+
 async function storeCommandMetadata(
   env,
   commandId,
   target,
-  commands
+  commands,
+  options = {}
 ) {
-  if (!TARGET_FILES[target]) {
+  if (
+    target !== "devices" &&
+    !TARGET_FILES[target]
+  ) {
     throw new Error(
       `Invalid command target: ${target}`
     );
@@ -232,27 +906,54 @@ async function storeCommandMetadata(
 
   const commandList =
     Array.isArray(commands)
-      ? commands
+      ? commands.map(String)
       : [String(commands)];
 
-  const created = Date.now();
-
   const deviceIds =
-    await deviceIdsForTarget(target, env);
+    normalizeDeviceIdList(
+      options.deviceIds || []
+    );
+
+  const created =
+    Number(options.created) ||
+    Date.now();
+
+  const expiresAt =
+    Number(options.expiresAt) ||
+    created + COMMAND_TTL_MS;
 
   const metadata = {
     command_id: commandId,
     target,
+    target_label:
+      options.targetLabel ||
+      target.toUpperCase(),
+    file_target:
+      options.fileTarget ||
+      target,
     commands: commandList,
-    command_count: commandList.length,
-    device_count: deviceIds.length,
-    device_ids: deviceIds,
+    command_keys:
+      Array.isArray(options.commandKeys)
+        ? options.commandKeys
+        : [],
+    command_count:
+      commandList.length,
+    device_count:
+      deviceIds.length,
+    device_ids:
+      deviceIds,
     created,
+    expires_at:
+      expiresAt,
   };
 
   await env.DEVICE_STATUS.put(
     `cmd:${commandId}`,
-    JSON.stringify(metadata)
+    JSON.stringify(metadata),
+    {
+      expirationTtl:
+        COMMAND_METADATA_TTL_SECONDS,
+    }
   );
 
   await env.DEVICE_STATUS.put(
@@ -1020,6 +1721,9 @@ async function deleteDevice(
     env.DEVICE_STATUS.delete(
       `${DEVICE_ALIAS_PREFIX}${deviceId}`
     ),
+    env.DEVICE_STATUS.delete(
+      maintenanceKey(deviceId)
+    ),
   ]);
 
   await sendMessage(
@@ -1105,6 +1809,9 @@ export default {
             { command: "start", description: "Mở bảng điều khiển" },
             { command: "status", description: "Xem lệnh hiện tại" },
             { command: "devices", description: "Danh sách thiết bị" },
+            { command: "device", description: "Chi tiết một thiết bị" },
+            { command: "to", description: "Gửi lệnh tới máy cụ thể" },
+            { command: "maintenance", description: "Bật hoặc tắt bảo trì" },
             { command: "rename", description: "Đổi tên thiết bị" },
             { command: "delete", description: "Xóa thiết bị khỏi danh sách" },
             { command: "groupname", description: "Đổi tên hiển thị nhóm" },
@@ -1202,6 +1909,161 @@ async function handleUpdate(update, env) {
 
   if (input === "/devices") {
     await showDevices(chatId, env);
+    return;
+  }
+
+  const deviceMatch =
+    input.match(
+      /^\/device\s+(\S+)$/i
+    );
+
+  if (deviceMatch) {
+    await showDeviceDetail(
+      chatId,
+      deviceMatch[1],
+      env
+    );
+    return;
+  }
+
+  const maintenanceMatch =
+    input.match(
+      /^\/maintenance\s+(\S+)\s+(on|off)$/i
+    );
+
+  if (maintenanceMatch) {
+    await changeDeviceMaintenance(
+      chatId,
+      maintenanceMatch[1],
+      maintenanceMatch[2]
+        .toLowerCase() === "on",
+      env
+    );
+    return;
+  }
+
+  const directSolverMatch =
+    input.match(
+      /^\/to\s+([A-Za-z0-9_,-]+)\s+solver\s+(https?:\/\/\S+)$/i
+    );
+
+  if (directSolverMatch) {
+    const url = directSolverMatch[2];
+
+    if (!isValidUrl(url)) {
+      await sendMessage(
+        chatId,
+        env,
+        "URL Solver không hợp lệ."
+      );
+      return;
+    }
+
+    await requestCommandDispatch(
+      chatId,
+      {
+        deviceIds:
+          directSolverMatch[1].split(","),
+        commandKeys:
+          ["update_solver"],
+        commandLines:
+          [`UPDATE_SOLVER ${url}`],
+      },
+      env
+    );
+    return;
+  }
+
+  const directScriptMatch =
+    input.match(
+      /^\/to\s+([A-Za-z0-9_,-]+)\s+script\s+(https?:\/\/\S+)$/i
+    );
+
+  if (directScriptMatch) {
+    const url = directScriptMatch[2];
+
+    if (!isValidUrl(url)) {
+      await sendMessage(
+        chatId,
+        env,
+        "URL Script không hợp lệ."
+      );
+      return;
+    }
+
+    await requestCommandDispatch(
+      chatId,
+      {
+        deviceIds:
+          directScriptMatch[1].split(","),
+        commandKeys:
+          ["update_script"],
+        commandLines:
+          [`Updatescript ${url}`],
+      },
+      env
+    );
+    return;
+  }
+
+  const directMatch =
+    input.match(
+      /^\/to\s+([A-Za-z0-9_,-]+)\s+(.+)$/i
+    );
+
+  if (directMatch) {
+    const commandKeys =
+      parseCommandKeysText(
+        directMatch[2]
+      );
+
+    if (
+      !commandKeys ||
+      commandKeys.includes(
+        "update_solver"
+      ) ||
+      commandKeys.includes(
+        "update_script"
+      )
+    ) {
+      await sendMessage(
+        chatId,
+        env,
+        "Cú pháp không hợp lệ.\n" +
+          "Ví dụ: /to m166 idle\n" +
+          "Nhiều máy: /to m166,m167 reboot\n" +
+          "Solver: /to m166 solver https://...\n" +
+          "Script: /to m166 script https://..."
+      );
+      return;
+    }
+
+    let commandLines;
+
+    try {
+      commandLines =
+        buildCommandLinesFromKeys(
+          commandKeys
+        );
+    } catch (error) {
+      await sendMessage(
+        chatId,
+        env,
+        `❌ ${error.message}`
+      );
+      return;
+    }
+
+    await requestCommandDispatch(
+      chatId,
+      {
+        deviceIds:
+          directMatch[1].split(","),
+        commandKeys,
+        commandLines,
+      },
+      env
+    );
     return;
   }
 
@@ -1554,81 +2416,348 @@ async function sendSessionSummary(chatId, state, env) {
   await sendMessage(chatId, env, lines.join("\n"), replyMarkup);
 }
 
-async function executeSessionCommands(chatId, state, env) {
-  const file = TARGET_FILES[state.target];
-  const normalizedKeys = [...new Set(state.commandKeys)];
 
-  if (!file || normalizedKeys.length === 0 || normalizedKeys.some((key) => !COMMANDS[key])) {
-    await sendMessage(chatId, env, "Target hoặc lệnh không hợp lệ.");
-    await clearSessionState(state.userId, state.chatId);
-    return;
-  }
-
-  if (normalizedKeys.includes("idle") && normalizedKeys.length > 1) {
-    await sendMessage(chatId, env, "IDLE phải đứng một mình, không thể gửi kèm lệnh khác.");
-    await clearSessionState(state.userId, state.chatId);
-    return;
-  }
-
-  let orderedKeys = COMMAND_ORDER.filter((key) => normalizedKeys.includes(key));
-  if (orderedKeys.includes("reboot")) {
-    orderedKeys = orderedKeys.filter((k) => k !== "reboot");
-    orderedKeys.push("reboot");
-  }
-
-  const commandLines = orderedKeys.map((key) => {
-    if (key === "update_solver") {
-      return `/solver ${state.target} ${state.solverUrl}`;
-    }
-    if (key === "update_script") {
-      return `/script ${state.target} ${state.scriptUrl}`;
-    }
-    return COMMANDS[key].value;
-  });
-
-  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-  const content = `# telegram_command_id=${commandId}\n${commandLines.join("\n")}\n`;
-
+async function executeSessionCommands(
+  chatId,
+  state,
+  env
+) {
   try {
-    const commit = await updateGitHubFile(
-      file,
-      content,
-      `bot: ${state.target.toUpperCase()} ${commandLines.join(" + ")}`,
-      env
+    const commandLines =
+      orderedCommandKeys(
+        state.commandKeys
+      ).map((key) => {
+        if (key === "update_solver") {
+          if (
+            !isValidUrl(
+              state.solverUrl
+            )
+          ) {
+            throw new Error(
+              "URL Solver không hợp lệ."
+            );
+          }
+
+          return (
+            `/solver ${state.target} ` +
+            `${state.solverUrl}`
+          );
+        }
+
+        if (key === "update_script") {
+          if (
+            !isValidUrl(
+              state.scriptUrl
+            )
+          ) {
+            throw new Error(
+              "URL Script không hợp lệ."
+            );
+          }
+
+          return (
+            `/script ${state.target} ` +
+            `${state.scriptUrl}`
+          );
+        }
+
+        return COMMANDS[key].value;
+      });
+
+    await requestCommandDispatch(
+      chatId,
+      {
+        target: state.target,
+        commandKeys:
+          state.commandKeys,
+        commandLines,
+      },
+      env,
+      {
+        confirmed: true,
+      }
     );
-      const replyMarkup = {
-        inline_keyboard: [[
-          { text: "CẬP NHẬT TIẾN ĐỘ", callback_data: `show_progress` },
-          { text: "DANH SÁCH MÁY", callback_data: `show_devices` },
-        ]],
-      };
-
-      await storeCommandMetadata(
-        env,
-        commandId,
-        state.target,
-        commandLines
-      );
-
-      await sendMessage(
-        chatId,
-        env,
-        `✅ Đã gửi ${commandLines.length} lệnh\n` +
-          `Nhóm: ${state.target.toUpperCase()}\n` +
-          `Lệnh:\n- ${commandLines.join("\n- ")}\n` +
-          `File: ${file}\n` +
-          `Commit: ${commit.slice(0, 7)}`,
-        replyMarkup
-      );
   } catch (error) {
-    await sendMessage(chatId, env, `❌ Không gửi được lệnh: ${error.message}`);
+    await sendMessage(
+      chatId,
+      env,
+      `❌ Không gửi được lệnh: ${error.message}`
+    );
   } finally {
-    await clearSessionState(state.userId, state.chatId);
+    await clearSessionState(
+      state.userId,
+      state.chatId
+    );
   }
 }
 
 async function handleCallback(callback, chatId, messageId, env, fromId) {
   const data = callback.data || "";
+
+  if (
+    data.startsWith(
+      "dispatch_ok:"
+    )
+  ) {
+    const token = data.slice(
+      "dispatch_ok:".length
+    );
+
+    const pending =
+      await loadPendingDispatch(
+        token
+      );
+
+    if (!pending) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Xác nhận đã hết hạn.",
+        true
+      );
+      return;
+    }
+
+    await clearPendingDispatch(token);
+
+    await answerCallback(
+      callback.id,
+      env,
+      "Đang gửi lệnh..."
+    );
+
+    await requestCommandDispatch(
+      chatId,
+      pending,
+      env,
+      {
+        confirmed: true,
+      }
+    );
+    return;
+  }
+
+  if (
+    data.startsWith(
+      "dispatch_cancel:"
+    )
+  ) {
+    await clearPendingDispatch(
+      data.slice(
+        "dispatch_cancel:".length
+      )
+    );
+
+    await answerCallback(
+      callback.id,
+      env,
+      "Đã hủy."
+    );
+    return;
+  }
+
+  if (
+    data.startsWith(
+      "devicecmd:"
+    )
+  ) {
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await showDeviceCommands(
+      chatId,
+      data.slice(
+        "devicecmd:".length
+      ),
+      0,
+      env,
+      messageId
+    );
+    return;
+  }
+
+  if (data.startsWith("dpick:")) {
+    const parts = data.split(":");
+    const deviceId =
+      normalizeDeviceId(parts[1]);
+    const mask = Number(parts[2]);
+    const commandKey = parts[3];
+
+    if (
+      !deviceId ||
+      !Number.isInteger(mask) ||
+      !COMMANDS[commandKey]
+    ) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Lựa chọn không hợp lệ.",
+        true
+      );
+      return;
+    }
+
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await showDeviceCommands(
+      chatId,
+      deviceId,
+      toggleCommand(
+        mask,
+        commandKey
+      ),
+      env,
+      messageId
+    );
+    return;
+  }
+
+  if (data.startsWith("dsend:")) {
+    const parts = data.split(":");
+    const deviceId =
+      normalizeDeviceId(parts[1]);
+    const mask = Number(parts[2]);
+    const commandKeys =
+      commandKeysFromMask(mask);
+
+    if (
+      !deviceId ||
+      commandKeys.length === 0
+    ) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Bạn chưa chọn lệnh.",
+        true
+      );
+      return;
+    }
+
+    if (
+      commandKeys.includes(
+        "update_solver"
+      ) ||
+      commandKeys.includes(
+        "update_script"
+      )
+    ) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Dùng lệnh /to để nhập URL.",
+        true
+      );
+      return;
+    }
+
+    let commandLines;
+
+    try {
+      commandLines =
+        buildCommandLinesFromKeys(
+          commandKeys
+        );
+    } catch (error) {
+      await answerCallback(
+        callback.id,
+        env,
+        error.message,
+        true
+      );
+      return;
+    }
+
+    await answerCallback(
+      callback.id,
+      env,
+      "Đang chuẩn bị lệnh..."
+    );
+
+    await requestCommandDispatch(
+      chatId,
+      {
+        deviceIds: [deviceId],
+        commandKeys,
+        commandLines,
+      },
+      env
+    );
+    return;
+  }
+
+  if (
+    data.startsWith(
+      "maintenance_toggle:"
+    )
+  ) {
+    const deviceId =
+      normalizeDeviceId(
+        data.slice(
+          "maintenance_toggle:".length
+        )
+      );
+
+    if (!deviceId) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Device ID không hợp lệ.",
+        true
+      );
+      return;
+    }
+
+    const enabled =
+      !(await isDeviceMaintenance(
+        deviceId,
+        env
+      ));
+
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await changeDeviceMaintenance(
+      chatId,
+      deviceId,
+      enabled,
+      env,
+      {
+        silent: true,
+      }
+    );
+
+    await showDeviceDetail(
+      chatId,
+      deviceId,
+      env,
+      messageId
+    );
+    return;
+  }
+
+  if (data.startsWith("device:")) {
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await showDeviceDetail(
+      chatId,
+      data.slice(
+        "device:".length
+      ),
+      env,
+      messageId
+    );
+    return;
+  }
 
   if (data.startsWith("pair_approve:")) {
     await handlePairDecision(
@@ -1699,20 +2828,6 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
       return;
     }
 
-    const needsConfirm = commandKeys.some((k) => ["run_caylapbu", "update_delta", "reboot"].includes(k));
-    if (needsConfirm) {
-      await answerCallback(callback.id, env);
-      const confirmMarkup = {
-        inline_keyboard: [
-          [
-            { text: "❗ Xác nhận gửi", callback_data: `confirm:${target}:${mask}` },
-            { text: "❌ Hủy", callback_data: `cancel:${target}:${mask}` },
-          ],
-        ],
-      };
-      await sendMessage(chatId, env, `Xác nhận gửi ${commandKeys.length} lệnh?`, confirmMarkup);
-      return;
-    }
 
     await answerCallback(callback.id, env, "Đang gửi lệnh...");
     await executeCommands(chatId, target, commandKeys, env);
@@ -1851,10 +2966,26 @@ function commandKeysFromMask(mask) {
   );
 }
 
-async function showTargets(chatId, env, messageId) {
-  const marmotLabel = await getGroupLabel("MARMOT", env);
-  const novaLabel = await getGroupLabel("NOVA", env);
-  const textValue = "Chọn nhóm máy:";
+
+async function showTargets(
+  chatId,
+  env,
+  messageId
+) {
+  const marmotLabel =
+    await getGroupLabel(
+      "MARMOT",
+      env
+    );
+
+  const novaLabel =
+    await getGroupLabel(
+      "NOVA",
+      env
+    );
+
+  const textValue =
+    "Chọn nhóm hoặc chọn từng máy:";
 
   const replyMarkup = {
     inline_keyboard: [
@@ -1865,17 +2996,31 @@ async function showTargets(chatId, env, messageId) {
         },
         {
           text: `🦫 ${marmotLabel}`,
-          callback_data: "target:marmot",
+          callback_data:
+            "target:marmot",
         },
       ],
       [
         {
           text: `✨ ${novaLabel}`,
-          callback_data: "target:nova",
+          callback_data:
+            "target:nova",
         },
+        {
+          text: "🎯 TỪNG MÁY",
+          callback_data:
+            "show_devices",
+        },
+      ],
+      [
         {
           text: "📋 TRẠNG THÁI",
           callback_data: "status",
+        },
+        {
+          text: "📊 TIẾN ĐỘ",
+          callback_data:
+            "show_progress",
         },
       ],
     ],
@@ -1944,64 +3089,53 @@ async function showCommands(chatId, target, mask, env, messageId) {
   }
 }
 
-async function executeCommands(chatId, target, commandKeys, env) {
-  const file = TARGET_FILES[target];
-  const normalizedKeys = [...new Set(commandKeys)];
 
-  if (!file || normalizedKeys.length === 0 || normalizedKeys.some((key) => !COMMANDS[key])) {
-    await sendMessage(chatId, env, "Target hoặc lệnh không hợp lệ.");
+async function executeCommands(
+  chatId,
+  target,
+  commandKeys,
+  env,
+  options = {}
+) {
+  if (
+    !TARGET_FILES[target] ||
+    !Array.isArray(commandKeys) ||
+    commandKeys.length === 0
+  ) {
+    await sendMessage(
+      chatId,
+      env,
+      "Target hoặc lệnh không hợp lệ."
+    );
     return;
   }
 
-  if (normalizedKeys.includes("idle") && normalizedKeys.length > 1) {
-    await sendMessage(chatId, env, "IDLE phải đứng một mình, không thể gửi kèm lệnh khác.");
-    return;
-  }
-
-  let orderedKeys = COMMAND_ORDER.filter((key) => normalizedKeys.includes(key));
-  // Ensure REBOOT if present is always last
-  if (orderedKeys.includes("reboot")) {
-    orderedKeys = orderedKeys.filter((k) => k !== "reboot");
-    orderedKeys.push("reboot");
-  }
-  const commandValues = orderedKeys.map((key) => COMMANDS[key].value);
-  const commandId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-  const content = `# telegram_command_id=${commandId}\n${commandValues.join("\n")}\n`;
+  let commandLines;
 
   try {
-    const commit = await updateGitHubFile(
-      file,
-      content,
-      `bot: ${target.toUpperCase()} ${commandValues.join(" + ")}`,
-      env
-    );
-      const replyMarkup = {
-        inline_keyboard: [[
-          { text: "CẬP NHẬT TIẾN ĐỘ", callback_data: `show_progress` },
-          { text: "DANH SÁCH MÁY", callback_data: `show_devices` },
-        ]],
-      };
-
-      await storeCommandMetadata(
-        env,
-        commandId,
-        target,
-        commandValues
-      );
-
-      await sendMessage(
-        chatId,
-        env,
-        `✅ Đã gửi ${commandValues.length} lệnh\n` +
-          `Nhóm: ${target.toUpperCase()}\n` +
-          `Lệnh:\n- ${commandValues.join("\n- ")}\n` +
-          `File: ${file}\n` +
-          `Commit: ${commit.slice(0, 7)}`,
-        replyMarkup
+    commandLines =
+      buildCommandLinesFromKeys(
+        commandKeys
       );
   } catch (error) {
-    await sendMessage(chatId, env, `❌ Không gửi được lệnh: ${error.message}`);
+    await sendMessage(
+      chatId,
+      env,
+      `❌ ${error.message}`
+    );
+    return;
   }
+
+  await requestCommandDispatch(
+    chatId,
+    {
+      target,
+      commandKeys,
+      commandLines,
+    },
+    env,
+    options
+  );
 }
 
 async function sendStatus(chatId, env) {
@@ -2077,70 +3211,44 @@ function isValidUrl(u) {
   }
 }
 
-async function executeSolverCommand(chatId, target, url, env) {
-  const file = TARGET_FILES[target];
-  const commandId =
-    `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-  const line = `/solver ${target} ${url}`;
-  const content =
-    `# telegram_command_id=${commandId}\n${line}\n`;
 
-  try {
-    const commit = await updateGitHubFile(
-      file,
-      content,
-      `bot: ${target.toUpperCase()} /solver`,
-      env
-    );
-    await storeCommandMetadata(env, commandId, target, [line]);
-    await sendMessage(
-      chatId,
-      env,
-      `✅ Đã gửi lệnh /solver\n` +
-        `Nhóm: ${target.toUpperCase()}\n` +
-        `URL: ${url}\n` +
-        `Commit: ${commit.slice(0, 7)}`
-    );
-  } catch (error) {
-    await sendMessage(
-      chatId,
-      env,
-      `❌ Không gửi được /solver: ${error.message}`
-    );
-  }
+async function executeSolverCommand(
+  chatId,
+  target,
+  url,
+  env
+) {
+  await requestCommandDispatch(
+    chatId,
+    {
+      target,
+      commandKeys:
+        ["update_solver"],
+      commandLines:
+        [`/solver ${target} ${url}`],
+    },
+    env
+  );
 }
 
-async function executeScriptCommand(chatId, target, url, env) {
-  const file = TARGET_FILES[target];
-  const commandId =
-    `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-  const line = `/script ${target} ${url}`;
-  const content =
-    `# telegram_command_id=${commandId}\n${line}\n`;
 
-  try {
-    const commit = await updateGitHubFile(
-      file,
-      content,
-      `bot: ${target.toUpperCase()} /script`,
-      env
-    );
-    await storeCommandMetadata(env, commandId, target, [line]);
-    await sendMessage(
-      chatId,
-      env,
-      `✅ Đã gửi lệnh /script\n` +
-        `Nhóm: ${target.toUpperCase()}\n` +
-        `URL: ${url}\n` +
-        `Commit: ${commit.slice(0, 7)}`
-    );
-  } catch (error) {
-    await sendMessage(
-      chatId,
-      env,
-      `❌ Không gửi được /script: ${error.message}`
-    );
-  }
+async function executeScriptCommand(
+  chatId,
+  target,
+  url,
+  env
+) {
+  await requestCommandDispatch(
+    chatId,
+    {
+      target,
+      commandKeys:
+        ["update_script"],
+      commandLines:
+        [`/script ${target} ${url}`],
+    },
+    env
+  );
 }
 
 async function sendMessage(chatId, env, textValue, replyMarkup) {
@@ -2369,6 +3477,70 @@ async function handleAgentReport(request, env) {
       record.last_result = last_result;
     }
 
+    const batteryNumber =
+      Number(body.battery_level);
+
+    if (
+      Number.isFinite(batteryNumber) &&
+      batteryNumber >= 0 &&
+      batteryNumber <= 100
+    ) {
+      record.battery_level =
+        Math.round(batteryNumber);
+    }
+
+    if (
+      typeof body.charging ===
+      "boolean"
+    ) {
+      record.charging =
+        body.charging;
+    }
+
+    const androidLabel =
+      sanitizeLabel(
+        body.android_version,
+        32
+      );
+
+    if (androidLabel) {
+      record.android_version =
+        androidLabel;
+    }
+
+    const agentLabel =
+      sanitizeLabel(
+        body.agent_version,
+        64
+      );
+
+    if (agentLabel) {
+      record.agent_version =
+        agentLabel;
+    }
+
+    const uptimeNumber =
+      Number(body.uptime_seconds);
+
+    if (
+      Number.isFinite(uptimeNumber) &&
+      uptimeNumber >= 0
+    ) {
+      record.uptime_seconds =
+        Math.floor(uptimeNumber);
+    }
+
+    const storageNumber =
+      Number(body.storage_free_bytes);
+
+    if (
+      Number.isFinite(storageNumber) &&
+      storageNumber >= 0
+    ) {
+      record.storage_free_bytes =
+        Math.floor(storageNumber);
+    }
+
     await env.DEVICE_STATUS.put(
       key,
       JSON.stringify(record)
@@ -2483,6 +3655,9 @@ function deviceStatusLabel(record, online) {
     case "error":
       return "Có lỗi";
 
+    case "expired":
+      return "Lệnh đã hết hạn";
+
     case "heartbeat":
     default:
       return "Đang kết nối";
@@ -2490,39 +3665,464 @@ function deviceStatusLabel(record, online) {
 }
 
 
-async function showDevices(chatId, env) {
+
+function formatByteCount(value) {
+  const bytes = Number(value);
+
+  if (
+    !Number.isFinite(bytes) ||
+    bytes < 0
+  ) {
+    return "chưa rõ";
+  }
+
+  if (bytes >= 1024 ** 3) {
+    return (
+      `${(bytes / 1024 ** 3).toFixed(1)} GB`
+    );
+  }
+
+  if (bytes >= 1024 ** 2) {
+    return (
+      `${(bytes / 1024 ** 2).toFixed(0)} MB`
+    );
+  }
+
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+function formatUptimeSeconds(value) {
+  const seconds = Number(value);
+
+  if (
+    !Number.isFinite(seconds) ||
+    seconds < 0
+  ) {
+    return "chưa rõ";
+  }
+
+  const days =
+    Math.floor(seconds / 86400);
+
+  const hours =
+    Math.floor(
+      (seconds % 86400) / 3600
+    );
+
+  const minutes =
+    Math.floor(
+      (seconds % 3600) / 60
+    );
+
+  const parts = [];
+
+  if (days > 0) {
+    parts.push(`${days} ngày`);
+  }
+
+  if (hours > 0) {
+    parts.push(`${hours} giờ`);
+  }
+
+  parts.push(`${minutes} phút`);
+
+  return parts.join(" ");
+}
+
+async function changeDeviceMaintenance(
+  chatId,
+  rawDeviceId,
+  enabled,
+  env,
+  options = {}
+) {
+  const deviceId =
+    normalizeDeviceId(rawDeviceId);
+
+  if (!deviceId) {
+    await sendMessage(
+      chatId,
+      env,
+      "Device ID không hợp lệ."
+    );
+    return false;
+  }
+
+  const record =
+    await getDeviceRecord(
+      deviceId,
+      env
+    );
+
+  if (!record) {
+    await sendMessage(
+      chatId,
+      env,
+      `Không tìm thấy ${deviceId}.`
+    );
+    return false;
+  }
+
+  if (
+    record.agent_version !==
+    TARGETING_AGENT_VERSION
+  ) {
+    await sendMessage(
+      chatId,
+      env,
+      `${deviceId} chưa cập nhật Agent hỗ trợ bảo trì. ` +
+      "Hãy chạy lại msetup và chờ heartbeat."
+    );
+    return false;
+  }
+
+  await setDeviceMaintenance(
+    deviceId,
+    enabled,
+    env
+  );
+
+  if (!options.silent) {
+    await sendMessage(
+      chatId,
+      env,
+      enabled
+        ? `🛠 Đã bật bảo trì cho ${deviceId}.`
+        : `✅ Đã tắt bảo trì cho ${deviceId}.`
+    );
+  }
+
+  return true;
+}
+
+async function showDeviceDetail(
+  chatId,
+  rawDeviceId,
+  env,
+  messageId
+) {
+  const deviceId =
+    normalizeDeviceId(rawDeviceId);
+
+  if (!deviceId) {
+    await sendMessage(
+      chatId,
+      env,
+      "Device ID không hợp lệ."
+    );
+    return;
+  }
+
+  const record =
+    await getDeviceRecord(
+      deviceId,
+      env
+    );
+
+  if (!record) {
+    await sendMessage(
+      chatId,
+      env,
+      `Không tìm thấy ${deviceId}.`
+    );
+    return;
+  }
+
   const now = Date.now();
-  const ids = await deviceIdsForTarget("all", env);
-  const devices = [];
 
-  for (const id of ids) {
-    const record = await getDeviceRecord(id, env);
+  const online =
+    now - Number(
+      record.last_seen || 0
+    ) <= ONLINE_WINDOW_MS;
 
-    if (!record) {
-      continue;
-    }
+  const maintenance =
+    await isDeviceMaintenance(
+      deviceId,
+      env
+    );
 
-    const online =
-      now - Number(record.last_seen || 0)
-      <= 90 * 1000;
+  const name =
+    await deviceDisplayName(
+      deviceId,
+      env
+    );
 
-    const alias = await getDeviceAlias(id, env);
-    const groupLabel = await getGroupLabel(
+  const groupLabel =
+    await getGroupLabel(
       record.device_group,
       env
     );
 
-    const usefulAlias =
-      alias &&
-      alias.trim().toLowerCase() !==
-        id.toLowerCase();
+  const batteryNumber =
+    Number(record.battery_level);
+
+  const battery =
+    Number.isFinite(batteryNumber)
+      ? `${batteryNumber}%`
+      : "chưa rõ";
+
+  const charging =
+    record.charging === true
+      ? " — đang sạc"
+      : record.charging === false
+        ? " — không sạc"
+        : "";
+
+  const compatible =
+    record.agent_version ===
+    TARGETING_AGENT_VERSION;
+
+  const resultText =
+    String(
+      record.last_result ||
+      "Không có"
+    ).slice(0, 180);
+
+  const textValue =
+    `${online ? "🟢" : "⚪"} ${name}\n` +
+    `ID: ${deviceId}\n` +
+    `Nhóm: ${groupLabel}\n` +
+    `Chế độ: ${maintenance ? "🛠 Bảo trì" : "Hoạt động"}\n` +
+    `Kết nối: ${online ? "Đang online" : "Mất kết nối"}\n` +
+    `Hoạt động: ${formatRelativeDeviceTime(record.last_seen, now)}\n\n` +
+    `Pin: ${battery}${charging}\n` +
+    `Android: ${record.android_version || "chưa rõ"}\n` +
+    `Agent: ${record.agent_version || "bản cũ"}\n` +
+    `Gửi riêng: ${compatible ? "Sẵn sàng" : "Chưa cập nhật"}\n` +
+    `Uptime: ${formatUptimeSeconds(record.uptime_seconds)}\n` +
+    `Bộ nhớ trống: ${formatByteCount(record.storage_free_bytes)}\n\n` +
+    `Lệnh cuối: ${record.last_command || "-"}\n` +
+    `Trạng thái: ${deviceStatusLabel(record, online)}\n` +
+    `Kết quả: ${resultText}`;
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        {
+          text: "🎯 GỬI LỆNH",
+          callback_data:
+            `devicecmd:${deviceId}`,
+        },
+        {
+          text: maintenance
+            ? "✅ TẮT BẢO TRÌ"
+            : "🛠 BẬT BẢO TRÌ",
+          callback_data:
+            `maintenance_toggle:${deviceId}`,
+        },
+      ],
+      [
+        {
+          text: "⬅️ DANH SÁCH",
+          callback_data:
+            "show_devices",
+        },
+      ],
+    ],
+  };
+
+  if (messageId) {
+    await editMessage(
+      chatId,
+      messageId,
+      env,
+      textValue,
+      replyMarkup
+    );
+  } else {
+    await sendMessage(
+      chatId,
+      env,
+      textValue,
+      replyMarkup
+    );
+  }
+}
+
+async function showDeviceCommands(
+  chatId,
+  rawDeviceId,
+  mask,
+  env,
+  messageId
+) {
+  const deviceId =
+    normalizeDeviceId(rawDeviceId);
+
+  const record =
+    deviceId
+      ? await getDeviceRecord(
+          deviceId,
+          env
+        )
+      : null;
+
+  if (!deviceId || !record) {
+    await sendMessage(
+      chatId,
+      env,
+      "Không tìm thấy thiết bị."
+    );
+    return;
+  }
+
+  if (
+    record.agent_version !==
+    TARGETING_AGENT_VERSION
+  ) {
+    await sendMessage(
+      chatId,
+      env,
+      `${deviceId} chưa cập nhật Agent hỗ trợ gửi riêng.`
+    );
+    return;
+  }
+
+  if (
+    await isDeviceMaintenance(
+      deviceId,
+      env
+    )
+  ) {
+    await sendMessage(
+      chatId,
+      env,
+      `${deviceId} đang bảo trì nên không nhận lệnh mới.`
+    );
+    return;
+  }
+
+  const name =
+    await deviceDisplayName(
+      deviceId,
+      env
+    );
+
+  const selected =
+    commandKeysFromMask(mask);
+
+  const button = (key) => ({
+    text:
+      `${mask & COMMANDS[key].bit ? "✅" : "⬜"} ` +
+      `${COMMANDS[key].label}`,
+    callback_data:
+      `dpick:${deviceId}:${mask}:${key}`,
+  });
+
+  const textValue =
+    `Máy đã chọn: ${name}\n` +
+    `ID: ${deviceId}\n` +
+    `Đã chọn: ${
+      selected.length
+        ? selected
+            .map(
+              (key) =>
+                COMMANDS[key].value
+            )
+            .join(", ")
+        : "Chưa chọn"
+    }`;
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        button("idle"),
+        button("setup_vip"),
+      ],
+      [
+        button("install_track"),
+        button("setup_boot"),
+      ],
+      [
+        button("setup_caylapbu"),
+        button("run_caylapbu"),
+      ],
+      [
+        button("update_delta"),
+        button("reboot"),
+      ],
+      [
+        {
+          text:
+            `✅ GỬI ${selected.length} LỆNH`,
+          callback_data:
+            `dsend:${deviceId}:${mask}`,
+        },
+      ],
+      [
+        {
+          text: "⬅️ CHI TIẾT MÁY",
+          callback_data:
+            `device:${deviceId}`,
+        },
+      ],
+    ],
+  };
+
+  if (messageId) {
+    await editMessage(
+      chatId,
+      messageId,
+      env,
+      textValue,
+      replyMarkup
+    );
+  } else {
+    await sendMessage(
+      chatId,
+      env,
+      textValue,
+      replyMarkup
+    );
+  }
+}
+
+
+async function showDevices(chatId, env) {
+  const now = Date.now();
+
+  const ids =
+    await deviceIdsForTarget(
+      "all",
+      env
+    );
+
+  const devices = [];
+
+  for (const id of ids) {
+    const record =
+      await getDeviceRecord(id, env);
+
+    if (!record) continue;
+
+    const online =
+      now - Number(
+        record.last_seen || 0
+      ) <= ONLINE_WINDOW_MS;
+
+    const maintenance =
+      await isDeviceMaintenance(
+        id,
+        env
+      );
+
+    const name =
+      await deviceDisplayName(
+        id,
+        env
+      );
+
+    const groupLabel =
+      await getGroupLabel(
+        record.device_group,
+        env
+      );
 
     devices.push({
       id,
+      name,
       online,
-      name: usefulAlias
-        ? alias.trim()
-        : `Máy ${id}`,
+      maintenance,
       groupLabel,
       activity:
         formatRelativeDeviceTime(
@@ -2530,7 +4130,12 @@ async function showDevices(chatId, env) {
           now
         ),
       status:
-        deviceStatusLabel(record, online),
+        maintenance
+          ? "Đang bảo trì"
+          : deviceStatusLabel(
+              record,
+              online
+            ),
     });
   }
 
@@ -2544,7 +4149,18 @@ async function showDevices(chatId, env) {
   }
 
   devices.sort((left, right) => {
-    if (left.online !== right.online) {
+    if (
+      left.maintenance !==
+      right.maintenance
+    ) {
+      return left.maintenance
+        ? 1
+        : -1;
+    }
+
+    if (
+      left.online !== right.online
+    ) {
       return left.online ? -1 : 1;
     }
 
@@ -2563,19 +4179,48 @@ async function showDevices(chatId, env) {
     "",
   ];
 
-  devices.forEach((device, index) => {
+  for (const device of devices) {
+    const icon =
+      device.maintenance
+        ? "🛠"
+        : device.online
+          ? "🟢"
+          : "⚪";
+
     lines.push(
-      `${device.online ? "🟢" : "⚪"} ${device.name}`,
+      `${icon} ${device.name}`,
       `ID: ${device.id}`,
       `Nhóm: ${device.groupLabel}`,
       `Hoạt động: ${device.activity}`,
-      `Trạng thái: ${device.status}`
+      `Trạng thái: ${device.status}`,
+      ""
     );
+  }
 
-    if (index < devices.length - 1) {
-      lines.push("");
-    }
-  });
+  const buttons = [];
+
+  for (
+    let index = 0;
+    index < devices.length;
+    index += 2
+  ) {
+    buttons.push(
+      devices
+        .slice(index, index + 2)
+        .map((device) => ({
+          text:
+            `${
+              device.maintenance
+                ? "🛠"
+                : device.online
+                  ? "🟢"
+                  : "⚪"
+            } ${device.name.slice(0, 22)}`,
+          callback_data:
+            `device:${device.id}`,
+        }))
+    );
+  }
 
   let chunk = "";
 
@@ -2589,7 +4234,7 @@ async function showDevices(chatId, env) {
       await sendMessage(
         chatId,
         env,
-        chunk
+        chunk.trim()
       );
       chunk = line;
     } else {
@@ -2601,7 +4246,10 @@ async function showDevices(chatId, env) {
     await sendMessage(
       chatId,
       env,
-      chunk
+      chunk.trim(),
+      {
+        inline_keyboard: buttons,
+      }
     );
   }
 }
@@ -2721,7 +4369,7 @@ async function sendProgress(chatId, env) {
     }
 
     const target =
-      ["all", "marmot", "nova"].includes(
+      ["all", "marmot", "nova", "devices"].includes(
         metadata?.target
       )
         ? metadata.target
@@ -2808,7 +4456,7 @@ async function sendProgress(chatId, env) {
 
     const lines = [
       `📊 Tiến độ command: ${commandId}`,
-      `Nhóm: ${target.toUpperCase()}`,
+      `Đích: ${metadata?.target_label || target.toUpperCase()}`,
       `Thời gian tạo: ${
         formatTimestamp(metadata?.created)
       }`,
