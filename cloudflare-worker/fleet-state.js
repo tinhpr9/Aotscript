@@ -250,6 +250,18 @@ export class FleetState
         body.agent_version
           .slice(0, 64);
     }
+
+    if (
+      typeof body
+        .reload_novagag2_capable ===
+        "boolean"
+    ) {
+      record
+        .reload_novagag2_capable =
+        body
+          .reload_novagag2_capable;
+    }
+
     const uptime =
       Number(
         body.uptime_seconds

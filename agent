@@ -34,8 +34,13 @@ DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
 AGENT_CONFIG_PATH = "/storage/emulated/0/Download/Shouko/agent_config.json"
 AGENT_VERSION = "fleet-ops-1"
+RELOAD_NOVAGAG2_CAPABLE = True
 AUTOEXECUTE_DIR = "/storage/emulated/0/Delta/Autoexecute"
 GROUP_SCRIPT_FILE = os.path.join(AUTOEXECUTE_DIR, "group_script.lua")
+GROUP_SCRIPT_BACKUP_FILE = (
+    "/storage/emulated/0/Download/Shouko/"
+    "group_script.lua.bak"
+)
 
 
 def log_error(action_name, exception_obj, group=None):
@@ -302,6 +307,8 @@ def collect_device_metrics():
     metrics = {
         "agent_version":
             AGENT_VERSION,
+        "reload_novagag2_capable":
+            RELOAD_NOVAGAG2_CAPABLE,
     }
 
     capacity = read_first_text(
@@ -572,32 +579,190 @@ def is_valid_url(url):
         return False
 
 
+
 def install_group_script(group):
     if group not in GROUP_SCRIPT_URLS:
-        log_error("install_group_script", ValueError(f"Unsupported group: {group}"), group)
-        return
-    script_url = GROUP_SCRIPT_URLS[group]
-    if not is_valid_url(script_url):
-        log_error("install_group_script", ValueError(f"Invalid group script URL: {script_url}"), group)
-        return
-    try:
-        os.makedirs(AUTOEXECUTE_DIR, exist_ok=True)
-        if os.path.exists(GROUP_SCRIPT_FILE):
-            os.remove(GROUP_SCRIPT_FILE)
-        if "?" in script_url:
-            lua_body = f'loadstring(game:HttpGet("{script_url}&t=" .. tostring(os.time())))()'
-        else:
-            lua_body = f'loadstring(game:HttpGet("{script_url}?t=" .. tostring(os.time())))()'
-        with open(GROUP_SCRIPT_FILE, "w", encoding="utf-8") as f:
-            f.write(lua_body + "\n")
-        with open(GROUP_SCRIPT_FILE, "r", encoding="utf-8") as f:
-            actual = f.read().strip()
-        if actual != lua_body:
-            raise IOError("Group script verification failed")
-        print(f"[+] INSTALL_GROUP_SCRIPT: group={group}, url={script_url}, file={GROUP_SCRIPT_FILE}")
-    except Exception as e:
-        log_error("install_group_script", e, group)
+        log_error(
+            "install_group_script",
+            ValueError(
+                f"Unsupported group: {group}"
+            ),
+            group,
+        )
+        return False
 
+    script_url = GROUP_SCRIPT_URLS[group]
+
+    if not is_valid_url(script_url):
+        log_error(
+            "install_group_script",
+            ValueError(
+                "Invalid group script URL"
+            ),
+            group,
+        )
+        return False
+
+    temp_file = (
+        GROUP_SCRIPT_FILE
+        + ".tmp"
+    )
+
+    rollback_file = (
+        GROUP_SCRIPT_FILE
+        + ".rollback.tmp"
+    )
+
+    had_original = os.path.exists(
+        GROUP_SCRIPT_FILE
+    )
+
+    replaced = False
+
+    try:
+        os.makedirs(
+            AUTOEXECUTE_DIR,
+            exist_ok=True,
+        )
+
+        ensure_parent_dir(
+            GROUP_SCRIPT_BACKUP_FILE
+        )
+
+        if "?" in script_url:
+            lua_body = (
+                'loadstring(game:HttpGet("'
+                + script_url
+                + '&t=" .. tostring(os.time())))()'
+            )
+        else:
+            lua_body = (
+                'loadstring(game:HttpGet("'
+                + script_url
+                + '?t=" .. tostring(os.time())))()'
+            )
+
+        content = (
+            lua_body.rstrip()
+            + "\n"
+        )
+
+        with open(
+            temp_file,
+            "w",
+            encoding="utf-8",
+            newline="\n",
+        ) as file:
+            file.write(content)
+            file.flush()
+            os.fsync(
+                file.fileno()
+            )
+
+        with open(
+            temp_file,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            temporary_content = (
+                file.read()
+            )
+
+        if temporary_content != content:
+            raise IOError(
+                "Temporary group script verification failed"
+            )
+
+        if had_original:
+            shutil.copy2(
+                GROUP_SCRIPT_FILE,
+                GROUP_SCRIPT_BACKUP_FILE,
+            )
+
+        os.replace(
+            temp_file,
+            GROUP_SCRIPT_FILE,
+        )
+
+        replaced = True
+
+        with open(
+            GROUP_SCRIPT_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            installed_content = (
+                file.read()
+            )
+
+        if installed_content != content:
+            raise IOError(
+                "Installed group script verification failed"
+            )
+
+        print(
+            "[+] INSTALL_GROUP_SCRIPT: "
+            f"group={group}, "
+            f"url={script_url}, "
+            f"file={GROUP_SCRIPT_FILE}"
+        )
+
+        return True
+
+    except Exception as error:
+        for temporary_path in (
+            temp_file,
+            rollback_file,
+        ):
+            if os.path.exists(
+                temporary_path
+            ):
+                try:
+                    os.remove(
+                        temporary_path
+                    )
+                except Exception:
+                    pass
+
+        if replaced:
+            try:
+                if (
+                    had_original
+                    and os.path.exists(
+                        GROUP_SCRIPT_BACKUP_FILE
+                    )
+                ):
+                    shutil.copy2(
+                        GROUP_SCRIPT_BACKUP_FILE,
+                        rollback_file,
+                    )
+
+                    os.replace(
+                        rollback_file,
+                        GROUP_SCRIPT_FILE,
+                    )
+
+                elif os.path.exists(
+                    GROUP_SCRIPT_FILE
+                ):
+                    os.remove(
+                        GROUP_SCRIPT_FILE
+                    )
+
+            except Exception as rollback_error:
+                log_error(
+                    "install_group_script_rollback",
+                    rollback_error,
+                    group,
+                )
+
+        log_error(
+            "install_group_script",
+            error,
+            group,
+        )
+
+        return False
 
 def install_custom_script(script_url):
     print(f"\n[*] PHÁT HIỆN LINK SCRIPT MỚI, ĐANG DÁN VÀO DELTA...")
@@ -1169,6 +1334,16 @@ if __name__ == "__main__":
                                     link = single_cmd.split(" ", 1)[1].strip()
                                     install_custom_script(link)
 
+                                elif single_cmd == "RELOAD_NOVAGAG2":
+                                    if group != "NOVA":
+                                        raise RuntimeError(
+                                            "RELOAD_NOVAGAG2 chỉ hợp lệ cho NOVA"
+                                        )
+                                    if not install_group_script(group):
+                                        raise RuntimeError(
+                                            "Không thể nạp lại Novagag2"
+                                        )
+
                                 elif single_cmd == "UPDATE_DELTA":
                                     auto_update_system()
 
@@ -1273,6 +1448,16 @@ if __name__ == "__main__":
                 if single_cmd.startswith("Updatescript "):
                     link = single_cmd.split(" ", 1)[1].strip()
                     install_custom_script(link)
+
+                elif single_cmd == "RELOAD_NOVAGAG2":
+                    if group != "NOVA":
+                        raise RuntimeError(
+                            "RELOAD_NOVAGAG2 chỉ hợp lệ cho NOVA"
+                        )
+                    if not install_group_script(group):
+                        raise RuntimeError(
+                            "Không thể nạp lại Novagag2"
+                        )
 
                 elif single_cmd == "UPDATE_DELTA":
                     auto_update_system()

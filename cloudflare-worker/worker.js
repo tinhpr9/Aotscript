@@ -74,6 +74,13 @@ const COMMANDS = {
   update_delta: { value: "UPDATE_DELTA", bit: 64, label: "🔁 DELTA" },
   update_solver: { value: "UPDATE_SOLVER", bit: 256, label: "🧠 SOLVER" },
   update_script: { value: "UPDATESCRIPT", bit: 512, label: "📝 SCRIPT" },
+
+  reload_novagag2: {
+    value: "RELOAD_NOVAGAG2",
+    bit: 1024,
+    label: "🔄 NOVAGAG2",
+  },
+
   reboot: { value: "REBOOT", bit: 128, label: "🔌 REBOOT" },
 };
 
@@ -3783,6 +3790,139 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
     return;
   }
 
+
+  if (
+    data.startsWith(
+      "reload_novagag2:"
+    )
+  ) {
+    const deviceId =
+      normalizeDeviceId(
+        data.slice(
+          "reload_novagag2:"
+            .length
+        )
+      );
+
+    if (!deviceId) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Device ID không hợp lệ.",
+        true
+      );
+      return;
+    }
+
+    const record =
+      await getDeviceRecord(
+        deviceId,
+        env
+      );
+
+    if (!record) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Không tìm thấy thiết bị.",
+        true
+      );
+      return;
+    }
+
+    if (
+      normalizeDeviceGroup(
+        record.device_group
+      ) !== "NOVA"
+    ) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Novagag2 chỉ dành cho NHÓM 2.",
+        true
+      );
+      return;
+    }
+
+    if (
+      record
+        .reload_novagag2_capable !==
+        true
+    ) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Máy chưa cập nhật Agent hỗ trợ lệnh này.",
+        true
+      );
+      return;
+    }
+
+    if (
+      Date.now() -
+        Number(
+          record.last_seen || 0
+        ) >
+        ONLINE_WINDOW_MS
+    ) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Máy đang offline.",
+        true
+      );
+      return;
+    }
+
+    if (
+      await isDeviceMaintenance(
+        deviceId,
+        env
+      )
+    ) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Máy đang bảo trì.",
+        true
+      );
+      return;
+    }
+
+    await answerCallback(
+      callback.id,
+      env,
+      "Đang gửi lệnh nạp lại..."
+    );
+
+    const dispatched =
+      await requestCommandDispatch(
+        chatId,
+        {
+          deviceIds: [
+            deviceId,
+          ],
+          commandKeys: [
+            "reload_novagag2",
+          ],
+          commandLines: [
+            "RELOAD_NOVAGAG2",
+          ],
+        },
+        env
+      );
+
+    if (dispatched) {
+      await sendMessage(
+        chatId,
+        env,
+        "Sau khi tiến độ báo thành công, hãy đóng hẳn Roblox/Delta rồi mở lại."
+      );
+    }
+
+    return;
+  }
+
   if (data.startsWith("dpick:")) {
     const parts = data.split(":");
     const deviceId =
@@ -4736,6 +4876,18 @@ async function handleAgentReport(request, env) {
     payload.agent_version =
       agentLabel;
   }
+
+  if (
+    typeof body
+      .reload_novagag2_capable ===
+      "boolean"
+  ) {
+    payload
+      .reload_novagag2_capable =
+      body
+        .reload_novagag2_capable;
+  }
+
   const uptimeNumber =
     Number(body.uptime_seconds);
   if (
@@ -5238,6 +5390,7 @@ async function showDeviceDetail(
   }
 }
 
+
 async function showDeviceCommands(
   chatId,
   rawDeviceId,
@@ -5308,6 +5461,14 @@ async function showDeviceCommands(
       `dpick:${deviceId}:${mask}:${key}`,
   });
 
+  const canReloadNovagag2 =
+    normalizeDeviceGroup(
+      record.device_group
+    ) === "NOVA" &&
+    record
+      .reload_novagag2_capable ===
+      true;
+
   const textValue =
     `Máy đã chọn: ${name}\n` +
     `ID: ${deviceId}\n` +
@@ -5322,40 +5483,57 @@ async function showDeviceCommands(
         : "Chưa chọn"
     }`;
 
-  const replyMarkup = {
-    inline_keyboard: [
-      [
-        button("idle"),
-        button("setup_vip"),
-      ],
-      [
-        button("install_track"),
-        button("setup_boot"),
-      ],
-      [
-        button("setup_caylapbu"),
-        button("run_caylapbu"),
-      ],
-      [
-        button("update_delta"),
-        button("reboot"),
-      ],
-      [
-        {
-          text:
-            `✅ GỬI ${selected.length} LỆNH`,
-          callback_data:
-            `dsend:${deviceId}:${mask}`,
-        },
-      ],
-      [
-        {
-          text: "⬅️ CHI TIẾT MÁY",
-          callback_data:
-            `device:${deviceId}`,
-        },
-      ],
+  const rows = [
+    [
+      button("idle"),
+      button("setup_vip"),
     ],
+    [
+      button("install_track"),
+      button("setup_boot"),
+    ],
+    [
+      button("setup_caylapbu"),
+      button("run_caylapbu"),
+    ],
+    [
+      button("update_delta"),
+      button("reboot"),
+    ],
+  ];
+
+  if (canReloadNovagag2) {
+    rows.push([
+      {
+        text:
+          "🔄 NẠP LẠI NOVAGAG2",
+        callback_data:
+          `reload_novagag2:${deviceId}`,
+      },
+    ]);
+  }
+
+  rows.push(
+    [
+      {
+        text:
+          `✅ GỬI ${selected.length} LỆNH`,
+        callback_data:
+          `dsend:${deviceId}:${mask}`,
+      },
+    ],
+    [
+      {
+        text:
+          "⬅️ CHI TIẾT MÁY",
+        callback_data:
+          `device:${deviceId}`,
+      },
+    ]
+  );
+
+  const replyMarkup = {
+    inline_keyboard: rows,
   };
 
   if (messageId) {
@@ -5375,8 +5553,6 @@ async function showDeviceCommands(
     );
   }
 }
-
-
 
 function healthStateKey(deviceId) {
   return `${HEALTH_STATE_PREFIX}${deviceId}`;
