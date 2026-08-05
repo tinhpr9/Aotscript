@@ -5,6 +5,8 @@ import {
   handleRolloutCommand,
   isRolloutMetadataKey,
 } from "./rollout.js";
+import { FleetState } from "./fleet-state.js";
+export { FleetState };
 
 const OWNER = "tinhpr9";
 const REPO = "Aotscript";
@@ -289,70 +291,293 @@ function compareDeviceIds(left, right) {
   );
 }
 
+
+function fleetStateStub(env) {
+  if (!env.FLEET_STATE) {
+    throw new Error(
+      "Thiếu Durable Object binding FLEET_STATE"
+    );
+  }
+  const objectId =
+    env.FLEET_STATE.idFromName(
+      "aotscript-fleet"
+    );
+  return env.FLEET_STATE.get(
+    objectId
+  );
+}
+async function fleetStateCall(
+  env,
+  pathname,
+  options = {}
+) {
+  const headers = {
+    Accept: "application/json",
+  };
+  const init = {
+    method:
+      options.method || "GET",
+    headers,
+  };
+  if (
+    Object.prototype.hasOwnProperty.call(
+      options,
+      "body"
+    )
+  ) {
+    headers["Content-Type"] =
+      "application/json";
+    init.body =
+      JSON.stringify(options.body);
+  }
+  const response =
+    await fleetStateStub(env).fetch(
+      new Request(
+        `https://fleet-state.internal${pathname}`,
+        init
+      )
+    );
+  const raw =
+    await response.text();
+  let data = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch (error) {
+      data = {
+        ok: false,
+        error:
+          "invalid_fleet_state_response",
+      };
+    }
+  }
+  return {
+    response,
+    data,
+  };
+}
+async function reportFleetDevice(
+  env,
+  payload
+) {
+  let result =
+    await fleetStateCall(
+      env,
+      "/report",
+      {
+        method: "POST",
+        body: payload,
+      }
+    );
+  if (
+    result.response.status === 409 &&
+    result.data?.error ===
+      "revocation_unknown"
+  ) {
+    const revoked =
+      await isDeviceRevoked(
+        payload.device_id,
+        env
+      );
+    result =
+      await fleetStateCall(
+        env,
+        "/report",
+        {
+          method: "POST",
+          body: {
+            ...payload,
+            revocation_checked:
+              true,
+            revoked,
+          },
+        }
+      );
+  }
+  return result;
+}
+async function listFleetDeviceRecords(
+  env
+) {
+  const result =
+    await fleetStateCall(
+      env,
+      "/devices"
+    );
+  if (!result.response.ok) {
+    throw new Error(
+      result.data?.error ||
+      `Fleet state HTTP ${result.response.status}`
+    );
+  }
+  return Array.isArray(
+    result.data?.records
+  )
+    ? result.data.records
+    : [];
+}
+async function getFleetDeviceRecord(
+  env,
+  deviceId
+) {
+  const result =
+    await fleetStateCall(
+      env,
+      `/device?id=${encodeURIComponent(deviceId)}`
+    );
+  if (result.response.status === 404) {
+    return null;
+  }
+  if (!result.response.ok) {
+    throw new Error(
+      result.data?.error ||
+      `Fleet state HTTP ${result.response.status}`
+    );
+  }
+  return (
+    result.data?.record &&
+    typeof result.data.record ===
+      "object"
+  )
+    ? result.data.record
+    : null;
+}
+async function setFleetDeviceRevocation(
+  env,
+  deviceId,
+  revoked
+) {
+  const result =
+    await fleetStateCall(
+      env,
+      revoked
+        ? "/revoke"
+        : "/restore",
+      {
+        method: "POST",
+        body: {
+          device_id: deviceId,
+        },
+      }
+    );
+  if (!result.response.ok) {
+    throw new Error(
+      result.data?.error ||
+      `Fleet revocation HTTP ${result.response.status}`
+    );
+  }
+}
+
+
 async function deviceIdsForTarget(target, env) {
   const wantedGroup =
     target === "all"
       ? null
       : normalizeDeviceGroup(target);
-
   if (target !== "all" && !wantedGroup) {
     throw new Error(
       `Invalid device target: ${target}`
     );
   }
-
-  // Chỉ lấy thiết bị đã thực sự gửi heartbeat/report vào KV.
   const ids = new Set();
-
-  let cursor;
-
-  do {
-    const page = await env.DEVICE_STATUS.list({
-      limit: 1000,
-      ...(cursor ? { cursor } : {}),
-    });
-
-    for (const item of page.keys || []) {
-      if (isDeviceStatusMetadataKey(item.name)) {
-        continue;
-      }
-
-      const record =
-        await getDeviceRecord(item.name, env);
-
-      if (!record) continue;
-
+  try {
+    const durableRecords =
+      await listFleetDeviceRecords(
+        env
+      );
+    for (
+      const record
+      of durableRecords
+    ) {
       const deviceId =
         normalizeDeviceId(
-          record.device_id || item.name
+          record?.device_id
         );
-
+      const deviceGroup =
+        normalizeDeviceGroup(
+          record?.device_group
+        );
+      if (
+        !deviceId ||
+        !deviceGroup ||
+        (
+          wantedGroup &&
+          deviceGroup !== wantedGroup
+        )
+      ) {
+        continue;
+      }
+      if (
+        await isDeviceRevoked(
+          deviceId,
+          env
+        )
+      ) {
+        continue;
+      }
+      ids.add(deviceId);
+    }
+  } catch (error) {
+    console.error(
+      "fleet_state_list_failed",
+      error?.message || error
+    );
+  }
+  let cursor;
+  do {
+    const page =
+      await env.DEVICE_STATUS.list({
+        limit: 1000,
+        ...(cursor
+          ? { cursor }
+          : {}),
+      });
+    for (
+      const item
+      of page.keys || []
+    ) {
+      if (
+        isDeviceStatusMetadataKey(
+          item.name
+        )
+      ) {
+        continue;
+      }
+      const record =
+        await getDeviceRecord(
+          item.name,
+          env
+        );
+      if (!record) continue;
+      const deviceId =
+        normalizeDeviceId(
+          record.device_id ||
+          item.name
+        );
       const deviceGroup =
         normalizeDeviceGroup(
           record.device_group
         );
-
-      if (!deviceId || !deviceGroup) {
-        continue;
-      }
-
       if (
-        wantedGroup &&
-        deviceGroup !== wantedGroup
+        !deviceId ||
+        !deviceGroup ||
+        (
+          wantedGroup &&
+          deviceGroup !== wantedGroup
+        )
       ) {
         continue;
       }
-
       ids.add(deviceId);
     }
-
     cursor =
       page.list_complete
         ? undefined
         : page.cursor;
   } while (cursor);
-
-  return [...ids].sort(compareDeviceIds);
+  return [...ids].sort(
+    compareDeviceIds
+  );
 }
 
 
@@ -737,6 +962,12 @@ async function permanentlyRevokeDevice(
 
   await Promise.all(deletes);
 
+  await setFleetDeviceRevocation(
+    env,
+    deviceId,
+    true
+  );
+
   await deleteKvPrefix(
     `${PAIR_RATE_PREFIX}${deviceId}:`,
     env
@@ -820,6 +1051,12 @@ async function restoreDevice(
   }
 
   await Promise.all(deletes);
+
+  await setFleetDeviceRevocation(
+    env,
+    deviceId,
+    false
+  );
 
   await deleteKvPrefix(
     `${PAIR_RATE_PREFIX}${deviceId}:`,
@@ -4326,22 +4563,23 @@ function decodeBase64(value) {
 
 // -------------------- Agent reporting and device helpers --------------------
 
+
 async function handleAgentReport(request, env) {
   const secret =
-    request.headers.get("X-Agent-Secret");
-
+    request.headers.get(
+      "X-Agent-Secret"
+    );
   if (
     !secret ||
-    secret !== env.AGENT_REPORT_SECRET
+    secret !==
+      env.AGENT_REPORT_SECRET
   ) {
     return new Response(
       "Unauthorized",
       { status: 401 }
     );
   }
-
   let body;
-
   try {
     body = await request.json();
   } catch (error) {
@@ -4353,10 +4591,11 @@ async function handleAgentReport(request, env) {
       400
     );
   }
-
   const {
-    device_id: reportedDeviceId,
-    device_group: reportedDeviceGroup,
+    device_id:
+      reportedDeviceId,
+    device_group:
+      reportedDeviceGroup,
     timestamp,
     status,
     command_id,
@@ -4365,7 +4604,6 @@ async function handleAgentReport(request, env) {
     command_total,
     last_result,
   } = body;
-
   if (
     !reportedDeviceId ||
     !reportedDeviceGroup ||
@@ -4380,9 +4618,9 @@ async function handleAgentReport(request, env) {
       400
     );
   }
-
   if (
-    !ALLOWED_REPORT_STATUSES.includes(status)
+    !ALLOWED_REPORT_STATUSES
+      .includes(status)
   ) {
     return json(
       {
@@ -4392,250 +4630,196 @@ async function handleAgentReport(request, env) {
       400
     );
   }
-
   const deviceId =
-    normalizeDeviceId(reportedDeviceId);
-
+    normalizeDeviceId(
+      reportedDeviceId
+    );
   const deviceGroup =
     normalizeDeviceGroup(
       reportedDeviceGroup
     );
-
   if (!deviceId) {
     return json(
       {
         ok: false,
-        error: "invalid_device_id",
+        error:
+          "invalid_device_id",
       },
       400
     );
   }
-
   if (!deviceGroup) {
     return json(
       {
         ok: false,
-        error: "invalid_device_group",
+        error:
+          "invalid_device_group",
       },
       400
     );
   }
-
-  // ID cũ phải khớp nhóm trong tên.
-  // ID m<number> dùng device_group.txt làm profile.
   const legacyPrefix =
-    deviceId.match(/^(MARMOT|NOVA)-/);
-
+    deviceId.match(
+      /^(MARMOT|NOVA)-/
+    );
   if (
     legacyPrefix &&
-    legacyPrefix[1] !== deviceGroup
+    legacyPrefix[1] !==
+      deviceGroup
   ) {
     return json(
       {
         ok: false,
-        error: "group_mismatch",
+        error:
+          "group_mismatch",
       },
       400
     );
   }
-
+  const payload = {
+    device_id: deviceId,
+    device_group: deviceGroup,
+    timestamp,
+    status,
+  };
+  if (command_id) {
+    payload.command_id =
+      command_id;
+    payload.command =
+      command ?? null;
+    payload.command_index =
+      command_index ?? null;
+    payload.command_total =
+      command_total ?? null;
+  }
+  if (last_result) {
+    payload.last_result =
+      String(last_result)
+        .slice(0, 500);
+  }
+  const batteryNumber =
+    Number(body.battery_level);
   if (
-    await isDeviceRevoked(
-      deviceId,
-      env
-    )
+    Number.isFinite(
+      batteryNumber
+    ) &&
+    batteryNumber >= 0 &&
+    batteryNumber <= 100
   ) {
+    payload.battery_level =
+      Math.round(
+        batteryNumber
+      );
+  }
+  if (
+    typeof body.charging ===
+      "boolean"
+  ) {
+    payload.charging =
+      body.charging;
+  }
+  const androidLabel =
+    sanitizeLabel(
+      body.android_version,
+      32
+    );
+  if (androidLabel) {
+    payload.android_version =
+      androidLabel;
+  }
+  const agentLabel =
+    sanitizeLabel(
+      body.agent_version,
+      64
+    );
+  if (agentLabel) {
+    payload.agent_version =
+      agentLabel;
+  }
+  const uptimeNumber =
+    Number(body.uptime_seconds);
+  if (
+    Number.isFinite(
+      uptimeNumber
+    ) &&
+    uptimeNumber >= 0
+  ) {
+    payload.uptime_seconds =
+      Math.floor(
+        uptimeNumber
+      );
+  }
+  const storageNumber =
+    Number(
+      body.storage_free_bytes
+    );
+  if (
+    Number.isFinite(
+      storageNumber
+    ) &&
+    storageNumber >= 0
+  ) {
+    payload.storage_free_bytes =
+      Math.floor(
+        storageNumber
+      );
+  }
+  try {
+    const result =
+      await reportFleetDevice(
+        env,
+        payload
+      );
+    if (
+      result.response.status ===
+        410
+    ) {
+      return noStoreJson(
+        {
+          ok: false,
+          error:
+            "device_revoked",
+          device_id: deviceId,
+        },
+        410
+      );
+    }
+    if (!result.response.ok) {
+      return noStoreJson(
+        {
+          ok: false,
+          error:
+            result.data?.error ||
+            "fleet_state_failed",
+        },
+        result.response.status
+      );
+    }
+    return noStoreJson({
+      ok: true,
+      device_id: deviceId,
+      device_group:
+        deviceGroup,
+    });
+  } catch (error) {
+    console.error(
+      "agent_report_failed",
+      error?.message || error
+    );
     return noStoreJson(
       {
         ok: false,
-        error: "device_revoked",
-        device_id: deviceId,
-      },
-      410
-    );
-  }
-
-  try {
-    const key = deviceId;
-    let record = {};
-
-    try {
-      const existing =
-        await env.DEVICE_STATUS.get(key);
-
-      if (existing) {
-        record = JSON.parse(existing);
-      }
-    } catch (error) {
-      record = {};
-    }
-
-    const now = Date.now();
-
-    record.device_id = deviceId;
-    record.device_group = deviceGroup;
-    record.last_seen = now;
-    record.last_report_status = status;
-
-    if (status === "heartbeat") {
-      if (!record.last_status) {
-        record.last_status = "heartbeat";
-      }
-    } else {
-      record.last_status = status;
-    }
-
-    if (command_id) {
-      record.last_command_id = command_id;
-
-      record.last_command =
-        command ??
-        record.last_command ??
-        null;
-
-      record.last_command_index =
-        command_index ??
-        record.last_command_index ??
-        null;
-
-      record.last_command_total =
-        command_total ??
-        record.last_command_total ??
-        null;
-
-      record.last_command_ts =
-        Date.parse(timestamp) || now;
-    }
-
-    if (last_result) {
-      record.last_result = last_result;
-    }
-
-    const batteryNumber =
-      Number(body.battery_level);
-
-    if (
-      Number.isFinite(batteryNumber) &&
-      batteryNumber >= 0 &&
-      batteryNumber <= 100
-    ) {
-      record.battery_level =
-        Math.round(batteryNumber);
-    }
-
-    if (
-      typeof body.charging ===
-      "boolean"
-    ) {
-      record.charging =
-        body.charging;
-    }
-
-    const androidLabel =
-      sanitizeLabel(
-        body.android_version,
-        32
-      );
-
-    if (androidLabel) {
-      record.android_version =
-        androidLabel;
-    }
-
-    const agentLabel =
-      sanitizeLabel(
-        body.agent_version,
-        64
-      );
-
-    if (agentLabel) {
-      record.agent_version =
-        agentLabel;
-    }
-
-    const uptimeNumber =
-      Number(body.uptime_seconds);
-
-    if (
-      Number.isFinite(uptimeNumber) &&
-      uptimeNumber >= 0
-    ) {
-      record.uptime_seconds =
-        Math.floor(uptimeNumber);
-    }
-
-    const storageNumber =
-      Number(body.storage_free_bytes);
-
-    if (
-      Number.isFinite(storageNumber) &&
-      storageNumber >= 0
-    ) {
-      record.storage_free_bytes =
-        Math.floor(storageNumber);
-    }
-
-    if (
-      await isDeviceRevoked(
-        deviceId,
-        env
-      )
-    ) {
-      return noStoreJson(
-        {
-          ok: false,
-          error: "device_revoked",
-          device_id: deviceId,
-        },
-        410
-      );
-    }
-
-    await env.DEVICE_STATUS.put(
-      key,
-      JSON.stringify(record)
-    );
-
-    if (
-      await isDeviceRevoked(
-        deviceId,
-        env
-      )
-    ) {
-      await env.DEVICE_STATUS.delete(
-        key
-      );
-
-      return noStoreJson(
-        {
-          ok: false,
-          error: "device_revoked",
-          device_id: deviceId,
-        },
-        410
-      );
-    }
-
-    return json({
-      ok: true,
-      device_id: deviceId,
-      device_group: deviceGroup,
-    });
-
-  } catch (error) {
-    console.error(error);
-
-    return json(
-      {
-        ok: false,
-        error: String(
-          error?.message || error
-        ),
+        error:
+          String(
+            error?.message ||
+            error
+          ),
       },
       500
     );
   }
 }
+
 
 
 async function getDeviceRecord(
@@ -4647,11 +4831,9 @@ async function getDeviceRecord(
       normalizeDeviceId(
         deviceId
       );
-
     if (!normalized) {
       return null;
     }
-
     if (
       await isDeviceRevoked(
         normalized,
@@ -4660,18 +4842,33 @@ async function getDeviceRecord(
     ) {
       return null;
     }
-
+    try {
+      const durableRecord =
+        await getFleetDeviceRecord(
+          env,
+          normalized
+        );
+      if (durableRecord) {
+        return durableRecord;
+      }
+    } catch (error) {
+      console.error(
+        "fleet_state_read_failed",
+        error?.message || error
+      );
+    }
     const raw =
       await env.DEVICE_STATUS.get(
         normalized
       );
-
     if (!raw) return null;
-
-    const record = JSON.parse(raw);
-
-    return record &&
-      typeof record === "object"
+    const record =
+      JSON.parse(raw);
+    return (
+      record &&
+      typeof record ===
+        "object"
+    )
       ? record
       : null;
   } catch (error) {
@@ -5422,6 +5619,25 @@ async function loadHealthState(
   }
 }
 
+
+function healthStateChanged(
+  current,
+  next
+) {
+  const left = {
+    ...(current || {}),
+  };
+  const right = {
+    ...(next || {}),
+  };
+  delete left.updated_at;
+  delete right.updated_at;
+  return (
+    JSON.stringify(left) !==
+    JSON.stringify(right)
+  );
+}
+
 async function saveHealthState(
   deviceId,
   state,
@@ -6019,15 +6235,24 @@ async function checkFleetHealth(env) {
       }
 
       if (device.maintenance) {
-        await saveHealthState(
-          device.id,
+        const maintenanceState =
           initialHealthState(
             device,
             now,
             true
-          ),
-          env
-        );
+          );
+        if (
+          healthStateChanged(
+            state,
+            maintenanceState
+          )
+        ) {
+          await saveHealthState(
+            device.id,
+            maintenanceState,
+            env
+          );
+        }
         continue;
       }
 
@@ -6205,15 +6430,11 @@ async function checkFleetHealth(env) {
       finalState.updated_at =
         now;
 
-      await saveHealthState(
-        device.id,
-        state,
-        env
-      );
-
       if (
-        JSON.stringify(finalState) !==
-        JSON.stringify(state)
+        healthStateChanged(
+          state,
+          finalState
+        )
       ) {
         finalStates.set(
           device.id,
@@ -6245,22 +6466,25 @@ async function checkFleetHealth(env) {
         lines
       );
 
-      for (
-        const [deviceId, state]
-        of finalStates
-      ) {
-        await saveHealthState(
-          deviceId,
-          state,
-          env
-        );
-      }
     }
 
-    await env.DEVICE_STATUS.put(
-      HEALTH_BOOTSTRAP_KEY,
-      "1"
-    );
+    for (
+      const [deviceId, nextState]
+      of finalStates
+    ) {
+      await saveHealthState(
+        deviceId,
+        nextState,
+        env
+      );
+    }
+
+    if (!bootstrapped) {
+      await env.DEVICE_STATUS.put(
+        HEALTH_BOOTSTRAP_KEY,
+        "1"
+      );
+    }
   } catch (error) {
     console.error(
       "fleet_health_check_failed",

@@ -4,6 +4,7 @@ const TTL = 30 * 24 * 60 * 60;
 const DEFAULT_BATCH = 5;
 const MAX_BATCH = 20;
 const EXTRA_WAIT_MS = 2 * 60 * 1000;
+const MAX_ACTIVE_AGE_MS = 6 * 60 * 60 * 1000;
 const TERMINAL = new Set(["completed", "cancelled"]);
 const RUNNING = new Set(["canary_running", "batch_running", "retry_running"]);
 const ALLOWED = new Set([
@@ -92,12 +93,36 @@ async function clearActive(id, env) {
   }
 }
 
+
 export async function getActiveRollout(env) {
-  const id = await env.DEVICE_STATUS.get(ACTIVE_KEY);
+  const id =
+    await env.DEVICE_STATUS.get(
+      ACTIVE_KEY
+    );
   if (!id) return null;
-  const state = await load(id, env);
-  if (!state || TERMINAL.has(state.status)) {
-    await clearActive(id, env);
+  const state =
+    await load(id, env);
+  const updatedAt =
+    Number(
+      state?.updated_at ||
+      state?.created_at ||
+      0
+    );
+  const stale =
+    updatedAt > 0 &&
+    Date.now() - updatedAt >
+      MAX_ACTIVE_AGE_MS;
+  if (
+    !state ||
+    TERMINAL.has(
+      state.status
+    ) ||
+    stale
+  ) {
+    await clearActive(
+      id,
+      env
+    );
     return null;
   }
   return state;
@@ -644,21 +669,54 @@ async function skip(chatId, id, env, ops) {
   await show(chatId, state.id, env, ops);
 }
 
+
 async function stop(chatId, id, env, ops) {
-  const state = await load(id, env);
+  const state =
+    await load(id, env);
   if (!state) {
-    await ops.sendMessage(chatId, env, "Không tìm thấy rollout.");
+    await clearActive(
+      id,
+      env
+    );
+    await ops.sendMessage(
+      chatId,
+      env,
+      "Không tìm thấy rollout; đã thử xóa khóa hoạt động."
+    );
     return;
   }
-  state.status = "cancelled";
-  state.stopped_at = Date.now();
-  await save(state, env);
-  await clearActive(state.id, env);
+  state.status =
+    "cancelled";
+  state.stopped_at =
+    Date.now();
+  await clearActive(
+    state.id,
+    env
+  );
+  let historySaved = true;
+  try {
+    await save(
+      state,
+      env
+    );
+  } catch (error) {
+    historySaved = false;
+    console.error(
+      "rollout_stop_history_failed",
+      error?.message || error
+    );
+  }
   await ops.sendMessage(
     chatId,
     env,
     `🛑 Đã kết thúc rollout ${state.id}.\n` +
-      "Lệnh đã gửi vẫn có thể hoàn thành, nhưng không gửi thêm đợt mới."
+      "Khóa gửi lệnh thường đã được gỡ trước khi lưu lịch sử.\n" +
+      "Lệnh đã gửi vẫn có thể hoàn thành, nhưng không gửi thêm đợt mới." +
+      (
+        historySaved
+          ? ""
+          : "\n⚠️ KV đang chặn ghi nên chưa lưu được trạng thái cancelled."
+      )
   );
 }
 
