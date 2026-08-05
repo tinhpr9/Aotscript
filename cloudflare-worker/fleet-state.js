@@ -266,6 +266,14 @@ export class FleetState
       record.secure_solver_capable = body.secure_solver_capable;
     }
 
+    if (
+      typeof body.self_heal_capable ===
+        "boolean"
+    ) {
+      record.self_heal_capable =
+        body.self_heal_capable;
+    }
+
     const uptime =
       Number(
         body.uptime_seconds

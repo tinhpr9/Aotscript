@@ -72,6 +72,7 @@ const COMMANDS = {
   setup_caylapbu: { value: "SETUP_CAYLAPBU", bit: 16, label: "🌱 CÀI CAYLAPBU" },
   run_caylapbu: { value: "RUN_CAYLAPBU", bit: 32, label: "▶️ CHẠY CAYLAPBU" },
   update_delta: { value: "UPDATE_DELTA", bit: 64, label: "🔁 DELTA" },
+  repair: { value: "RECONCILE_SYSTEM", bit: 2048, label: "🛠 TỰ SỬA" },
   update_solver: { value: "UPDATE_SOLVER", bit: 256, label: "🧠 SOLVER" },
   update_script: { value: "UPDATESCRIPT", bit: 512, label: "📝 SCRIPT" },
 
@@ -92,6 +93,7 @@ const COMMAND_ORDER = [
   "setup_caylapbu",
   "run_caylapbu",
   "update_delta",
+  "repair",
   "update_solver",
   "update_script",
   "reboot",
@@ -1128,6 +1130,36 @@ async function filterSecureSolverDeviceIds(deviceIds, env) {
   return result;
 }
 
+function deviceSupportsSelfHeal(record) {
+  return record?.self_heal_capable === true;
+}
+
+async function filterSelfHealDeviceIds(
+  deviceIds,
+  env
+) {
+  const result = [];
+
+  for (const deviceId of deviceIds) {
+    const record =
+      await getDeviceRecord(
+        deviceId,
+        env
+      );
+
+    if (
+      deviceSupportsSelfHeal(
+        record
+      )
+    ) {
+      result.push(deviceId);
+    }
+  }
+
+  return result;
+}
+
+
 async function activeDeviceIdsForTarget(
   target,
   env
@@ -1452,6 +1484,20 @@ async function resolveCommandSpec(
       }
     }
 
+    if (commandKeys.includes("repair")) {
+      deviceIds =
+        await filterSelfHealDeviceIds(
+          deviceIds,
+          env
+        );
+
+      if (deviceIds.length === 0) {
+        throw new Error(
+          "Máy chưa cập nhật Agent hỗ trợ tự sửa."
+        );
+      }
+    }
+
     return {
       target: "devices",
       fileTarget: "all",
@@ -1486,6 +1532,14 @@ async function resolveCommandSpec(
 
   if (commandKeys.includes("update_solver")) {
     deviceIds = await filterSecureSolverDeviceIds(deviceIds, env);
+  }
+
+  if (commandKeys.includes("repair")) {
+    deviceIds =
+      await filterSelfHealDeviceIds(
+        deviceIds,
+        env
+      );
   }
 
   if (deviceIds.length === 0) {
@@ -4888,6 +4942,18 @@ async function handleAgentReport(request, env) {
     payload.secure_solver_capable = body.secure_solver_capable;
   } else if (status === "heartbeat") {
     payload.secure_solver_capable = false;
+  }
+
+  if (
+    typeof body.self_heal_capable ===
+      "boolean"
+  ) {
+    payload.self_heal_capable =
+      body.self_heal_capable;
+  } else if (
+    status === "heartbeat"
+  ) {
+    payload.self_heal_capable = false;
   }
 
   const uptimeNumber =
