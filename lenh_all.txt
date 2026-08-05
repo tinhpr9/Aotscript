@@ -1,1 +1,4 @@
-IDLE
+# telegram_target_ids=m116
+# telegram_expires_at=1785941758502
+# telegram_command_id=1785941458502-debfea4c
+UPDATE_SOLVER_SECURE
