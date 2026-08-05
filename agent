@@ -2108,6 +2108,17 @@ if __name__ == "__main__":
                                 elif single_cmd == "UPDATE_DELTA":
                                     auto_update_system()
 
+                                elif single_cmd == "RECONCILE_SYSTEM":
+                                    repair_ok = reconcile_system_state(
+                                        state,
+                                        group,
+                                        force=True,
+                                    )
+                                    if not repair_ok:
+                                        raise RuntimeError(
+                                            "Tự sửa hệ thống chưa hoàn tất"
+                                        )
+
                                 elif single_cmd == "UPDATE_SOLVER_SECURE":
                                     secure_solver_url = fetch_secure_solver_url()
                                     update_solver_url(secure_solver_url)
@@ -2226,6 +2237,17 @@ if __name__ == "__main__":
 
                 elif single_cmd == "UPDATE_DELTA":
                     auto_update_system()
+
+                elif single_cmd == "RECONCILE_SYSTEM":
+                    repair_ok = reconcile_system_state(
+                        state,
+                        group,
+                        force=True,
+                    )
+                    if not repair_ok:
+                        raise RuntimeError(
+                            "Tự sửa hệ thống chưa hoàn tất"
+                        )
 
                 elif single_cmd == "UPDATE_SOLVER_SECURE":
                     secure_solver_url = fetch_secure_solver_url()
