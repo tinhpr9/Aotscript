@@ -1,4 +1,1 @@
-# telegram_target_ids=m116
-# telegram_expires_at=1785919538185
-# telegram_command_id=1785919238185-6358497e
-/script nova https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Novagag2
+IDLE
