@@ -1,2 +1,4 @@
-# telegram_command_id=1785857902228-6295fe30
+# telegram_target_ids=m167
+# telegram_expires_at=1785900011913
+# telegram_command_id=1785899711913-a07875a9
 IDLE
