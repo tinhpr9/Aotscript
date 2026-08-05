@@ -37,6 +37,11 @@ AGENT_VERSION = "fleet-ops-1"
 RELOAD_NOVAGAG2_CAPABLE = True
 SECURE_SOLVER_CAPABLE = True
 SELF_HEAL_CAPABLE = True
+DEFERRED_COMMAND_QUEUE_CAPABLE = True
+PROCESSED_COMMAND_IDS_MAX = 512
+PROCESSED_COMMAND_RETENTION_MS = (
+    48 * 60 * 60 * 1000
+)
 SYSTEM_RECONCILE_INTERVAL_SECONDS = 6 * 60 * 60
 SYSTEM_RECONCILE_LAST_RUN = None
 TERMUX_BOOT_PATH = os.path.expanduser(
@@ -211,6 +216,256 @@ def command_metadata_before(
     return metadata
 
 
+def command_id_timestamp_ms(command_id):
+    match = re.match(
+        r"^(\d{10,})",
+        str(command_id or "").strip(),
+    )
+
+    if not match:
+        return 0
+
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_processed_command_ids(value):
+    if not isinstance(value, list):
+        return []
+
+    result = []
+    seen = set()
+
+    for item in value:
+        command_id = str(item or "").strip()
+
+        if (
+            not command_id
+            or not re.fullmatch(
+                r"[\w-]+",
+                command_id,
+            )
+            or command_id in seen
+        ):
+            continue
+
+        seen.add(command_id)
+        result.append(command_id)
+
+    return result[-PROCESSED_COMMAND_IDS_MAX:]
+
+
+def prune_processed_command_ids(
+    state,
+    now_ms=None,
+):
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+
+    kept = []
+
+    for command_id in normalize_processed_command_ids(
+        state.get("processed_command_ids")
+    ):
+        created_ms = command_id_timestamp_ms(
+            command_id
+        )
+
+        if (
+            created_ms > 0
+            and now_ms - created_ms
+            > PROCESSED_COMMAND_RETENTION_MS
+        ):
+            continue
+
+        kept.append(command_id)
+
+    state["processed_command_ids"] = (
+        kept[-PROCESSED_COMMAND_IDS_MAX:]
+    )
+
+    return state["processed_command_ids"]
+
+
+def command_id_already_processed(
+    state,
+    command_id,
+):
+    command_id = str(command_id or "").strip()
+
+    if not command_id:
+        return False
+
+    return command_id in set(
+        prune_processed_command_ids(state)
+    )
+
+
+def mark_command_id_processed(
+    state,
+    command_id,
+    now_ms=None,
+):
+    command_id = str(command_id or "").strip()
+
+    if not command_id:
+        return
+
+    current = prune_processed_command_ids(
+        state,
+        now_ms=now_ms,
+    )
+
+    current = [
+        item
+        for item in current
+        if item != command_id
+    ]
+
+    current.append(command_id)
+
+    state["processed_command_ids"] = (
+        current[-PROCESSED_COMMAND_IDS_MAX:]
+    )
+    state["last_command_id"] = command_id
+
+
+def command_blocks_from_source(
+    source_name,
+    source_text,
+):
+    lines = (source_text or "").splitlines()
+    items = []
+    legacy_lines = []
+    index = 0
+    sequence = 0
+
+    while index < len(lines):
+        raw = lines[index].strip()
+
+        if not raw:
+            index += 1
+            continue
+
+        if raw.startswith("#"):
+            metadata_lines = []
+            command_id = ""
+
+            while index < len(lines):
+                current = lines[index].strip()
+
+                if not current:
+                    index += 1
+                    continue
+
+                if not current.startswith("#"):
+                    break
+
+                metadata_lines.append(lines[index])
+
+                match = re.search(
+                    r"telegram_command_id\s*=\s*([\w-]+)",
+                    current,
+                )
+
+                if match:
+                    command_id = (
+                        match.group(1).strip()
+                    )
+
+                index += 1
+
+            if command_id:
+                command_lines = []
+
+                while index < len(lines):
+                    current = lines[index].strip()
+
+                    if current.startswith("#"):
+                        break
+
+                    if current:
+                        command_lines.append(
+                            lines[index]
+                        )
+
+                    index += 1
+
+                if command_lines:
+                    items.append({
+                        "timestamp":
+                            command_id_timestamp_ms(
+                                command_id
+                            ),
+                        "source_name": source_name,
+                        "sequence": sequence,
+                        "command_id": command_id,
+                        "lines":
+                            metadata_lines
+                            + command_lines,
+                    })
+                    sequence += 1
+
+                continue
+
+            continue
+
+        legacy_lines.append(lines[index])
+        index += 1
+
+    if legacy_lines:
+        items.append({
+            "timestamp": 0,
+            "source_name": source_name,
+            "sequence": -1,
+            "command_id": "",
+            "lines": legacy_lines,
+        })
+
+    return items
+
+
+def ordered_command_lines_from_sources(
+    changed_sources,
+):
+    items = []
+
+    for source_index, (
+        source_name,
+        source_text,
+    ) in enumerate(changed_sources):
+        for item in command_blocks_from_source(
+            source_name,
+            source_text,
+        ):
+            item["source_index"] = source_index
+            items.append(item)
+
+    items.sort(
+        key=lambda item: (
+            item["timestamp"],
+            item["source_index"],
+            item["sequence"],
+        )
+    )
+
+    result = []
+
+    for item in items:
+        print(
+            "[+] Khối lệnh: "
+            f"{item['source_name']} "
+            f"COMMAND_ID={item['command_id'] or '-'} "
+            f"timestamp={item['timestamp']}"
+        )
+        result.extend(item["lines"])
+        result.append("")
+
+    return result
+
+
 def load_agent_config():
     if not os.path.exists(AGENT_CONFIG_PATH):
         return {}
@@ -337,6 +592,8 @@ def collect_device_metrics():
             SECURE_SOLVER_CAPABLE,
         "self_heal_capable":
             SELF_HEAL_CAPABLE,
+        "deferred_command_queue_capable":
+            DEFERRED_COMMAND_QUEUE_CAPABLE,
     }
 
     capacity = read_first_text(
@@ -536,6 +793,7 @@ def load_state():
         "group_command_hash": "",
         "last_processed_at": "",
         "last_command_id": "",
+        "processed_command_ids": [],
         "last_result": "",
         "setup_health": "unknown",
         "last_reconcile_at": "",
@@ -553,6 +811,23 @@ def load_state():
         state = default_state.copy()
         for key in state:
             state[key] = data.get(key, state[key])
+
+        journal = normalize_processed_command_ids(
+            state.get("processed_command_ids")
+        )
+
+        legacy_last = str(
+            state.get("last_command_id") or ""
+        ).strip()
+
+        if (
+            legacy_last
+            and legacy_last not in journal
+        ):
+            journal.append(legacy_last)
+
+        state["processed_command_ids"] = journal
+        prune_processed_command_ids(state)
         return state
     except Exception as e:
         log_error("load_state", e)
@@ -1900,13 +2175,8 @@ if __name__ == "__main__":
         if group_changed:
             changed_sources.append((group, group_text))
 
-        # Nguồn có command timestamp nhỏ hơn chạy trước.
-        # Nhờ vậy command mới nhất luôn chạy sau cùng và giữ last_command_id.
-        changed_sources.sort(
-            key=lambda source: command_timestamp_for_sort(source[1])
-        )
-
-        # Lưu hash trước khi thực thi để các lệnh gây reboot không bị lặp vô hạn.
+        # Lưu hash trước khi thực thi để các lệnh gây reboot
+        # không bị lặp vô hạn.
         if common_changed:
             state["common_command_hash"] = common_hash
 
@@ -1920,15 +2190,13 @@ if __name__ == "__main__":
         )
         save_state(state)
 
-        # Chỉ ghép các nguồn vừa thay đổi, theo thứ tự cũ -> mới.
-        command_lines = []
-
-        for source_name, source_text in changed_sources:
-            print(
-                f"[+] Nguồn lệnh thay đổi: {source_name} "
-                f"(timestamp={command_timestamp_for_sort(source_text)})"
+        # Tách từng command block của mọi nguồn rồi sắp xếp
+        # theo timestamp toàn cục.
+        command_lines = (
+            ordered_command_lines_from_sources(
+                changed_sources
             )
-            command_lines.extend((source_text or "").splitlines())
+        )
 
         # scan lines and group by command_id if present
         i = 0
@@ -1946,7 +2214,7 @@ if __name__ == "__main__":
                 if m:
                     cmd_id = m.group(1).strip()
                     # skip empty or duplicate
-                    if cmd_id and cmd_id != state.get("last_command_id"):
+                    if cmd_id:
                         # collect following commands until next comment or EOF
                         j = i + 1
                         group_cmds = []
@@ -1959,6 +2227,17 @@ if __name__ == "__main__":
                                 break
                             group_cmds.append(line_j)
                             j += 1
+
+                        if command_id_already_processed(
+                            state,
+                            cmd_id,
+                        ):
+                            print(
+                                f"[*] Bỏ qua COMMAND_ID={cmd_id}: "
+                                "đã xử lý trước đó"
+                            )
+                            i = j
+                            continue
 
                         metadata = command_metadata_before(
                             command_lines,
@@ -2030,8 +2309,9 @@ if __name__ == "__main__":
                             except Exception:
                                 pass
 
-                            state["last_command_id"] = (
-                                cmd_id
+                            mark_command_id_processed(
+                                state,
+                                cmd_id,
                             )
 
                             state["last_result"] = (
@@ -2066,8 +2346,12 @@ if __name__ == "__main__":
                             send_report_to_worker(report_url, secret, payload)
                         except Exception:
                             pass
-                        # persist last_command_id
-                        state["last_command_id"] = cmd_id
+                        # Ghi journal trước khi chạy để lệnh reboot
+                        # không bị lặp sau khi máy khởi động lại.
+                        mark_command_id_processed(
+                            state,
+                            cmd_id,
+                        )
                         save_state(state)
 
                         # execute grouped commands in order

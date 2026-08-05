@@ -274,6 +274,14 @@ export class FleetState
         body.self_heal_capable;
     }
 
+    if (
+      typeof body.deferred_command_queue_capable ===
+        "boolean"
+    ) {
+      record.deferred_command_queue_capable =
+        body.deferred_command_queue_capable;
+    }
+
     const uptime =
       Number(
         body.uptime_seconds

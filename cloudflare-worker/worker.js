@@ -53,6 +53,11 @@ const STORAGE_RECOVERY_BYTES =
 const QUIET_HOUR_START = 23;
 const QUIET_HOUR_END = 7;
 const COMMAND_TTL_MS = 5 * 60 * 1000;
+const DEFERRED_COMMAND_TTL_MS =
+  24 * 60 * 60 * 1000;
+const MAX_PENDING_COMMAND_BLOCKS = 256;
+const MAX_PENDING_COMMAND_BYTES =
+  256 * 1024;
 const COMMAND_METADATA_TTL_SECONDS = 30 * 24 * 60 * 60;
 const ONLINE_WINDOW_MS = 90 * 1000;
 const TARGETING_AGENT_VERSION = "fleet-ops-1";
@@ -61,6 +66,7 @@ const DANGEROUS_COMMAND_KEYS = new Set([
   "setup_caylapbu",
   "run_caylapbu",
   "update_delta",
+  "repair",
   "reboot",
 ]);
 
@@ -1159,6 +1165,44 @@ async function filterSelfHealDeviceIds(
   return result;
 }
 
+function deviceSupportsDeferredCommandQueue(
+  record
+) {
+  return (
+    record?.deferred_command_queue_capable ===
+    true
+  );
+}
+
+async function deferredCommandQueueReadiness(
+  deviceIds,
+  env
+) {
+  const unsupported = [];
+
+  for (const deviceId of deviceIds) {
+    const record =
+      await getDeviceRecord(
+        deviceId,
+        env
+      );
+
+    if (
+      !deviceSupportsDeferredCommandQueue(
+        record
+      )
+    ) {
+      unsupported.push(deviceId);
+    }
+  }
+
+  return {
+    ready: unsupported.length === 0,
+    unsupported,
+  };
+}
+
+
 
 async function activeDeviceIdsForTarget(
   target,
@@ -1294,6 +1338,153 @@ function commandEnvelope(
     "",
   ].join("\n");
 }
+
+function splitCommandEnvelopeBlocks(content) {
+  const lines =
+    String(content || "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n");
+
+  const blocks = [];
+  let current = [];
+
+  const flush = () => {
+    const block =
+      current.join("\n").trim();
+
+    if (
+      block &&
+      /^# telegram_target_ids=/m.test(
+        block
+      ) &&
+      /^# telegram_command_id=/m.test(
+        block
+      )
+    ) {
+      blocks.push(block);
+    }
+
+    current = [];
+  };
+
+  for (const line of lines) {
+    if (
+      line.startsWith(
+        "# telegram_target_ids="
+      )
+    ) {
+      flush();
+      current.push(line);
+      continue;
+    }
+
+    if (current.length > 0) {
+      current.push(line);
+    }
+  }
+
+  flush();
+  return blocks;
+}
+
+function commandEnvelopeExpiresAt(block) {
+  const match =
+    String(block || "").match(
+      /^# telegram_expires_at=(\d+)$/m
+    );
+
+  if (!match) {
+    return 0;
+  }
+
+  const value = Number(match[1]);
+
+  return Number.isFinite(value)
+    ? value
+    : 0;
+}
+
+function commandEnvelopeId(block) {
+  const match =
+    String(block || "").match(
+      /^# telegram_command_id=([\w-]+)$/m
+    );
+
+  return match
+    ? match[1]
+    : "";
+}
+
+function mergeCommandFileContent(
+  currentContent,
+  newEnvelope,
+  now
+) {
+  const incoming =
+    String(newEnvelope || "").trim();
+
+  if (!incoming) {
+    throw new Error(
+      "Nội dung lệnh mới trống."
+    );
+  }
+
+  const incomingId =
+    commandEnvelopeId(incoming);
+
+  if (!incomingId) {
+    throw new Error(
+      "Lệnh mới thiếu command ID."
+    );
+  }
+
+  let blocks =
+    splitCommandEnvelopeBlocks(
+      currentContent
+    ).filter(
+      (block) =>
+        commandEnvelopeExpiresAt(block)
+          > now &&
+        commandEnvelopeId(block)
+          !== incomingId
+    );
+
+  blocks.push(incoming);
+
+  blocks = blocks.slice(
+    -MAX_PENDING_COMMAND_BLOCKS
+  );
+
+  const encoder = new TextEncoder();
+
+  let merged =
+    blocks.join("\n\n").trim()
+    + "\n";
+
+  while (
+    blocks.length > 1 &&
+    encoder.encode(merged).length
+      > MAX_PENDING_COMMAND_BYTES
+  ) {
+    blocks.shift();
+
+    merged =
+      blocks.join("\n\n").trim()
+      + "\n";
+  }
+
+  if (
+    encoder.encode(merged).length
+      > MAX_PENDING_COMMAND_BYTES
+  ) {
+    throw new Error(
+      "Hàng đợi lệnh vượt giới hạn."
+    );
+  }
+
+  return merged;
+}
+
 
 function pendingDispatchCacheKey(token) {
   return (
@@ -1636,7 +1827,11 @@ async function requestCommandDispatch(
         `Đích: ${resolved.targetLabel}\n` +
         `Số máy: ${resolved.deviceIds.length}\n` +
         `Lệnh:\n${summary}\n\n` +
-        "Lệnh hết hạn sau 5 phút.",
+        (
+          resolved.target === "devices"
+            ? "Lệnh hết hạn sau 5 phút."
+            : "Tự bù 24 giờ sẽ bật khi Agent đã hỗ trợ hàng đợi."
+        ),
       {
         inline_keyboard: [
           [
@@ -1710,15 +1905,82 @@ async function dispatchCommandSpec(
     crypto.randomUUID().slice(0, 8);
 
   const created = Date.now();
-  const expiresAt =
-    created + COMMAND_TTL_MS;
+  const groupDispatch =
+    spec.target !== "devices";
 
-  const content = commandEnvelope(
+  const queueReadiness =
+    await deferredCommandQueueReadiness(
+      deviceIds,
+      env
+    );
+
+  const queueCompatible =
+    queueReadiness.ready;
+
+  const deferred =
+    groupDispatch &&
+    queueCompatible;
+
+  const expiresAt =
+    created +
+    (
+      deferred
+        ? DEFERRED_COMMAND_TTL_MS
+        : COMMAND_TTL_MS
+    );
+
+  const envelope = commandEnvelope(
     commandId,
     deviceIds,
     expiresAt,
     spec.commandLines
   );
+
+  const currentFile =
+    await getGitHubFile(
+      file,
+      env
+    );
+
+  const currentContent =
+    decodeBase64(
+      currentFile.content || ""
+    );
+
+  const activeCurrentBlocks =
+    splitCommandEnvelopeBlocks(
+      currentContent
+    ).filter(
+      (block) =>
+        commandEnvelopeExpiresAt(block)
+          > created
+    );
+
+  const clearsGroupQueue =
+    groupDispatch &&
+    spec.commandKeys.includes("idle");
+
+  if (
+    !queueCompatible &&
+    activeCurrentBlocks.length > 0 &&
+    !clearsGroupQueue
+  ) {
+    throw new Error(
+      "Hàng đợi đang hoạt động nhưng có máy chưa cập nhật Agent: " +
+      queueReadiness.unsupported.join(", ")
+    );
+  }
+
+  const content =
+    clearsGroupQueue
+      ? envelope
+      : queueCompatible
+        ? mergeCommandFileContent(
+            currentContent,
+            envelope,
+            created
+          )
+        : envelope;
 
   const commandName =
     spec.commandKeys
@@ -1731,7 +1993,8 @@ async function dispatchCommandSpec(
     file,
     content,
     `bot: ${spec.targetLabel} ${commandName}`,
-    env
+    env,
+    currentFile
   );
 
   let metadataStored = true;
@@ -1761,7 +2024,14 @@ async function dispatchCommandSpec(
     `✅ Đã gửi tới ${deviceIds.length} máy\n` +
       `Đích: ${spec.targetLabel}\n` +
       `Lệnh:\n- ${spec.commandLines.join("\n- ")}\n` +
-      `Hết hạn: 5 phút\n` +
+      `Hết hạn: ${deferred ? "24 giờ" : "5 phút"}\n` +
+      (
+        deferred
+          ? "Tự bù: máy offline sẽ nhận khi online lại.\n"
+          : groupDispatch
+            ? `Tự bù: chưa bật vì ${queueReadiness.unsupported.length} máy chưa cập nhật Agent.\n`
+            : ""
+      ) +
       `Commit: ${commit.slice(0, 7)}` +
       (metadataStored ? "" : "\nTiến độ: tạm không lưu do KV hết quota."),
     {
@@ -4604,8 +4874,19 @@ async function getGitHubFile(path, env) {
   return data;
 }
 
-async function updateGitHubFile(path, content, message, env) {
-  const current = await getGitHubFile(path, env);
+async function updateGitHubFile(
+  path,
+  content,
+  message,
+  env,
+  currentFile = null
+) {
+  const current =
+    currentFile ||
+    await getGitHubFile(
+      path,
+      env
+    );
   const response = await fetch(
     `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(path)}`,
     {
@@ -4954,6 +5235,18 @@ async function handleAgentReport(request, env) {
     status === "heartbeat"
   ) {
     payload.self_heal_capable = false;
+  }
+
+  if (
+    typeof body.deferred_command_queue_capable ===
+      "boolean"
+  ) {
+    payload.deferred_command_queue_capable =
+      body.deferred_command_queue_capable;
+  } else if (
+    status === "heartbeat"
+  ) {
+    payload.deferred_command_queue_capable = false;
   }
 
   const uptimeNumber =
