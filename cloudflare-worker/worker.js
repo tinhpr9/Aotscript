@@ -17,6 +17,24 @@ const PAIR_TTL_SECONDS = 10 * 60;
 const PAIR_RATE_SECONDS = 60;
 const MAINTENANCE_PREFIX = "maintenance:";
 const REVOKED_PREFIX = "revoked:";
+const HEALTH_STATE_PREFIX = "health_state:";
+const SETTING_PREFIX = "setting:";
+const ALERTS_SETTING_KEY =
+  `${SETTING_PREFIX}alerts_enabled`;
+const HEALTH_BOOTSTRAP_KEY =
+  `${SETTING_PREFIX}health_bootstrapped`;
+const OFFLINE_ALERT_AFTER_MS =
+  3 * 60 * 1000;
+const RECENT_ERROR_WINDOW_MS =
+  24 * 60 * 60 * 1000;
+const LOW_BATTERY_PERCENT = 15;
+const BATTERY_RECOVERY_PERCENT = 20;
+const LOW_STORAGE_BYTES =
+  2 * 1024 * 1024 * 1024;
+const STORAGE_RECOVERY_BYTES =
+  3 * 1024 * 1024 * 1024;
+const QUIET_HOUR_START = 23;
+const QUIET_HOUR_END = 7;
 const COMMAND_TTL_MS = 5 * 60 * 1000;
 const COMMAND_METADATA_TTL_SECONDS = 30 * 24 * 60 * 60;
 const ONLINE_WINDOW_MS = 90 * 1000;
@@ -124,7 +142,9 @@ function isDeviceStatusMetadataKey(name) {
     name.startsWith(PAIR_DEVICE_PREFIX) ||
     name.startsWith(PAIR_RATE_PREFIX) ||
     name.startsWith(MAINTENANCE_PREFIX) ||
-    name.startsWith(REVOKED_PREFIX)
+    name.startsWith(REVOKED_PREFIX) ||
+    name.startsWith(HEALTH_STATE_PREFIX) ||
+    name.startsWith(SETTING_PREFIX)
   );
 }
 
@@ -604,6 +624,9 @@ async function permanentlyRevokeDevice(
       maintenanceKey(deviceId)
     ),
     env.DEVICE_STATUS.delete(
+      healthStateKey(deviceId)
+    ),
+    env.DEVICE_STATUS.delete(
       pairDeviceKey(deviceId)
     ),
   ];
@@ -683,6 +706,9 @@ async function restoreDevice(
     ),
     env.DEVICE_STATUS.delete(
       maintenanceKey(deviceId)
+    ),
+    env.DEVICE_STATUS.delete(
+      healthStateKey(deviceId)
     ),
     env.DEVICE_STATUS.delete(
       pairDeviceKey(deviceId)
@@ -2343,6 +2369,8 @@ export default {
             { command: "start", description: "Mở bảng điều khiển" },
             { command: "status", description: "Xem lệnh hiện tại" },
             { command: "devices", description: "Danh sách thiết bị" },
+            { command: "health", description: "Sức khỏe toàn hệ thống" },
+            { command: "alerts", description: "Cấu hình cảnh báo tự động" },
             { command: "device", description: "Chi tiết một thiết bị" },
             { command: "to", description: "Gửi lệnh tới máy cụ thể" },
             { command: "maintenance", description: "Bật hoặc tắt bảo trì" },
@@ -2403,6 +2431,12 @@ export default {
       return json({ ok: false, error: String(error?.message || error) }, 500);
     }
   },
+
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(
+      checkFleetHealth(env)
+    );
+  },
 };
 
 async function handleUpdate(update, env) {
@@ -2444,6 +2478,37 @@ async function handleUpdate(update, env) {
 
   if (input === "/devices") {
     await showDevices(chatId, env);
+    return;
+  }
+
+  if (input === "/health") {
+    await showHealth(
+      chatId,
+      env
+    );
+    return;
+  }
+
+  const alertsMatch =
+    input.match(
+      /^\/alerts(?:\s+(on|off|status))?$/i
+    );
+
+  if (alertsMatch) {
+    const requested =
+      String(
+        alertsMatch[1] || "status"
+      ).toLowerCase();
+
+    await configureAlerts(
+      chatId,
+      requested === "on"
+        ? true
+        : requested === "off"
+          ? false
+          : null,
+      env
+    );
     return;
   }
 
@@ -3043,6 +3108,76 @@ async function executeSessionCommands(
 async function handleCallback(callback, chatId, messageId, env, fromId) {
   const data = callback.data || "";
 
+  if (data === "show_health") {
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await showHealth(
+      chatId,
+      env,
+      messageId
+    );
+    return;
+  }
+
+  if (data === "health_offline") {
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await showHealthList(
+      chatId,
+      "offline",
+      env
+    );
+    return;
+  }
+
+  if (data === "health_issues") {
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await showHealthList(
+      chatId,
+      "issues",
+      env
+    );
+    return;
+  }
+
+  if (data === "health_agent") {
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await showHealthList(
+      chatId,
+      "agent",
+      env
+    );
+    return;
+  }
+
+  if (data === "alerts_status") {
+    await answerCallback(
+      callback.id,
+      env
+    );
+
+    await configureAlerts(
+      chatId,
+      null,
+      env
+    );
+    return;
+  }
+
   if (
     data.startsWith(
       "revoke_ok:"
@@ -3577,6 +3712,7 @@ function commandKeysFromMask(mask) {
 }
 
 
+
 async function showTargets(
   chatId,
   env,
@@ -3595,14 +3731,15 @@ async function showTargets(
     );
 
   const textValue =
-    "Chọn nhóm hoặc chọn từng máy:";
+    "Chọn nhóm, thiết bị hoặc chức năng quản lý:";
 
   const replyMarkup = {
     inline_keyboard: [
       [
         {
           text: "🌍 TẤT CẢ",
-          callback_data: "target:all",
+          callback_data:
+            "target:all",
         },
         {
           text: `🦫 ${marmotLabel}`,
@@ -3624,13 +3761,26 @@ async function showTargets(
       ],
       [
         {
-          text: "📋 TRẠNG THÁI",
-          callback_data: "status",
+          text: "🏥 SỨC KHỎE",
+          callback_data:
+            "show_health",
         },
         {
           text: "📊 TIẾN ĐỘ",
           callback_data:
             "show_progress",
+        },
+      ],
+      [
+        {
+          text: "📋 TRẠNG THÁI",
+          callback_data:
+            "status",
+        },
+        {
+          text: "🔔 CẢNH BÁO",
+          callback_data:
+            "alerts_status",
         },
       ],
     ],
@@ -4771,6 +4921,1095 @@ async function showDeviceCommands(
   }
 }
 
+
+
+function healthStateKey(deviceId) {
+  return `${HEALTH_STATE_PREFIX}${deviceId}`;
+}
+
+async function alertsEnabled(env) {
+  const value =
+    await env.DEVICE_STATUS.get(
+      ALERTS_SETTING_KEY
+    );
+
+  return value !== "0";
+}
+
+async function configureAlerts(
+  chatId,
+  enabled,
+  env
+) {
+  if (enabled === null) {
+    const current =
+      await alertsEnabled(env);
+
+    await sendMessage(
+      chatId,
+      env,
+      `🔔 CẢNH BÁO TỰ ĐỘNG\n\n` +
+        `Trạng thái: ${current ? "ĐANG BẬT" : "ĐANG TẮT"}\n` +
+        "Máy offline: báo sau 3 phút\n" +
+        "Pin yếu: từ 15% trở xuống\n" +
+        "Bộ nhớ thấp: dưới 2 GB\n" +
+        `Agent chuẩn: ${TARGETING_AGENT_VERSION}\n` +
+        "Giờ yên lặng: 23:00–07:00\n\n" +
+        "Bật: /alerts on\n" +
+        "Tắt: /alerts off"
+    );
+    return;
+  }
+
+  await env.DEVICE_STATUS.put(
+    ALERTS_SETTING_KEY,
+    enabled ? "1" : "0"
+  );
+
+  if (enabled) {
+    await deleteKvPrefix(
+      HEALTH_STATE_PREFIX,
+      env
+    );
+
+    await env.DEVICE_STATUS.delete(
+      HEALTH_BOOTSTRAP_KEY
+    );
+  }
+
+  await sendMessage(
+    chatId,
+    env,
+    enabled
+      ? "🔔 Đã bật cảnh báo tự động. Lần quét đầu sẽ tạo mốc ban đầu để tránh gửi hàng loạt cảnh báo cũ."
+      : "🔕 Đã tắt cảnh báo tự động."
+  );
+}
+
+async function countKvPrefix(
+  prefix,
+  env
+) {
+  let count = 0;
+  let cursor;
+
+  do {
+    const page =
+      await env.DEVICE_STATUS.list({
+        prefix,
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+      });
+
+    count +=
+      (page.keys || []).length;
+
+    cursor =
+      page.list_complete
+        ? undefined
+        : page.cursor;
+  } while (cursor);
+
+  return count;
+}
+
+function vietnamHourNow() {
+  try {
+    const parts =
+      new Intl.DateTimeFormat(
+        "en-GB",
+        {
+          timeZone:
+            "Asia/Ho_Chi_Minh",
+          hour: "2-digit",
+          hour12: false,
+        }
+      ).formatToParts(
+        new Date()
+      );
+
+    const hourPart =
+      parts.find(
+        (part) =>
+          part.type === "hour"
+      );
+
+    return Number(
+      hourPart?.value
+    );
+  } catch (error) {
+    return -1;
+  }
+}
+
+function isQuietHour() {
+  const hour = vietnamHourNow();
+
+  if (
+    !Number.isInteger(hour) ||
+    hour < 0
+  ) {
+    return false;
+  }
+
+  return (
+    hour >= QUIET_HOUR_START ||
+    hour < QUIET_HOUR_END
+  );
+}
+
+function formatHealthDuration(value) {
+  const milliseconds =
+    Math.max(
+      0,
+      Number(value) || 0
+    );
+
+  const minutes =
+    Math.floor(
+      milliseconds / 60000
+    );
+
+  if (minutes < 1) {
+    return "dưới 1 phút";
+  }
+
+  if (minutes < 60) {
+    return `${minutes} phút`;
+  }
+
+  const hours =
+    Math.floor(
+      minutes / 60
+    );
+
+  const remainingMinutes =
+    minutes % 60;
+
+  if (hours < 24) {
+    return remainingMinutes
+      ? `${hours} giờ ${remainingMinutes} phút`
+      : `${hours} giờ`;
+  }
+
+  const days =
+    Math.floor(hours / 24);
+
+  const remainingHours =
+    hours % 24;
+
+  return remainingHours
+    ? `${days} ngày ${remainingHours} giờ`
+    : `${days} ngày`;
+}
+
+function initialHealthState(
+  device,
+  now,
+  suppressCurrentIssues
+) {
+  return {
+    version: 1,
+    observed_online:
+      device.online,
+    offline_since:
+      device.online
+        ? null
+        : now,
+    offline_alert_sent:
+      false,
+    low_battery_alerted:
+      suppressCurrentIssues
+        ? device.lowBattery
+        : false,
+    low_storage_alerted:
+      suppressCurrentIssues
+        ? device.lowStorage
+        : false,
+    agent_old_alerted:
+      suppressCurrentIssues
+        ? device.oldAgent
+        : false,
+    last_error_alerted_key:
+      suppressCurrentIssues
+        ? device.errorKey
+        : null,
+    updated_at: now,
+  };
+}
+
+async function loadHealthState(
+  deviceId,
+  env
+) {
+  try {
+    const raw =
+      await env.DEVICE_STATUS.get(
+        healthStateKey(deviceId)
+      );
+
+    if (!raw) return null;
+
+    const value =
+      JSON.parse(raw);
+
+    return (
+      value &&
+      typeof value === "object"
+    )
+      ? value
+      : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function saveHealthState(
+  deviceId,
+  state,
+  env
+) {
+  await env.DEVICE_STATUS.put(
+    healthStateKey(deviceId),
+    JSON.stringify(state)
+  );
+}
+
+async function collectFleetHealth(
+  env,
+  includeRevoked = true
+) {
+  const now = Date.now();
+
+  const ids =
+    await deviceIdsForTarget(
+      "all",
+      env
+    );
+
+  const devices = [];
+  const groupLabels = new Map();
+
+  for (const id of ids) {
+    const record =
+      await getDeviceRecord(
+        id,
+        env
+      );
+
+    if (!record) continue;
+
+    const maintenance =
+      await isDeviceMaintenance(
+        id,
+        env
+      );
+
+    const name =
+      await deviceDisplayName(
+        id,
+        env
+      );
+
+    const group =
+      normalizeDeviceGroup(
+        record.device_group
+      );
+
+    if (
+      group &&
+      !groupLabels.has(group)
+    ) {
+      groupLabels.set(
+        group,
+        await getGroupLabel(
+          group,
+          env
+        )
+      );
+    }
+
+    const lastSeen =
+      Number(
+        record.last_seen || 0
+      );
+
+    const online =
+      lastSeen > 0 &&
+      now - lastSeen <=
+        ONLINE_WINDOW_MS;
+
+    const batteryNumber =
+      Number(
+        record.battery_level
+      );
+
+    const batteryLevel =
+      Number.isFinite(
+        batteryNumber
+      )
+        ? batteryNumber
+        : null;
+
+    const storageNumber =
+      Number(
+        record.storage_free_bytes
+      );
+
+    const storageFreeBytes =
+      Number.isFinite(
+        storageNumber
+      )
+        ? storageNumber
+        : null;
+
+    const lowBattery =
+      batteryLevel !== null &&
+      batteryLevel <=
+        LOW_BATTERY_PERCENT;
+
+    const lowStorage =
+      storageFreeBytes !== null &&
+      storageFreeBytes <
+        LOW_STORAGE_BYTES;
+
+    const oldAgent =
+      record.agent_version !==
+        TARGETING_AGENT_VERSION;
+
+    const commandTimestamp =
+      Number(
+        record.last_command_ts || 0
+      );
+
+    const recentError =
+      record.last_status === "error" &&
+      commandTimestamp > 0 &&
+      now - commandTimestamp <=
+        RECENT_ERROR_WINDOW_MS;
+
+    const errorKey =
+      recentError
+        ? (
+            `${
+              record.last_command_id ||
+              "unknown"
+            }:${commandTimestamp}`
+          )
+        : null;
+
+    devices.push({
+      id,
+      name,
+      group:
+        groupLabels.get(group) ||
+        group ||
+        "-",
+      record,
+      maintenance,
+      lastSeen,
+      online,
+      batteryLevel,
+      storageFreeBytes,
+      lowBattery,
+      lowStorage,
+      oldAgent,
+      recentError,
+      errorKey,
+    });
+  }
+
+  const revoked =
+    includeRevoked
+      ? await countKvPrefix(
+          REVOKED_PREFIX,
+          env
+        )
+      : 0;
+
+  const issues =
+    devices.filter(
+      (device) =>
+        device.lowBattery ||
+        device.lowStorage ||
+        device.oldAgent ||
+        device.recentError
+    ).length;
+
+  return {
+    now,
+    revoked,
+    devices,
+    counts: {
+      total:
+        devices.length,
+      online:
+        devices.filter(
+          (device) =>
+            device.online
+        ).length,
+      offline:
+        devices.filter(
+          (device) =>
+            !device.online
+        ).length,
+      maintenance:
+        devices.filter(
+          (device) =>
+            device.maintenance
+        ).length,
+      lowBattery:
+        devices.filter(
+          (device) =>
+            device.lowBattery
+        ).length,
+      lowStorage:
+        devices.filter(
+          (device) =>
+            device.lowStorage
+        ).length,
+      oldAgent:
+        devices.filter(
+          (device) =>
+            device.oldAgent
+        ).length,
+      recentError:
+        devices.filter(
+          (device) =>
+            device.recentError
+        ).length,
+      issues,
+    },
+  };
+}
+
+function splitTextChunks(
+  lines,
+  maxLength = 3500
+) {
+  const chunks = [];
+  let current = "";
+
+  for (const rawLine of lines) {
+    const line =
+      String(rawLine ?? "");
+
+    const next =
+      current
+        ? `${current}\n${line}`
+        : line;
+
+    if (
+      next.length > maxLength &&
+      current
+    ) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = next;
+    }
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
+async function sendTextChunks(
+  chatId,
+  env,
+  lines,
+  replyMarkup
+) {
+  const chunks =
+    splitTextChunks(lines);
+
+  for (
+    let index = 0;
+    index < chunks.length;
+    index += 1
+  ) {
+    await sendMessage(
+      chatId,
+      env,
+      chunks[index],
+      index === chunks.length - 1
+        ? replyMarkup
+        : undefined
+    );
+  }
+}
+
+async function showHealth(
+  chatId,
+  env,
+  messageId
+) {
+  const snapshot =
+    await collectFleetHealth(
+      env,
+      true
+    );
+
+  const alertsOn =
+    await alertsEnabled(env);
+
+  const counts =
+    snapshot.counts;
+
+  const textValue =
+    "🏥 SỨC KHỎE HỆ THỐNG\n\n" +
+    `Tổng thiết bị: ${counts.total}\n` +
+    `🟢 Online: ${counts.online}\n` +
+    `🔴 Offline: ${counts.offline}\n` +
+    `🛠 Bảo trì: ${counts.maintenance}\n` +
+    `🛑 Đã thu hồi: ${snapshot.revoked}\n\n` +
+    `⚠️ Pin từ ${LOW_BATTERY_PERCENT}% trở xuống: ${counts.lowBattery}\n` +
+    `💾 Bộ nhớ dưới 2 GB: ${counts.lowStorage}\n` +
+    `⬆️ Agent cũ: ${counts.oldAgent}\n` +
+    `❌ Lệnh lỗi gần đây: ${counts.recentError}\n\n` +
+    `Cảnh báo: ${alertsOn ? "ĐANG BẬT" : "ĐANG TẮT"}\n` +
+    "Giờ yên lặng: 23:00–07:00";
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        {
+          text:
+            `🔴 OFFLINE (${counts.offline})`,
+          callback_data:
+            "health_offline",
+        },
+        {
+          text:
+            `⚠️ CÓ VẤN ĐỀ (${counts.issues})`,
+          callback_data:
+            "health_issues",
+        },
+      ],
+      [
+        {
+          text:
+            `⬆️ AGENT CŨ (${counts.oldAgent})`,
+          callback_data:
+            "health_agent",
+        },
+        {
+          text: "📋 TẤT CẢ MÁY",
+          callback_data:
+            "show_devices",
+        },
+      ],
+      [
+        {
+          text:
+            alertsOn
+              ? "🔔 CẢNH BÁO: BẬT"
+              : "🔕 CẢNH BÁO: TẮT",
+          callback_data:
+            "alerts_status",
+        },
+        {
+          text: "⬅️ MENU",
+          callback_data:
+            "menu",
+        },
+      ],
+    ],
+  };
+
+  if (messageId) {
+    await editMessage(
+      chatId,
+      messageId,
+      env,
+      textValue,
+      replyMarkup
+    );
+  } else {
+    await sendMessage(
+      chatId,
+      env,
+      textValue,
+      replyMarkup
+    );
+  }
+}
+
+async function showHealthList(
+  chatId,
+  filter,
+  env
+) {
+  const snapshot =
+    await collectFleetHealth(
+      env,
+      false
+    );
+
+  let selected;
+  let title;
+
+  if (filter === "offline") {
+    selected =
+      snapshot.devices.filter(
+        (device) =>
+          !device.online
+      );
+
+    title =
+      "🔴 THIẾT BỊ OFFLINE";
+  } else if (filter === "agent") {
+    selected =
+      snapshot.devices.filter(
+        (device) =>
+          device.oldAgent
+      );
+
+    title =
+      "⬆️ THIẾT BỊ DÙNG AGENT CŨ";
+  } else {
+    selected =
+      snapshot.devices.filter(
+        (device) =>
+          device.lowBattery ||
+          device.lowStorage ||
+          device.oldAgent ||
+          device.recentError
+      );
+
+    title =
+      "⚠️ THIẾT BỊ CÓ VẤN ĐỀ";
+  }
+
+  if (selected.length === 0) {
+    await sendMessage(
+      chatId,
+      env,
+      `${title}\n\nKhông có thiết bị phù hợp.`,
+      {
+        inline_keyboard: [
+          [
+            {
+              text: "⬅️ SỨC KHỎE",
+              callback_data:
+                "show_health",
+            },
+          ],
+        ],
+      }
+    );
+    return;
+  }
+
+  selected.sort(
+    (left, right) =>
+      left.name.localeCompare(
+        right.name,
+        "vi",
+        {
+          numeric: true,
+          sensitivity: "base",
+        }
+      )
+  );
+
+  const lines = [
+    `${title}: ${selected.length}`,
+    "",
+  ];
+
+  for (const device of selected) {
+    const flags = [];
+
+    if (!device.online) {
+      flags.push(
+        `Offline ${formatRelativeDeviceTime(device.lastSeen, snapshot.now)}`
+      );
+    }
+
+    if (device.lowBattery) {
+      flags.push(
+        `Pin ${device.batteryLevel}%`
+      );
+    }
+
+    if (device.lowStorage) {
+      flags.push(
+        `Trống ${formatByteCount(device.storageFreeBytes)}`
+      );
+    }
+
+    if (device.oldAgent) {
+      flags.push(
+        `Agent ${
+          device.record.agent_version ||
+          "bản cũ"
+        }`
+      );
+    }
+
+    if (device.recentError) {
+      flags.push(
+        "Có lệnh lỗi gần đây"
+      );
+    }
+
+    if (device.maintenance) {
+      flags.push(
+        "Đang bảo trì"
+      );
+    }
+
+    lines.push(
+      `${device.online ? "🟢" : "⚪"} ${device.name}`,
+      `ID: ${device.id}`,
+      `Nhóm: ${device.group}`,
+      `Vấn đề: ${flags.join(", ") || "-"}`,
+      ""
+    );
+  }
+
+  await sendTextChunks(
+    chatId,
+    env,
+    lines,
+    {
+      inline_keyboard: [
+        [
+          {
+            text: "⬅️ SỨC KHỎE",
+            callback_data:
+              "show_health",
+          },
+          {
+            text: "📋 DANH SÁCH",
+            callback_data:
+              "show_devices",
+          },
+        ],
+      ],
+    }
+  );
+}
+
+async function checkFleetHealth(env) {
+  try {
+    if (
+      !(await alertsEnabled(env))
+    ) {
+      return;
+    }
+
+    const snapshot =
+      await collectFleetHealth(
+        env,
+        false
+      );
+
+    const now =
+      snapshot.now;
+
+    const quiet =
+      isQuietHour();
+
+    const bootstrapped =
+      (
+        await env.DEVICE_STATUS.get(
+          HEALTH_BOOTSTRAP_KEY
+        )
+      ) === "1";
+
+    const alertEntries = [];
+    const finalStates = new Map();
+
+    for (
+      const device of snapshot.devices
+    ) {
+      let state =
+        await loadHealthState(
+          device.id,
+          env
+        );
+
+      if (
+        !state ||
+        state.version !== 1
+      ) {
+        state =
+          initialHealthState(
+            device,
+            now,
+            !bootstrapped
+          );
+
+        await saveHealthState(
+          device.id,
+          state,
+          env
+        );
+
+        if (!bootstrapped) {
+          continue;
+        }
+      } else {
+        state = {
+          ...state,
+        };
+      }
+
+      if (device.maintenance) {
+        await saveHealthState(
+          device.id,
+          initialHealthState(
+            device,
+            now,
+            true
+          ),
+          env
+        );
+        continue;
+      }
+
+      if (
+        typeof state.observed_online !==
+        "boolean"
+      ) {
+        state.observed_online =
+          device.online;
+      }
+
+      if (
+        state.observed_online !==
+        device.online
+      ) {
+        state.observed_online =
+          device.online;
+
+        if (!device.online) {
+          state.offline_since =
+            now;
+          state.offline_alert_sent =
+            false;
+        } else if (
+          !state.offline_alert_sent
+        ) {
+          state.offline_since =
+            null;
+        }
+      }
+
+      if (
+        device.batteryLevel !== null &&
+        device.batteryLevel >=
+          BATTERY_RECOVERY_PERCENT
+      ) {
+        state.low_battery_alerted =
+          false;
+      }
+
+      if (
+        device.storageFreeBytes !==
+          null &&
+        device.storageFreeBytes >=
+          STORAGE_RECOVERY_BYTES
+      ) {
+        state.low_storage_alerted =
+          false;
+      }
+
+      if (!device.oldAgent) {
+        state.agent_old_alerted =
+          false;
+      }
+
+      state.updated_at = now;
+
+      const finalState = {
+        ...state,
+      };
+
+      if (!device.online) {
+        if (
+          !state.offline_since
+        ) {
+          state.offline_since =
+            now;
+          finalState.offline_since =
+            now;
+        }
+
+        if (
+          !quiet &&
+          !state.offline_alert_sent &&
+          now -
+            Number(
+              state.offline_since
+            ) >=
+            OFFLINE_ALERT_AFTER_MS
+        ) {
+          alertEntries.push(
+            `🔴 ${device.name} đã mất kết nối\n` +
+              `ID: ${device.id}\n` +
+              `Heartbeat cuối: ${formatRelativeDeviceTime(device.lastSeen, now)}`
+          );
+
+          finalState.offline_alert_sent =
+            true;
+        }
+      } else if (
+        state.offline_alert_sent
+      ) {
+        if (!quiet) {
+          alertEntries.push(
+            `🟢 ${device.name} đã online trở lại\n` +
+              `ID: ${device.id}\n` +
+              `Gián đoạn: ${formatHealthDuration(now - Number(state.offline_since || now))}`
+          );
+
+          finalState.offline_alert_sent =
+            false;
+          finalState.offline_since =
+            null;
+        }
+      } else {
+        state.offline_since =
+          null;
+        finalState.offline_since =
+          null;
+      }
+
+      if (
+        device.lowBattery &&
+        !state.low_battery_alerted &&
+        !quiet
+      ) {
+        alertEntries.push(
+          `🔋 ${device.name} sắp hết pin\n` +
+            `ID: ${device.id}\n` +
+            `Pin còn: ${device.batteryLevel}%`
+        );
+
+        finalState.low_battery_alerted =
+          true;
+      }
+
+      if (
+        device.lowStorage &&
+        !state.low_storage_alerted &&
+        !quiet
+      ) {
+        alertEntries.push(
+          `💾 ${device.name} sắp hết bộ nhớ\n` +
+            `ID: ${device.id}\n` +
+            `Dung lượng trống: ${formatByteCount(device.storageFreeBytes)}`
+        );
+
+        finalState.low_storage_alerted =
+          true;
+      }
+
+      if (
+        device.oldAgent &&
+        !state.agent_old_alerted &&
+        !quiet
+      ) {
+        alertEntries.push(
+          `⬆️ ${device.name} đang dùng Agent cũ\n` +
+            `ID: ${device.id}\n` +
+            `Hiện tại: ${device.record.agent_version || "không rõ"}\n` +
+            `Yêu cầu: ${TARGETING_AGENT_VERSION}`
+        );
+
+        finalState.agent_old_alerted =
+          true;
+      }
+
+      if (
+        device.recentError &&
+        device.errorKey !==
+          state.last_error_alerted_key &&
+        !quiet
+      ) {
+        alertEntries.push(
+          `❌ ${device.name} báo lỗi lệnh\n` +
+            `ID: ${device.id}\n` +
+            `Lệnh: ${device.record.last_command || "-"}\n` +
+            `Kết quả: ${String(device.record.last_result || "-").slice(0, 200)}`
+        );
+
+        finalState.last_error_alerted_key =
+          device.errorKey;
+      }
+
+      finalState.updated_at =
+        now;
+
+      await saveHealthState(
+        device.id,
+        state,
+        env
+      );
+
+      if (
+        JSON.stringify(finalState) !==
+        JSON.stringify(state)
+      ) {
+        finalStates.set(
+          device.id,
+          finalState
+        );
+      }
+    }
+
+    if (alertEntries.length > 0) {
+      const lines = [
+        "🚨 CẢNH BÁO HỆ THỐNG",
+        "",
+      ];
+
+      for (
+        const entry of alertEntries
+      ) {
+        lines.push(
+          entry,
+          ""
+        );
+      }
+
+      await sendTextChunks(
+        String(
+          env.TELEGRAM_ADMIN_USER_ID
+        ),
+        env,
+        lines
+      );
+
+      for (
+        const [deviceId, state]
+        of finalStates
+      ) {
+        await saveHealthState(
+          deviceId,
+          state,
+          env
+        );
+      }
+    }
+
+    await env.DEVICE_STATUS.put(
+      HEALTH_BOOTSTRAP_KEY,
+      "1"
+    );
+  } catch (error) {
+    console.error(
+      "fleet_health_check_failed",
+      error?.message || error
+    );
+  }
+}
 
 async function showDevices(chatId, env) {
   const now = Date.now();

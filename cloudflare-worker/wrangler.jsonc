@@ -1,8 +1,12 @@
 {
   "name": "billowing-haze-0cafaotscript-control",
   "main": "worker.js",
-  "compatibility_date": "2026-08-03"
-  ,
+  "compatibility_date": "2026-08-03",
+  "triggers": {
+    "crons": [
+      "*/1 * * * *"
+    ]
+  },
   "kv_namespaces": [
     {
       "binding": "DEVICE_STATUS"
