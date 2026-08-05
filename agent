@@ -36,6 +36,12 @@ AGENT_CONFIG_PATH = "/storage/emulated/0/Download/Shouko/agent_config.json"
 AGENT_VERSION = "fleet-ops-1"
 RELOAD_NOVAGAG2_CAPABLE = True
 SECURE_SOLVER_CAPABLE = True
+SELF_HEAL_CAPABLE = True
+SYSTEM_RECONCILE_INTERVAL_SECONDS = 6 * 60 * 60
+SYSTEM_RECONCILE_LAST_RUN = None
+TERMUX_BOOT_PATH = os.path.expanduser(
+    "~/.termux/boot/01-agent.sh"
+)
 AUTOEXECUTE_DIR = "/storage/emulated/0/Delta/Autoexecute"
 GROUP_SCRIPT_FILE = os.path.join(AUTOEXECUTE_DIR, "group_script.lua")
 GROUP_SCRIPT_BACKUP_FILE = (
@@ -329,6 +335,8 @@ def collect_device_metrics():
             RELOAD_NOVAGAG2_CAPABLE,
         "secure_solver_capable":
             SECURE_SOLVER_CAPABLE,
+        "self_heal_capable":
+            SELF_HEAL_CAPABLE,
     }
 
     capacity = read_first_text(
@@ -480,6 +488,31 @@ def heartbeat_loop(
                 ),
         }
 
+        payload.update({
+            "setup_health":
+                state.get(
+                    "setup_health",
+                    "unknown",
+                ),
+            "last_reconcile_at":
+                state.get(
+                    "last_reconcile_at",
+                    "",
+                ),
+            "last_repair_result":
+                state.get(
+                    "last_repair_result",
+                    "",
+                ),
+            "needs_manual_action":
+                bool(
+                    state.get(
+                        "needs_manual_action",
+                        False,
+                    )
+                ),
+        })
+
         payload.update(
             collect_device_metrics()
         )
@@ -504,6 +537,10 @@ def load_state():
         "last_processed_at": "",
         "last_command_id": "",
         "last_result": "",
+        "setup_health": "unknown",
+        "last_reconcile_at": "",
+        "last_repair_result": "",
+        "needs_manual_action": False,
     }
 
     if not os.path.exists(STATE_PATH):
@@ -1223,6 +1260,287 @@ def reboot_device():
     log_error("reboot_device", RuntimeError("Tất cả phương án reboot đều thất bại"))
     print("[!] Không thể reboot thiết bị bằng các phương án hiện tại.")
 
+
+def reconcile_termux_boot():
+    try:
+        setup_termux_boot()
+
+        if not os.path.isfile(
+            TERMUX_BOOT_PATH
+        ):
+            return (
+                False,
+                "boot_missing",
+            )
+
+        os.chmod(
+            TERMUX_BOOT_PATH,
+            0o700,
+        )
+
+        bash_path = (
+            shutil.which("bash")
+            or (
+                "/data/data/com.termux/"
+                "files/usr/bin/bash"
+            )
+        )
+
+        result = subprocess.run(
+            [
+                bash_path,
+                "-n",
+                TERMUX_BOOT_PATH,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        if result.returncode != 0:
+            return (
+                False,
+                "boot_invalid",
+            )
+
+        return (
+            True,
+            "boot_ok",
+        )
+
+    except Exception as error:
+        log_error(
+            "reconcile_termux_boot",
+            RuntimeError(
+                type(error).__name__
+            ),
+        )
+
+        return (
+            False,
+            (
+                "boot_error_"
+                + type(error).__name__
+            ),
+        )
+
+
+def agent_process_count():
+    pgrep_path = shutil.which(
+        "pgrep"
+    )
+
+    if not pgrep_path:
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                pgrep_path,
+                "-af",
+                (
+                    "[/]Download/"
+                    "Agent_Core.py"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        if result.returncode == 1:
+            return 0
+
+        if result.returncode != 0:
+            return None
+
+        return len([
+            line
+            for line
+            in result.stdout.splitlines()
+            if line.strip()
+        ])
+
+    except Exception:
+        return None
+
+
+def reconcile_system_state(
+    state,
+    group,
+    force=False,
+):
+    global SYSTEM_RECONCILE_LAST_RUN
+
+    now = time.monotonic()
+
+    if (
+        not force
+        and SYSTEM_RECONCILE_LAST_RUN
+        is not None
+        and (
+            now
+            - SYSTEM_RECONCILE_LAST_RUN
+            < SYSTEM_RECONCILE_INTERVAL_SECONDS
+        )
+    ):
+        return (
+            state.get(
+                "setup_health"
+            )
+            != "degraded"
+        )
+
+    SYSTEM_RECONCILE_LAST_RUN = now
+
+    state["setup_health"] = (
+        "repairing"
+    )
+
+    state[
+        "needs_manual_action"
+    ] = False
+
+    save_state(state)
+
+    repaired = []
+    issues = []
+
+    try:
+        os.makedirs(
+            os.path.dirname(
+                STATE_PATH
+            ),
+            exist_ok=True,
+        )
+
+        os.makedirs(
+            AUTOEXECUTE_DIR,
+            exist_ok=True,
+        )
+
+        repaired.append(
+            "directories_ok"
+        )
+
+    except Exception:
+        issues.append(
+            "required_directories"
+        )
+
+    if load_device_id() is None:
+        issues.append(
+            "device_id"
+        )
+
+    if group not in GROUP_SCRIPT_URLS:
+        issues.append(
+            "device_group"
+        )
+
+    if not load_agent_config():
+        issues.append(
+            "agent_config"
+        )
+
+    if group in GROUP_SCRIPT_URLS:
+        if reconcile_autoexecute(
+            group,
+            force=True,
+        ):
+            repaired.append(
+                "autoexecute_ok"
+            )
+        else:
+            issues.append(
+                "autoexecute"
+            )
+
+    boot_ok, boot_result = (
+        reconcile_termux_boot()
+    )
+
+    if boot_ok:
+        repaired.append(
+            boot_result
+        )
+    else:
+        issues.append(
+            boot_result
+        )
+
+    process_count = (
+        agent_process_count()
+    )
+
+    if process_count is not None:
+        repaired.append(
+            (
+                "agent_processes="
+                f"{process_count}"
+            )
+        )
+
+        if process_count > 1:
+            issues.append(
+                "duplicate_agent_processes"
+            )
+
+    timestamp = (
+        datetime.datetime.utcnow()
+        .strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    )
+
+    state["setup_health"] = (
+        "degraded"
+        if issues
+        else "healthy"
+    )
+
+    state[
+        "last_reconcile_at"
+    ] = timestamp
+
+    state[
+        "needs_manual_action"
+    ] = bool(issues)
+
+    details = (
+        issues
+        if issues
+        else repaired
+    )
+
+    if not details:
+        details = [
+            "no_change"
+        ]
+
+    result = (
+        (
+            "degraded: "
+            if issues
+            else "ok: "
+        )
+        + ", ".join(details)
+    )
+
+    state[
+        "last_repair_result"
+    ] = result[:500]
+
+    save_state(state)
+
+    print(
+        "[+] RECONCILE_SYSTEM: "
+        + result
+    )
+
+    return not issues
+
+
 # Hàm 1: Tự động quét Github, tải và cài đặt Delta
 def auto_update_system():
     print("\n[*] BẮT ĐẦU QUY TRÌNH KÉO FILE VÀ CÀI ĐẶT...")
@@ -1539,6 +1857,10 @@ if __name__ == "__main__":
             save_state(state)
 
         reconcile_autoexecute(group)
+        reconcile_system_state(
+            state,
+            group,
+        )
 
         common_text, group_text = fetch_commands_for_group(group)
         if common_text is None and group_text is None:
