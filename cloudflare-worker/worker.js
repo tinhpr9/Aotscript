@@ -1,3 +1,11 @@
+import {
+  checkActiveRollout,
+  getActiveRollout,
+  handleRolloutCallback,
+  handleRolloutCommand,
+  isRolloutMetadataKey,
+} from "./rollout.js";
+
 const OWNER = "tinhpr9";
 const REPO = "Aotscript";
 const BRANCH = "main";
@@ -221,6 +229,7 @@ function isDeviceStatusMetadataKey(name) {
     name.startsWith(MAINTENANCE_PREFIX) ||
     name.startsWith(REVOKED_PREFIX) ||
     name.startsWith(HEALTH_STATE_PREFIX) ||
+    isRolloutMetadataKey(name) ||
     name.startsWith(SETTING_PREFIX)
   );
 }
@@ -1245,6 +1254,20 @@ async function requestCommandDispatch(
   env,
   options = {}
 ) {
+  const activeRollout =
+    await getActiveRollout(env);
+
+  if (activeRollout) {
+    await sendMessage(
+      chatId,
+      env,
+      `Đang có rollout ${activeRollout.id}. ` +
+        "Không gửi lệnh thường để tránh ghi đè file lệnh. " +
+        "Dùng /rollout status hoặc /rollout stop."
+    );
+    return null;
+  }
+
   let resolved;
 
   try {
@@ -2447,6 +2470,31 @@ async function setGroupLabel(
   );
 }
 
+function getRolloutOps() {
+  return {
+    targetFiles: TARGET_FILES,
+    commands: COMMANDS,
+    targetAgentVersion:
+      TARGETING_AGENT_VERSION,
+    onlineWindowMs:
+      ONLINE_WINDOW_MS,
+    commandTtlMs:
+      COMMAND_TTL_MS,
+    normalizeTargetInput,
+    normalizeDeviceId,
+    compareDeviceIds,
+    deviceIdsForTarget,
+    getDeviceRecord,
+    isDeviceMaintenance,
+    getTargetLabel,
+    commandEnvelope,
+    updateGitHubFile,
+    storeCommandMetadata,
+    sendMessage,
+    answerCallback,
+  };
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -2482,6 +2530,7 @@ export default {
             { command: "restore", description: "Cho phép lại ID đã thu hồi" },
             { command: "groupname", description: "Đổi tên hiển thị nhóm" },
             { command: "progress", description: "Xem tiến độ lệnh gần nhất" },
+            { command: "rollout", description: "Triển khai an toàn theo đợt" },
           ],
         });
 
@@ -2538,6 +2587,10 @@ export default {
       Promise.all([
         ensureNumberedGroupLabels(env),
         checkFleetHealth(env),
+        checkActiveRollout(
+          env,
+          getRolloutOps()
+        ),
       ])
     );
   },
@@ -2613,6 +2666,17 @@ async function handleUpdate(update, env) {
           : null,
       env
     );
+    return;
+  }
+
+  if (
+    await handleRolloutCommand({
+      input,
+      chatId,
+      env,
+      ops: getRolloutOps(),
+    })
+  ) {
     return;
   }
 
@@ -3254,6 +3318,18 @@ async function executeSessionCommands(
 
 async function handleCallback(callback, chatId, messageId, env, fromId) {
   const data = callback.data || "";
+
+  if (
+    await handleRolloutCallback({
+      data,
+      callbackId: callback.id,
+      chatId,
+      env,
+      ops: getRolloutOps(),
+    })
+  ) {
+    return;
+  }
 
   if (data === "show_health") {
     await answerCallback(
@@ -3904,6 +3980,13 @@ async function showTargets(
           text: "🎯 TỪNG MÁY",
           callback_data:
             "show_devices",
+        },
+      ],
+      [
+        {
+          text: "🚀 TRIỂN KHAI",
+          callback_data:
+            "show_rollout",
         },
       ],
       [
