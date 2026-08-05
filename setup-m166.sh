@@ -9,9 +9,10 @@ root() { su -c "$1"; }
 
 usage() {
   echo "Cách dùng:"
-  echo "  msetup 116 NOVA"
-  echo "  msetup m166 NOVA"
-  echo "  msetup 62 MARMOT"
+  echo "  msetup 62 1"
+  echo "  msetup 116 2"
+  echo "  msetup m166 2"
+  echo "Nhóm hợp lệ: 1 hoặc 2"
 }
 
 DEVICE_ID_RAW="${1:-}"
@@ -34,18 +35,27 @@ else
   DEVICE_ID="$DEVICE_ID_INPUT"
 fi
 
-DEVICE_GROUP="$(
+DEVICE_GROUP_INPUT="$(
   printf '%s' "$DEVICE_GROUP_RAW" |
-    tr -d '\r\n ' |
+    tr -d '\r\n _-' |
     tr '[:lower:]' '[:upper:]'
 )"
 
 [[ "$DEVICE_ID" =~ ^m[1-9][0-9]{0,5}$ ]] ||
   die "Device ID không hợp lệ: $DEVICE_ID_RAW"
 
-case "$DEVICE_GROUP" in
-  MARMOT|NOVA) ;;
-  *) die "Profile không hợp lệ: $DEVICE_GROUP_RAW" ;;
+case "$DEVICE_GROUP_INPUT" in
+  1|NHOM1|GROUP1|MARMOT)
+    DEVICE_GROUP="MARMOT"
+    DEVICE_GROUP_LABEL="NHÓM 1"
+    ;;
+  2|NHOM2|GROUP2|NOVA)
+    DEVICE_GROUP="NOVA"
+    DEVICE_GROUP_LABEL="NHÓM 2"
+    ;;
+  *)
+    die "Nhóm không hợp lệ: $DEVICE_GROUP_RAW; chỉ dùng 1 hoặc 2"
+    ;;
 esac
 
 validate_agent_config() {
@@ -99,7 +109,7 @@ KEYS=(
   force_desktop_mode_on_external_displays
 )
 
-echo "=== MSETUP: $DEVICE_ID / $DEVICE_GROUP ==="
+echo "=== MSETUP: $DEVICE_ID / $DEVICE_GROUP_LABEL ==="
 
 root id 2>/dev/null | grep -q 'uid=0(root)' ||
   die "ROOT không hoạt động"
@@ -184,9 +194,10 @@ set -u
 
 usage() {
   echo "Cách dùng:"
-  echo "  msetup 116 NOVA"
-  echo "  msetup m166 NOVA"
-  echo "  msetup 62 MARMOT"
+  echo "  msetup 62 1"
+  echo "  msetup 116 2"
+  echo "  msetup m166 2"
+  echo "Nhóm hợp lệ: 1 hoặc 2"
 }
 
 [ "$#" -eq 2 ] || {
@@ -820,10 +831,10 @@ STATE_FILE="$DIR/agent_state.json"
 
 usage() {
   echo "Cách dùng:"
-  echo "  setdevice 62 MARMOT"
-  echo "  setdevice m62 MARMOT"
-  echo "  setdevice 116 NOVA"
-  echo "  setdevice m166 NOVA"
+  echo "  setdevice 62 1"
+  echo "  setdevice m62 1"
+  echo "  setdevice 116 2"
+  echo "  setdevice m166 2"
 }
 
 [ -n "$NAME_RAW" ] && [ -n "$GROUP_RAW" ] || {
@@ -843,9 +854,9 @@ else
   NAME="$NAME_INPUT"
 fi
 
-GROUP="$(
+GROUP_INPUT="$(
   printf '%s' "$GROUP_RAW" |
-    tr -d '\r\n ' |
+    tr -d '\r\n _-' |
     tr '[:lower:]' '[:upper:]'
 )"
 
@@ -854,10 +865,17 @@ GROUP="$(
   exit 1
 }
 
-case "$GROUP" in
-  MARMOT|NOVA) ;;
+case "$GROUP_INPUT" in
+  1|NHOM1|GROUP1|MARMOT)
+    GROUP="MARMOT"
+    GROUP_LABEL="NHÓM 1"
+    ;;
+  2|NHOM2|GROUP2|NOVA)
+    GROUP="NOVA"
+    GROUP_LABEL="NHÓM 2"
+    ;;
   *)
-    echo "[LỖI] Profile không hợp lệ: $GROUP_RAW"
+    echo "[LỖI] Nhóm không hợp lệ: $GROUP_RAW; chỉ dùng 1 hoặc 2"
     exit 1
     ;;
 esac
@@ -876,7 +894,7 @@ OLD_GROUP="$(
 
 if [ "$OLD_ID" = "$NAME" ] &&
    [ "$OLD_GROUP" = "$GROUP" ]; then
-  echo "[OK] Máy đã được cấu hình: $NAME / $GROUP"
+  echo "[OK] Máy đã được cấu hình: $NAME / $GROUP_LABEL"
   exit 0
 fi
 
@@ -905,7 +923,7 @@ cat > "${STATE_FILE}.tmp" <<'STATE_EOF'
 STATE_EOF
 
 mv "${STATE_FILE}.tmp" "$STATE_FILE"
-echo "[OK] Đã cấu hình máy: $NAME / $GROUP"
+echo "[OK] Đã cấu hình máy: $NAME / $GROUP_LABEL"
 SETDEVICE_EOF
 
 chmod 700 "$SETDEVICE_TMP"

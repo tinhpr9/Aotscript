@@ -8,6 +8,11 @@ const TARGET_FILES = {
   nova: "lenh_nova.txt",
 };
 
+const DEFAULT_GROUP_LABELS = {
+  MARMOT: "NHÓM 1",
+  NOVA: "NHÓM 2",
+};
+
 const DEVICE_ALIAS_PREFIX = "device_alias:";
 const GROUP_LABEL_PREFIX = "group_label:";
 const PAIR_PREFIX = "pair:";
@@ -19,6 +24,8 @@ const MAINTENANCE_PREFIX = "maintenance:";
 const REVOKED_PREFIX = "revoked:";
 const HEALTH_STATE_PREFIX = "health_state:";
 const SETTING_PREFIX = "setting:";
+const GROUP_NUMBER_MIGRATION_KEY =
+  `${SETTING_PREFIX}numbered_groups_v1`;
 const ALERTS_SETTING_KEY =
   `${SETTING_PREFIX}alerts_enabled`;
 const HEALTH_BOOTSTRAP_KEY =
@@ -118,6 +125,76 @@ function normalizeDeviceGroup(value) {
     : null;
 }
 
+function normalizeGroupInput(value) {
+  const raw = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s_-]+/g, "");
+
+  if (
+    ["1", "NHOM1", "GROUP1", "MARMOT"].includes(raw)
+  ) {
+    return "MARMOT";
+  }
+
+  if (
+    ["2", "NHOM2", "GROUP2", "NOVA"].includes(raw)
+  ) {
+    return "NOVA";
+  }
+
+  return null;
+}
+
+function normalizeTargetInput(value) {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (raw === "all") {
+    return "all";
+  }
+
+  const group =
+    normalizeGroupInput(raw);
+
+  if (group === "MARMOT") {
+    return "marmot";
+  }
+
+  if (group === "NOVA") {
+    return "nova";
+  }
+
+  return null;
+}
+
+async function ensureNumberedGroupLabels(env) {
+  const migrated =
+    await env.DEVICE_STATUS.get(
+      GROUP_NUMBER_MIGRATION_KEY
+    );
+
+  if (migrated === "1") {
+    return;
+  }
+
+  await Promise.all([
+    env.DEVICE_STATUS.put(
+      `${GROUP_LABEL_PREFIX}MARMOT`,
+      DEFAULT_GROUP_LABELS.MARMOT
+    ),
+    env.DEVICE_STATUS.put(
+      `${GROUP_LABEL_PREFIX}NOVA`,
+      DEFAULT_GROUP_LABELS.NOVA
+    ),
+    env.DEVICE_STATUS.put(
+      GROUP_NUMBER_MIGRATION_KEY,
+      "1"
+    ),
+  ]);
+}
+
 
 function sanitizeLabel(value, maxLength = 48) {
   const label = String(value || "")
@@ -160,18 +237,28 @@ async function getDeviceAlias(deviceId, env) {
 }
 
 async function getGroupLabel(group, env) {
-  const normalized = normalizeDeviceGroup(group);
+  const normalized =
+    normalizeDeviceGroup(group);
+
   if (!normalized) {
     return String(group || "-").toUpperCase();
   }
 
   try {
-    const value = await env.DEVICE_STATUS.get(
-      `${GROUP_LABEL_PREFIX}${normalized}`
+    const value =
+      await env.DEVICE_STATUS.get(
+        `${GROUP_LABEL_PREFIX}${normalized}`
+      );
+
+    return (
+      sanitizeLabel(value, 32) ||
+      DEFAULT_GROUP_LABELS[normalized]
     );
-    return sanitizeLabel(value, 32) || normalized;
   } catch (error) {
-    return normalized;
+    return (
+      DEFAULT_GROUP_LABELS[normalized] ||
+      normalized
+    );
   }
 }
 
@@ -1772,7 +1859,7 @@ async function handlePairRequest(
       env,
       `🔐 Yêu cầu ghép nối Agent\n` +
         `Thiết bị: ${deviceId}\n` +
-        `Profile: ${deviceGroup}\n` +
+        `Nhóm: ${await getGroupLabel(deviceGroup, env)}\n` +
         `Mã xác minh: ${verificationCode}\n` +
         `Hết hạn: ${expiresText}\n\n` +
         "Chỉ chấp nhận nếu mã trên Termux trùng khớp.",
@@ -2203,7 +2290,7 @@ async function handlePairDecision(
         env,
         `${statusText} GHÉP NỐI\n` +
           `Thiết bị: ${record.device_id}\n` +
-          `Profile: ${record.device_group}\n` +
+          `Nhóm: ${await getGroupLabel(record.device_group, env)}\n` +
           `Mã xác minh: ${record.verification_code}`,
         {
           inline_keyboard: [],
@@ -2300,30 +2387,44 @@ async function setGroupLabel(
   rawLabel,
   env
 ) {
-  const group = normalizeDeviceGroup(rawGroup);
+  const group =
+    normalizeGroupInput(
+      rawGroup
+    );
 
   if (!group) {
     await sendMessage(
       chatId,
       env,
-      "Nhóm phải là MARMOT hoặc NOVA."
+      "Nhóm phải là 1 hoặc 2."
     );
     return;
   }
 
-  if (String(rawLabel || "").trim() === "-") {
+  const defaultLabel =
+    DEFAULT_GROUP_LABELS[group];
+
+  if (
+    String(rawLabel || "")
+      .trim() === "-"
+  ) {
     await env.DEVICE_STATUS.delete(
       `${GROUP_LABEL_PREFIX}${group}`
     );
+
     await sendMessage(
       chatId,
       env,
-      `Đã khôi phục tên nhóm ${group}.`
+      `Đã khôi phục tên mặc định: ${defaultLabel}.`
     );
     return;
   }
 
-  const label = sanitizeLabel(rawLabel, 32);
+  const label =
+    sanitizeLabel(
+      rawLabel,
+      32
+    );
 
   if (!label) {
     await sendMessage(
@@ -2342,7 +2443,7 @@ async function setGroupLabel(
   await sendMessage(
     chatId,
     env,
-    `Đã đặt tên nhóm ${group}: ${label}`
+    `Đã đổi tên ${defaultLabel} thành: ${label}`
   );
 }
 
@@ -2364,6 +2465,8 @@ export default {
           drop_pending_updates: true,
         });
 
+        await ensureNumberedGroupLabels(env);
+
         await telegram(env, "setMyCommands", {
           commands: [
             { command: "start", description: "Mở bảng điều khiển" },
@@ -2379,8 +2482,6 @@ export default {
             { command: "restore", description: "Cho phép lại ID đã thu hồi" },
             { command: "groupname", description: "Đổi tên hiển thị nhóm" },
             { command: "progress", description: "Xem tiến độ lệnh gần nhất" },
-            { command: "solver", description: "Cập nhật URL Solver" },
-            { command: "script", description: "Cập nhật URL script" },
           ],
         });
 
@@ -2434,7 +2535,10 @@ export default {
 
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(
-      checkFleetHealth(env)
+      Promise.all([
+        ensureNumberedGroupLabels(env),
+        checkFleetHealth(env),
+      ])
     );
   },
 };
@@ -2707,7 +2811,7 @@ async function handleUpdate(update, env) {
   }
 
   const groupNameMatch =
-    input.match(/^\/groupname\s+(marmot|nova)\s+(.+)$/i);
+    input.match(/^\/groupname\s+(\S+)\s+(.+)$/i);
 
   if (groupNameMatch) {
     await setGroupLabel(
@@ -2799,28 +2903,71 @@ async function handleUpdate(update, env) {
 }
 
 function parseTextCommand(input) {
-  const match = input.match(/^\/(all|marmot|nova)\s+(.+)$/i);
-  if (!match) return null;
+  const match =
+    String(input || "").match(
+      /^\/(\S+)\s+(.+)$/i
+    );
 
-  const target = match[1].toLowerCase();
-  const commandKeys = match[2]
-    .toLowerCase()
-    .split(/[\s,]+/)
-    .filter(Boolean);
-
-  if (commandKeys.length === 0) return null;
-
-  // Allow commands in the multi-select flow, including URL-based selectors.
-  const allowed = new Set(Object.keys(COMMANDS));
-  const filtered = commandKeys.filter((k) => allowed.has(k));
-  if (filtered.length === 0 || filtered.some((key) => !COMMANDS[key])) return null;
-
-  const uniqueKeys = [...new Set(filtered)];
-  if (uniqueKeys.includes("idle") && uniqueKeys.length > 1) {
+  if (!match) {
     return null;
   }
 
-  return { target, commandKeys: uniqueKeys };
+  const target =
+    normalizeTargetInput(
+      match[1]
+    );
+
+  if (
+    !target ||
+    !TARGET_FILES[target]
+  ) {
+    return null;
+  }
+
+  const commandKeys =
+    match[2]
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter(Boolean);
+
+  if (commandKeys.length === 0) {
+    return null;
+  }
+
+  const allowed =
+    new Set(
+      Object.keys(COMMANDS)
+    );
+
+  const filtered =
+    commandKeys.filter(
+      (key) =>
+        allowed.has(key)
+    );
+
+  if (
+    filtered.length === 0 ||
+    filtered.some(
+      (key) => !COMMANDS[key]
+    )
+  ) {
+    return null;
+  }
+
+  const uniqueKeys =
+    [...new Set(filtered)];
+
+  if (
+    uniqueKeys.includes("idle") &&
+    uniqueKeys.length > 1
+  ) {
+    return null;
+  }
+
+  return {
+    target,
+    commandKeys: uniqueKeys,
+  };
 }
 
 async function promptTargetSelection(chatId, command, url, env) {
@@ -2839,13 +2986,13 @@ async function promptTargetSelection(chatId, command, url, env) {
           callback_data: `shortcmd:${command}:${token}:all`,
         },
         {
-          text: `🦫 ${marmotLabel}`,
+          text: `1️⃣ ${marmotLabel}`,
           callback_data: `shortcmd:${command}:${token}:marmot`,
         },
       ],
       [
         {
-          text: `✨ ${novaLabel}`,
+          text: `2️⃣ ${novaLabel}`,
           callback_data: `shortcmd:${command}:${token}:nova`,
         },
         {
@@ -3742,14 +3889,14 @@ async function showTargets(
             "target:all",
         },
         {
-          text: `🦫 ${marmotLabel}`,
+          text: `1️⃣ ${marmotLabel}`,
           callback_data:
             "target:marmot",
         },
       ],
       [
         {
-          text: `✨ ${novaLabel}`,
+          text: `2️⃣ ${novaLabel}`,
           callback_data:
             "target:nova",
         },
@@ -3899,19 +4046,47 @@ async function executeCommands(
 }
 
 async function sendStatus(chatId, env) {
-  const lines = ["📋 Lệnh hiện tại trên GitHub:"];
+  const lines = [
+    "📋 Lệnh hiện tại trên GitHub:",
+  ];
 
-  for (const [target, file] of Object.entries(TARGET_FILES)) {
+  for (
+    const [target, file]
+    of Object.entries(TARGET_FILES)
+  ) {
+    const label =
+      await getTargetLabel(
+        target,
+        env
+      );
+
     try {
-      const data = await getGitHubFile(file, env);
-      const content = decodeBase64(data.content || "").trim() || "(trống)";
-      lines.push(`\n${target.toUpperCase()} — ${file}\n${content}`);
+      const data =
+        await getGitHubFile(
+          file,
+          env
+        );
+
+      const content =
+        decodeBase64(
+          data.content || ""
+        ).trim() || "(trống)";
+
+      lines.push(
+        `\n${label} — ${file}\n${content}`
+      );
     } catch (error) {
-      lines.push(`\n${target.toUpperCase()} — lỗi: ${error.message}`);
+      lines.push(
+        `\n${label} — lỗi: ${error.message}`
+      );
     }
   }
 
-  await sendMessage(chatId, env, lines.join("\n"));
+  await sendMessage(
+    chatId,
+    env,
+    lines.join("\n")
+  );
 }
 
 async function getGitHubFile(path, env) {
