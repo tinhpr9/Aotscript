@@ -16,6 +16,7 @@ const PAIR_RATE_PREFIX = "pair_rate:";
 const PAIR_TTL_SECONDS = 10 * 60;
 const PAIR_RATE_SECONDS = 60;
 const MAINTENANCE_PREFIX = "maintenance:";
+const REVOKED_PREFIX = "revoked:";
 const COMMAND_TTL_MS = 5 * 60 * 1000;
 const COMMAND_METADATA_TTL_SECONDS = 30 * 24 * 60 * 60;
 const ONLINE_WINDOW_MS = 90 * 1000;
@@ -122,7 +123,8 @@ function isDeviceStatusMetadataKey(name) {
     name.startsWith(PAIR_PREFIX) ||
     name.startsWith(PAIR_DEVICE_PREFIX) ||
     name.startsWith(PAIR_RATE_PREFIX) ||
-    name.startsWith(MAINTENANCE_PREFIX)
+    name.startsWith(MAINTENANCE_PREFIX) ||
+    name.startsWith(REVOKED_PREFIX)
   );
 }
 
@@ -266,6 +268,453 @@ async function setDeviceMaintenance(
       maintenanceKey(deviceId)
     );
   }
+}
+
+function revokedKey(deviceId) {
+  return `${REVOKED_PREFIX}${deviceId}`;
+}
+
+async function isDeviceRevoked(
+  deviceId,
+  env
+) {
+  return (
+    await env.DEVICE_STATUS.get(
+      revokedKey(deviceId)
+    )
+  ) !== null;
+}
+
+async function deleteKvPrefix(
+  prefix,
+  env
+) {
+  let cursor;
+
+  do {
+    const page =
+      await env.DEVICE_STATUS.list({
+        prefix,
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+      });
+
+    await Promise.all(
+      (page.keys || []).map(
+        (item) =>
+          env.DEVICE_STATUS.delete(
+            item.name
+          )
+      )
+    );
+
+    cursor =
+      page.list_complete
+        ? undefined
+        : page.cursor;
+  } while (cursor);
+}
+
+function pendingRevocationCacheKey(
+  token
+) {
+  return (
+    "https://aotscript.local/" +
+    `pending-revocation/${token}`
+  );
+}
+
+async function savePendingRevocation(
+  token,
+  deviceId
+) {
+  await caches.default.put(
+    new Request(
+      pendingRevocationCacheKey(
+        token
+      )
+    ),
+    new Response(
+      JSON.stringify({
+        device_id: deviceId,
+        created: Date.now(),
+      }),
+      {
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+      }
+    )
+  );
+}
+
+async function loadPendingRevocation(
+  token
+) {
+  const response =
+    await caches.default.match(
+      new Request(
+        pendingRevocationCacheKey(
+          token
+        )
+      )
+    );
+
+  if (!response) return null;
+
+  try {
+    const value = JSON.parse(
+      await response.text()
+    );
+
+    if (
+      !value ||
+      typeof value.created !==
+        "number" ||
+      Date.now() - value.created >
+        COMMAND_TTL_MS
+    ) {
+      await clearPendingRevocation(
+        token
+      );
+      return null;
+    }
+
+    const deviceId =
+      normalizeDeviceId(
+        value.device_id
+      );
+
+    if (!deviceId) {
+      await clearPendingRevocation(
+        token
+      );
+      return null;
+    }
+
+    return {
+      device_id: deviceId,
+      created: value.created,
+    };
+  } catch (error) {
+    await clearPendingRevocation(
+      token
+    );
+    return null;
+  }
+}
+
+async function clearPendingRevocation(
+  token
+) {
+  await caches.default.delete(
+    new Request(
+      pendingRevocationCacheKey(
+        token
+      )
+    )
+  );
+}
+
+async function requestPermanentDelete(
+  chatId,
+  rawDeviceId,
+  env
+) {
+  const deviceId =
+    normalizeDeviceId(
+      rawDeviceId
+    );
+
+  if (!deviceId) {
+    await sendMessage(
+      chatId,
+      env,
+      "Device ID không hợp lệ."
+    );
+    return;
+  }
+
+  if (
+    await isDeviceRevoked(
+      deviceId,
+      env
+    )
+  ) {
+    await sendMessage(
+      chatId,
+      env,
+      `🛑 ${deviceId} đã bị thu hồi vĩnh viễn.\n` +
+        `Dùng /restore ${deviceId} nếu thật sự muốn cho phép ID này hoạt động lại.`
+    );
+    return;
+  }
+
+  const record =
+    await getDeviceRecord(
+      deviceId,
+      env
+    );
+
+  const alias =
+    await getDeviceAlias(
+      deviceId,
+      env
+    );
+
+  const name =
+    alias ||
+    `Máy ${deviceId}`;
+
+  const group =
+    normalizeDeviceGroup(
+      record?.device_group
+    );
+
+  const token =
+    crypto.randomUUID()
+      .replace(/-/g, "")
+      .slice(0, 12);
+
+  await savePendingRevocation(
+    token,
+    deviceId
+  );
+
+  const details = record
+    ? (
+        `Tên: ${name}\n` +
+        `Nhóm: ${group || "-"}\n` +
+        `Heartbeat cuối: ${formatRelativeDeviceTime(record.last_seen)}`
+      )
+    : (
+        "Hiện không có bản ghi hoạt động, " +
+        "nhưng ID vẫn sẽ được đưa vào danh sách chặn."
+      );
+
+  await sendMessage(
+    chatId,
+    env,
+    `⚠️ XÓA VĨNH VIỄN\n\n` +
+      `ID: ${deviceId}\n` +
+      `${details}\n\n` +
+      "Sau khi xác nhận:\n" +
+      "• Xóa thiết bị khỏi danh sách\n" +
+      "• Chặn mọi heartbeat/report\n" +
+      "• Chặn ghép nối lại cùng ID\n\n" +
+      "Có thể mở lại sau bằng /restore.",
+    {
+      inline_keyboard: [
+        [
+          {
+            text:
+              "🗑 XÁC NHẬN XÓA",
+            callback_data:
+              `revoke_ok:${token}`,
+          },
+          {
+            text: "❌ HỦY",
+            callback_data:
+              `revoke_cancel:${token}`,
+          },
+        ],
+      ],
+    }
+  );
+}
+
+async function permanentlyRevokeDevice(
+  chatId,
+  rawDeviceId,
+  env
+) {
+  const deviceId =
+    normalizeDeviceId(
+      rawDeviceId
+    );
+
+  if (!deviceId) {
+    await sendMessage(
+      chatId,
+      env,
+      "Device ID không hợp lệ."
+    );
+    return;
+  }
+
+  const existingRevocation =
+    await env.DEVICE_STATUS.get(
+      revokedKey(deviceId)
+    );
+
+  if (existingRevocation) {
+    await sendMessage(
+      chatId,
+      env,
+      `🛑 ${deviceId} đã bị thu hồi trước đó.`
+    );
+    return;
+  }
+
+  const record =
+    await getDeviceRecord(
+      deviceId,
+      env
+    );
+
+  const alias =
+    await getDeviceAlias(
+      deviceId,
+      env
+    );
+
+  const pairId =
+    await env.DEVICE_STATUS.get(
+      pairDeviceKey(deviceId)
+    );
+
+  const tombstone = {
+    device_id: deviceId,
+    revoked_at: Date.now(),
+    last_device_group:
+      normalizeDeviceGroup(
+        record?.device_group
+      ),
+    last_seen:
+      Number(record?.last_seen) ||
+      null,
+    last_alias:
+      alias || null,
+  };
+
+  await env.DEVICE_STATUS.put(
+    revokedKey(deviceId),
+    JSON.stringify(tombstone)
+  );
+
+  const deletes = [
+    env.DEVICE_STATUS.delete(
+      deviceId
+    ),
+    env.DEVICE_STATUS.delete(
+      `${DEVICE_ALIAS_PREFIX}${deviceId}`
+    ),
+    env.DEVICE_STATUS.delete(
+      maintenanceKey(deviceId)
+    ),
+    env.DEVICE_STATUS.delete(
+      pairDeviceKey(deviceId)
+    ),
+  ];
+
+  if (pairId) {
+    deletes.push(
+      env.DEVICE_STATUS.delete(
+        pairRecordKey(pairId)
+      )
+    );
+  }
+
+  await Promise.all(deletes);
+
+  await deleteKvPrefix(
+    `${PAIR_RATE_PREFIX}${deviceId}:`,
+    env
+  );
+
+  await env.DEVICE_STATUS.delete(
+    deviceId
+  );
+
+  await sendMessage(
+    chatId,
+    env,
+    `🗑 Đã xóa vĩnh viễn ${deviceId}.\n` +
+      "Heartbeat/report và ghép nối cùng ID đã bị chặn.\n" +
+      `Khôi phục khi cần: /restore ${deviceId}`
+  );
+}
+
+async function restoreDevice(
+  chatId,
+  rawDeviceId,
+  env
+) {
+  const deviceId =
+    normalizeDeviceId(
+      rawDeviceId
+    );
+
+  if (!deviceId) {
+    await sendMessage(
+      chatId,
+      env,
+      "Device ID không hợp lệ."
+    );
+    return;
+  }
+
+  if (
+    !(await isDeviceRevoked(
+      deviceId,
+      env
+    ))
+  ) {
+    await sendMessage(
+      chatId,
+      env,
+      `${deviceId} hiện không nằm trong danh sách thu hồi.`
+    );
+    return;
+  }
+
+  const pairId =
+    await env.DEVICE_STATUS.get(
+      pairDeviceKey(deviceId)
+    );
+
+  const deletes = [
+    env.DEVICE_STATUS.delete(
+      deviceId
+    ),
+    env.DEVICE_STATUS.delete(
+      `${DEVICE_ALIAS_PREFIX}${deviceId}`
+    ),
+    env.DEVICE_STATUS.delete(
+      maintenanceKey(deviceId)
+    ),
+    env.DEVICE_STATUS.delete(
+      pairDeviceKey(deviceId)
+    ),
+  ];
+
+  if (pairId) {
+    deletes.push(
+      env.DEVICE_STATUS.delete(
+        pairRecordKey(pairId)
+      )
+    );
+  }
+
+  await Promise.all(deletes);
+
+  await deleteKvPrefix(
+    `${PAIR_RATE_PREFIX}${deviceId}:`,
+    env
+  );
+
+  await env.DEVICE_STATUS.delete(
+    revokedKey(deviceId)
+  );
+
+  await sendMessage(
+    chatId,
+    env,
+    `✅ Đã cho phép lại ID ${deviceId}.\n` +
+      "ID này chưa tự xuất hiện cho tới khi một Agent gửi heartbeat hoặc ghép nối lại.\n" +
+      "Nếu Agent cũ vẫn còn chạy, nó cũng có thể xuất hiện lại."
+  );
 }
 
 function normalizeDeviceIdList(values) {
@@ -1147,6 +1596,22 @@ async function handlePairRequest(
     );
   }
 
+  if (
+    await isDeviceRevoked(
+      deviceId,
+      env
+    )
+  ) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "device_revoked",
+        device_id: deviceId,
+      },
+      410
+    );
+  }
+
   const clientIp =
     request.headers.get("CF-Connecting-IP") ||
     "unknown";
@@ -1203,6 +1668,22 @@ async function handlePairRequest(
   const expiresAt =
     createdAt + PAIR_TTL_SECONDS * 1000;
 
+  if (
+    await isDeviceRevoked(
+      deviceId,
+      env
+    )
+  ) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "device_revoked",
+        device_id: deviceId,
+      },
+      410
+    );
+  }
+
   const record = {
     pair_id: pairId,
     device_id: deviceId,
@@ -1229,6 +1710,29 @@ async function handlePairRequest(
       expirationTtl: PAIR_TTL_SECONDS,
     }
   );
+
+  if (
+    await isDeviceRevoked(
+      deviceId,
+      env
+    )
+  ) {
+    await env.DEVICE_STATUS.delete(
+      pairRecordKey(pairId)
+    );
+    await env.DEVICE_STATUS.delete(
+      pairDeviceKey(deviceId)
+    );
+
+    return noStoreJson(
+      {
+        ok: false,
+        error: "device_revoked",
+        device_id: deviceId,
+      },
+      410
+    );
+  }
 
   const expiresText =
     new Date(expiresAt)
@@ -1368,6 +1872,38 @@ async function handlePairStatus(
         error: "invalid_pair_record",
       },
       500
+    );
+  }
+
+  const pairedDeviceId =
+    normalizeDeviceId(
+      record.device_id
+    );
+
+  if (
+    pairedDeviceId &&
+    await isDeviceRevoked(
+      pairedDeviceId,
+      env
+    )
+  ) {
+    await env.DEVICE_STATUS.delete(
+      pairRecordKey(pairId)
+    );
+    await clearPairDeviceIndex(
+      record,
+      pairId,
+      env
+    );
+
+    return noStoreJson(
+      {
+        ok: false,
+        error: "device_revoked",
+        device_id:
+          pairedDeviceId,
+      },
+      410
     );
   }
 
@@ -1524,6 +2060,36 @@ async function handlePairDecision(
       callback.id,
       env,
       "Dữ liệu yêu cầu không hợp lệ.",
+      true
+    );
+    return;
+  }
+
+  const pairedDeviceId =
+    normalizeDeviceId(
+      record.device_id
+    );
+
+  if (
+    pairedDeviceId &&
+    await isDeviceRevoked(
+      pairedDeviceId,
+      env
+    )
+  ) {
+    await env.DEVICE_STATUS.delete(
+      key
+    );
+    await clearPairDeviceIndex(
+      record,
+      pairId,
+      env
+    );
+
+    await answerCallback(
+      callback.id,
+      env,
+      "ID này đã bị thu hồi vĩnh viễn.",
       true
     );
     return;
@@ -1689,48 +2255,16 @@ async function renameDevice(
   );
 }
 
+
 async function deleteDevice(
   chatId,
   rawDeviceId,
   env
 ) {
-  const deviceId = normalizeDeviceId(rawDeviceId);
-
-  if (!deviceId) {
-    await sendMessage(
-      chatId,
-      env,
-      "Device ID không hợp lệ."
-    );
-    return;
-  }
-
-  const record = await getDeviceRecord(deviceId, env);
-
-  if (!record) {
-    await sendMessage(
-      chatId,
-      env,
-      `Không tìm thấy thiết bị ${deviceId}.`
-    );
-    return;
-  }
-
-  await Promise.all([
-    env.DEVICE_STATUS.delete(deviceId),
-    env.DEVICE_STATUS.delete(
-      `${DEVICE_ALIAS_PREFIX}${deviceId}`
-    ),
-    env.DEVICE_STATUS.delete(
-      maintenanceKey(deviceId)
-    ),
-  ]);
-
-  await sendMessage(
+  await requestPermanentDelete(
     chatId,
-    env,
-    `Đã xóa ${deviceId} khỏi danh sách. ` +
-      "Nếu Agent còn chạy, thiết bị sẽ tự xuất hiện lại."
+    rawDeviceId,
+    env
   );
 }
 
@@ -1813,7 +2347,8 @@ export default {
             { command: "to", description: "Gửi lệnh tới máy cụ thể" },
             { command: "maintenance", description: "Bật hoặc tắt bảo trì" },
             { command: "rename", description: "Đổi tên thiết bị" },
-            { command: "delete", description: "Xóa thiết bị khỏi danh sách" },
+            { command: "delete", description: "Thu hồi thiết bị vĩnh viễn" },
+            { command: "restore", description: "Cho phép lại ID đã thu hồi" },
             { command: "groupname", description: "Đổi tên hiển thị nhóm" },
             { command: "progress", description: "Xem tiến độ lệnh gần nhất" },
             { command: "solver", description: "Cập nhật URL Solver" },
@@ -2087,6 +2622,20 @@ async function handleUpdate(update, env) {
     await deleteDevice(
       chatId,
       deleteMatch[1],
+      env
+    );
+    return;
+  }
+
+  const restoreMatch =
+    input.match(
+      /^\/restore\s+(\S+)$/i
+    );
+
+  if (restoreMatch) {
+    await restoreDevice(
+      chatId,
+      restoreMatch[1],
       env
     );
     return;
@@ -2493,6 +3042,67 @@ async function executeSessionCommands(
 
 async function handleCallback(callback, chatId, messageId, env, fromId) {
   const data = callback.data || "";
+
+  if (
+    data.startsWith(
+      "revoke_ok:"
+    )
+  ) {
+    const token = data.slice(
+      "revoke_ok:".length
+    );
+
+    const pending =
+      await loadPendingRevocation(
+        token
+      );
+
+    if (!pending) {
+      await answerCallback(
+        callback.id,
+        env,
+        "Xác nhận đã hết hạn.",
+        true
+      );
+      return;
+    }
+
+    await clearPendingRevocation(
+      token
+    );
+
+    await answerCallback(
+      callback.id,
+      env,
+      "Đang thu hồi thiết bị..."
+    );
+
+    await permanentlyRevokeDevice(
+      chatId,
+      pending.device_id,
+      env
+    );
+    return;
+  }
+
+  if (
+    data.startsWith(
+      "revoke_cancel:"
+    )
+  ) {
+    await clearPendingRevocation(
+      data.slice(
+        "revoke_cancel:".length
+      )
+    );
+
+    await answerCallback(
+      callback.id,
+      env,
+      "Đã hủy xóa thiết bị."
+    );
+    return;
+  }
 
   if (
     data.startsWith(
@@ -3421,6 +4031,22 @@ async function handleAgentReport(request, env) {
     );
   }
 
+  if (
+    await isDeviceRevoked(
+      deviceId,
+      env
+    )
+  ) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "device_revoked",
+        device_id: deviceId,
+      },
+      410
+    );
+  }
+
   try {
     const key = deviceId;
     let record = {};
@@ -3541,10 +4167,46 @@ async function handleAgentReport(request, env) {
         Math.floor(storageNumber);
     }
 
+    if (
+      await isDeviceRevoked(
+        deviceId,
+        env
+      )
+    ) {
+      return noStoreJson(
+        {
+          ok: false,
+          error: "device_revoked",
+          device_id: deviceId,
+        },
+        410
+      );
+    }
+
     await env.DEVICE_STATUS.put(
       key,
       JSON.stringify(record)
     );
+
+    if (
+      await isDeviceRevoked(
+        deviceId,
+        env
+      )
+    ) {
+      await env.DEVICE_STATUS.delete(
+        key
+      );
+
+      return noStoreJson(
+        {
+          ok: false,
+          error: "device_revoked",
+          device_id: deviceId,
+        },
+        410
+      );
+    }
 
     return json({
       ok: true,
@@ -3567,12 +4229,44 @@ async function handleAgentReport(request, env) {
   }
 }
 
-async function getDeviceRecord(deviceId, env) {
+
+async function getDeviceRecord(
+  deviceId,
+  env
+) {
   try {
-    const raw = await env.DEVICE_STATUS.get(deviceId);
+    const normalized =
+      normalizeDeviceId(
+        deviceId
+      );
+
+    if (!normalized) {
+      return null;
+    }
+
+    if (
+      await isDeviceRevoked(
+        normalized,
+        env
+      )
+    ) {
+      return null;
+    }
+
+    const raw =
+      await env.DEVICE_STATUS.get(
+        normalized
+      );
+
     if (!raw) return null;
-    return JSON.parse(raw);
-  } catch (e) {
+
+    const record = JSON.parse(raw);
+
+    return record &&
+      typeof record === "object"
+      ? record
+      : null;
+  } catch (error) {
     return null;
   }
 }
