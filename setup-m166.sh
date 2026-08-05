@@ -9,8 +9,9 @@ root() { su -c "$1"; }
 
 usage() {
   echo "Cách dùng:"
+  echo "  msetup 116 NOVA"
   echo "  msetup m166 NOVA"
-  echo "  msetup m62 MARMOT"
+  echo "  msetup 62 MARMOT"
 }
 
 DEVICE_ID_RAW="${1:-}"
@@ -21,11 +22,17 @@ DEVICE_GROUP_RAW="${2:-}"
   die "Thiếu device_id hoặc profile"
 }
 
-DEVICE_ID="$(
+DEVICE_ID_INPUT="$(
   printf '%s' "$DEVICE_ID_RAW" |
     tr -d '\r\n ' |
     tr '[:upper:]' '[:lower:]'
 )"
+
+if [[ "$DEVICE_ID_INPUT" =~ ^[1-9][0-9]{0,5}$ ]]; then
+  DEVICE_ID="m$DEVICE_ID_INPUT"
+else
+  DEVICE_ID="$DEVICE_ID_INPUT"
+fi
 
 DEVICE_GROUP="$(
   printf '%s' "$DEVICE_GROUP_RAW" |
@@ -177,8 +184,9 @@ set -u
 
 usage() {
   echo "Cách dùng:"
+  echo "  msetup 116 NOVA"
   echo "  msetup m166 NOVA"
-  echo "  msetup m62 MARMOT"
+  echo "  msetup 62 MARMOT"
 }
 
 [ "$#" -eq 2 ] || {
@@ -774,6 +782,28 @@ else
   ok "Đã cài lệnh: toolcheck"
 fi
 
+TOOLCHECK_PATH="${PREFIX:-/data/data/com.termux/files/usr}/bin/toolcheck"
+mkdir -p "$(dirname "$TOOLCHECK_PATH")" ||
+  die "Không tạo được thư mục lệnh Termux"
+
+if [ "$TOOLCHECK_PATH" != "$TOOLCHECK_CMD" ]; then
+  if [ -e "$TOOLCHECK_PATH" ] || [ -L "$TOOLCHECK_PATH" ]; then
+    if ! cmp -s "$TOOLCHECK_CMD" "$TOOLCHECK_PATH" 2>/dev/null; then
+      cp -p         "$TOOLCHECK_PATH"         "${TOOLCHECK_PATH}.bak-${STAMP}" 2>/dev/null || true
+    fi
+    rm -f "$TOOLCHECK_PATH" ||
+      die "Không thay được đường dẫn toolcheck cũ"
+  fi
+
+  ln -s "$TOOLCHECK_CMD" "$TOOLCHECK_PATH" ||
+    die "Không tạo được lệnh toolcheck trong PATH"
+fi
+
+hash -r
+command -v toolcheck >/dev/null 2>&1 ||
+  die "Đã cài nhưng terminal vẫn không tìm thấy toolcheck"
+ok "Có thể dùng ngay bằng lệnh: toolcheck"
+
 SETDEVICE_CMD="$HOME/bin/setdevice"
 SETDEVICE_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/setdevice.$$"
 
@@ -790,7 +820,9 @@ STATE_FILE="$DIR/agent_state.json"
 
 usage() {
   echo "Cách dùng:"
+  echo "  setdevice 62 MARMOT"
   echo "  setdevice m62 MARMOT"
+  echo "  setdevice 116 NOVA"
   echo "  setdevice m166 NOVA"
 }
 
@@ -799,11 +831,17 @@ usage() {
   exit 1
 }
 
-NAME="$(
+NAME_INPUT="$(
   printf '%s' "$NAME_RAW" |
     tr -d '\r\n ' |
     tr '[:upper:]' '[:lower:]'
 )"
+
+if [[ "$NAME_INPUT" =~ ^[1-9][0-9]{0,5}$ ]]; then
+  NAME="m$NAME_INPUT"
+else
+  NAME="$NAME_INPUT"
+fi
 
 GROUP="$(
   printf '%s' "$GROUP_RAW" |
