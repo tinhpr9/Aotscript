@@ -1115,6 +1115,19 @@ function normalizeDeviceIdList(values) {
   return result.sort(compareDeviceIds);
 }
 
+function deviceSupportsSecureSolver(record) {
+  return record?.secure_solver_capable === true;
+}
+
+async function filterSecureSolverDeviceIds(deviceIds, env) {
+  const result = [];
+  for (const deviceId of deviceIds) {
+    const record = await getDeviceRecord(deviceId, env);
+    if (deviceSupportsSecureSolver(record)) result.push(deviceId);
+  }
+  return result;
+}
+
 async function activeDeviceIdsForTarget(
   target,
   env
@@ -1368,21 +1381,10 @@ function orderedCommandKeys(commandKeys) {
   return ordered;
 }
 
-function buildCommandLinesFromKeys(
-  commandKeys
-) {
-  return orderedCommandKeys(
-    commandKeys
-  ).map((key) => {
-    if (
-      key === "update_solver" ||
-      key === "update_script"
-    ) {
-      throw new Error(
-        "Lệnh Solver hoặc Script cần URL."
-      );
-    }
-
+function buildCommandLinesFromKeys(commandKeys) {
+  return orderedCommandKeys(commandKeys).map((key) => {
+    if (key === "update_solver") return "UPDATE_SOLVER_SECURE";
+    if (key === "update_script") throw new Error("Lệnh Script cần URL.");
     return COMMANDS[key].value;
   });
 }
@@ -1437,11 +1439,18 @@ async function resolveCommandSpec(
     Array.isArray(spec.deviceIds) &&
     spec.deviceIds.length > 0
   ) {
-    const deviceIds =
+    let deviceIds =
       await validateDirectDeviceIds(
         spec.deviceIds,
         env
       );
+
+    if (commandKeys.includes("update_solver")) {
+      deviceIds = await filterSecureSolverDeviceIds(deviceIds, env);
+      if (deviceIds.length === 0) {
+        throw new Error("Máy chưa cập nhật Agent hỗ trợ Solver bảo mật.");
+      }
+    }
 
     return {
       target: "devices",
@@ -1469,15 +1478,21 @@ async function resolveCommandSpec(
     );
   }
 
-  const deviceIds =
+  let deviceIds =
     await activeDeviceIdsForTarget(
       target,
       env
     );
 
+  if (commandKeys.includes("update_solver")) {
+    deviceIds = await filterSecureSolverDeviceIds(deviceIds, env);
+  }
+
   if (deviceIds.length === 0) {
     throw new Error(
-      "Không có thiết bị đủ điều kiện nhận lệnh."
+      commandKeys.includes("update_solver")
+        ? "Chưa có máy nào cập nhật Agent hỗ trợ Solver bảo mật."
+        : "Không có thiết bị đủ điều kiện nhận lệnh."
     );
   }
 
@@ -1665,23 +1680,26 @@ async function dispatchCommandSpec(
     env
   );
 
-  await storeCommandMetadata(
-    env,
-    commandId,
-    spec.target,
-    spec.commandLines,
-    {
-      targetLabel:
-        spec.targetLabel,
-      fileTarget:
-        spec.fileTarget,
-      deviceIds,
-      commandKeys:
-        spec.commandKeys,
-      created,
-      expiresAt,
-    }
-  );
+  let metadataStored = true;
+  try {
+    await storeCommandMetadata(
+      env,
+      commandId,
+      spec.target,
+      spec.commandLines,
+      {
+        targetLabel: spec.targetLabel,
+        fileTarget: spec.fileTarget,
+        deviceIds,
+        commandKeys: spec.commandKeys,
+        created,
+        expiresAt,
+      }
+    );
+  } catch (error) {
+    metadataStored = false;
+    console.error("command_metadata_store_failed", error?.message || error);
+  }
 
   await sendMessage(
     chatId,
@@ -1690,7 +1708,8 @@ async function dispatchCommandSpec(
       `Đích: ${spec.targetLabel}\n` +
       `Lệnh:\n- ${spec.commandLines.join("\n- ")}\n` +
       `Hết hạn: 5 phút\n` +
-      `Commit: ${commit.slice(0, 7)}`,
+      `Commit: ${commit.slice(0, 7)}` +
+      (metadataStored ? "" : "\nTiến độ: tạm không lưu do KV hết quota."),
     {
       inline_keyboard: [
         [
@@ -2814,6 +2833,10 @@ export default {
         );
       }
 
+      if (request.method === "GET" && url.pathname === "/agent/solver-url") {
+        return await handleSecureSolverUrl(request, env);
+      }
+
       // Agent report endpoint
       if (request.method === "POST" && url.pathname === "/agent/report") {
         return await handleAgentReport(request, env);
@@ -2956,30 +2979,24 @@ async function handleUpdate(update, env) {
 
   const directSolverMatch =
     input.match(
-      /^\/to\s+([A-Za-z0-9_,-]+)\s+solver\s+(https?:\/\/\S+)$/i
+      /^\/to\s+([A-Za-z0-9_,-]+)\s+solver(?:\s+(https?:\/\/\S+))?$/i
     );
 
   if (directSolverMatch) {
-    const url = directSolverMatch[2];
-
-    if (!isValidUrl(url)) {
+    if (directSolverMatch[2]) {
       await sendMessage(
         chatId,
         env,
-        "URL Solver không hợp lệ."
+        "Không gửi URL Solver qua Telegram. Dùng: /to m116 solver"
       );
       return;
     }
-
     await requestCommandDispatch(
       chatId,
       {
-        deviceIds:
-          directSolverMatch[1].split(","),
-        commandKeys:
-          ["update_solver"],
-        commandLines:
-          [`UPDATE_SOLVER ${url}`],
+        deviceIds: directSolverMatch[1].split(","),
+        commandKeys: ["update_solver"],
+        commandLines: ["UPDATE_SOLVER_SECURE"],
       },
       env
     );
@@ -3044,7 +3061,7 @@ async function handleUpdate(update, env) {
         "Cú pháp không hợp lệ.\n" +
           "Ví dụ: /to m166 idle\n" +
           "Nhiều máy: /to m166,m167 reboot\n" +
-          "Solver: /to m166 solver https://...\n" +
+          "Solver: /to m166 solver\n" +
           "Script: /to m166 script https://..."
       );
       return;
@@ -3142,20 +3159,19 @@ async function handleUpdate(update, env) {
     return;
   }
 
-  // Support URL-based commands: /solver and /script
-  const solverMatch = input.match(/^\/solver\s+(all|marmot|nova)\s+(https?:\/\/\S+)$/i);
+  // Solver dùng Cloudflare secret; không nhận URL qua Telegram.
+  if (/^\/solver\b.*https?:\/\//i.test(input)) {
+    await sendMessage(
+      chatId,
+      env,
+      "Không gửi URL Solver qua Telegram. Dùng /solver all, /solver marmot hoặc /solver nova."
+    );
+    return;
+  }
+
+  const solverMatch = input.match(/^\/solver\s+(all|marmot|nova)$/i);
   if (solverMatch) {
-    const target = solverMatch[1].toLowerCase();
-    const url = solverMatch[2];
-    if (!TARGET_FILES[target]) {
-      await sendMessage(chatId, env, "Target không hợp lệ cho /solver.");
-      return;
-    }
-    if (!isValidUrl(url)) {
-      await sendMessage(chatId, env, "URL không hợp lệ. Phải là http:// hoặc https://");
-      return;
-    }
-    await executeSolverCommand(chatId, target, url, env);
+    await executeSolverCommand(chatId, solverMatch[1].toLowerCase(), null, env);
     return;
   }
 
@@ -3175,14 +3191,8 @@ async function handleUpdate(update, env) {
     return;
   }
 
-  const solverShortMatch = input.match(/^\/solver\s+(https?:\/\/\S+)$/i);
-  if (solverShortMatch) {
-    const url = solverShortMatch[1];
-    if (!isValidUrl(url)) {
-      await sendMessage(chatId, env, "URL không hợp lệ. Phải là http:// hoặc https://");
-      return;
-    }
-    await promptTargetSelection(chatId, "solver", url, env);
+  if (input === "/solver") {
+    await promptTargetSelection(chatId, "solver", "", env);
     return;
   }
 
@@ -3404,25 +3414,21 @@ async function startUrlSession(chatId, userId, target, commandKeys, env) {
     chatId,
     target,
     commandKeys,
-    step: null,
-    solverUrl: null,
+    step: "awaiting_script_url",
+    solverUrl: commandKeys.includes("update_solver") ? "Cloudflare secret" : null,
     scriptUrl: null,
   };
-
-  if (commandKeys.includes("update_solver")) {
-    state.step = "awaiting_solver_url";
-    await saveSessionState(userId, chatId, state, env);
-    await sendMessage(chatId, env, "Vui lòng gửi URL Solver (http:// hoặc https://) hoặc bấm HỦY.", {
-      inline_keyboard: [[{ text: "❌ HỦY", callback_data: "cancel-session" }]],
-    });
+  if (!commandKeys.includes("update_script")) {
+    await executeCommands(chatId, target, commandKeys, env);
     return;
   }
-
-  state.step = "awaiting_script_url";
   await saveSessionState(userId, chatId, state, env);
-  await sendMessage(chatId, env, "Vui lòng gửi URL Script (http:// hoặc https://) hoặc bấm HỦY.", {
-    inline_keyboard: [[{ text: "❌ HỦY", callback_data: "cancel-session" }]],
-  });
+  await sendMessage(
+    chatId,
+    env,
+    "Vui lòng gửi URL Script (http:// hoặc https://) hoặc bấm HỦY.",
+    { inline_keyboard: [[{ text: "❌ HỦY", callback_data: "cancel-session" }]] }
+  );
 }
 
 async function handlePendingSessionMessage(chatId, userId, state, input, env) {
@@ -3497,20 +3503,7 @@ async function executeSessionCommands(
         state.commandKeys
       ).map((key) => {
         if (key === "update_solver") {
-          if (
-            !isValidUrl(
-              state.solverUrl
-            )
-          ) {
-            throw new Error(
-              "URL Solver không hợp lệ."
-            );
-          }
-
-          return (
-            `/solver ${state.target} ` +
-            `${state.solverUrl}`
-          );
+          return "UPDATE_SOLVER_SECURE";
         }
 
         if (key === "update_script") {
@@ -3983,18 +3976,11 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
       return;
     }
 
-    if (
-      commandKeys.includes(
-        "update_solver"
-      ) ||
-      commandKeys.includes(
-        "update_script"
-      )
-    ) {
+    if (commandKeys.includes("update_script")) {
       await answerCallback(
         callback.id,
         env,
-        "Dùng lệnh /to để nhập URL.",
+        "Dùng lệnh /to để nhập URL Script.",
         true
       );
       return;
@@ -4167,7 +4153,7 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
       return;
     }
 
-    if (commandKeys.some((k) => ["update_solver", "update_script"].includes(k))) {
+    if (commandKeys.includes("update_script")) {
       await answerCallback(callback.id, env);
       await startUrlSession(chatId, fromId, target, commandKeys, env);
       return;
@@ -4607,25 +4593,17 @@ function isValidUrl(u) {
 }
 
 
-async function executeSolverCommand(
-  chatId,
-  target,
-  url,
-  env
-) {
+async function executeSolverCommand(chatId, target, _url, env) {
   await requestCommandDispatch(
     chatId,
     {
       target,
-      commandKeys:
-        ["update_solver"],
-      commandLines:
-        [`/solver ${target} ${url}`],
+      commandKeys: ["update_solver"],
+      commandLines: ["UPDATE_SOLVER_SECURE"],
     },
     env
   );
 }
-
 
 async function executeScriptCommand(
   chatId,
@@ -4703,6 +4681,24 @@ function decodeBase64(value) {
 
 // -------------------- Agent reporting and device helpers --------------------
 
+
+
+function isAuthorizedAgentRequest(request, env) {
+  const expected = String(env.AGENT_REPORT_SECRET || "");
+  const provided = String(request.headers.get("X-Agent-Secret") || "");
+  return expected.length > 0 && provided === expected;
+}
+
+async function handleSecureSolverUrl(request, env) {
+  if (!isAuthorizedAgentRequest(request, env)) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+  const solverUrl = String(env.SOLVER_UPDATE_URL || "").trim();
+  if (!isValidUrl(solverUrl)) {
+    return noStoreJson({ ok: false, error: "solver_not_configured" }, 503);
+  }
+  return noStoreJson({ ok: true, solver_url: solverUrl });
+}
 
 async function handleAgentReport(request, env) {
   const secret =
@@ -4886,6 +4882,12 @@ async function handleAgentReport(request, env) {
       .reload_novagag2_capable =
       body
         .reload_novagag2_capable;
+  }
+
+  if (typeof body.secure_solver_capable === "boolean") {
+    payload.secure_solver_capable = body.secure_solver_capable;
+  } else if (status === "heartbeat") {
+    payload.secure_solver_capable = false;
   }
 
   const uptimeNumber =
@@ -5499,6 +5501,10 @@ async function showDeviceCommands(
     [
       button("update_delta"),
       button("reboot"),
+    ],
+    [
+      button("update_solver"),
+      button("update_script"),
     ],
   ];
 

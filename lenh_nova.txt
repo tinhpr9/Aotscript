@@ -1,4 +1,1 @@
-# telegram_target_ids=m116
-# telegram_expires_at=1785931891333
-# telegram_command_id=1785931591333-d36830b5
-/solver nova https://blocksolve.site/join?api_key=block_0eb2473d1bccca7025fa6e5cc69df2aa
+IDLE

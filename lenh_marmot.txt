@@ -1,2 +1,1 @@
-# telegram_command_id=1785760710009-f9e2e236
 IDLE

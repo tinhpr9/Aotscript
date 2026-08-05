@@ -1,0 +1,3 @@
+# Protect historical secret-bearing files from diffs.
+Solver -diff
+lenh_nova.txt -diff

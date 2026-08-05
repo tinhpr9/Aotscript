@@ -262,6 +262,10 @@ export class FleetState
           .reload_novagag2_capable;
     }
 
+    if (typeof body.secure_solver_capable === "boolean") {
+      record.secure_solver_capable = body.secure_solver_capable;
+    }
+
     const uptime =
       Number(
         body.uptime_seconds

@@ -35,6 +35,7 @@ CONFIG_PATH = "/storage/emulated/0/Download/Shouko/config.json"
 AGENT_CONFIG_PATH = "/storage/emulated/0/Download/Shouko/agent_config.json"
 AGENT_VERSION = "fleet-ops-1"
 RELOAD_NOVAGAG2_CAPABLE = True
+SECURE_SOLVER_CAPABLE = True
 AUTOEXECUTE_DIR = "/storage/emulated/0/Delta/Autoexecute"
 GROUP_SCRIPT_FILE = os.path.join(AUTOEXECUTE_DIR, "group_script.lua")
 GROUP_SCRIPT_BACKUP_FILE = (
@@ -326,6 +327,8 @@ def collect_device_metrics():
             AGENT_VERSION,
         "reload_novagag2_capable":
             RELOAD_NOVAGAG2_CAPABLE,
+        "secure_solver_capable":
+            SECURE_SOLVER_CAPABLE,
     }
 
     capacity = read_first_text(
@@ -1270,6 +1273,43 @@ def auto_update_system():
         log_error("auto_update_system", e)
 
 # Hàm 2: Tự động đổi link Solver API (Đã nâng cấp bóc link Github)
+
+def fetch_secure_solver_url():
+    config = load_agent_config()
+    report_url = config.get("worker_report_url")
+    secret = config.get("agent_report_secret")
+    if not report_url or not secret:
+        raise RuntimeError("Thiếu cấu hình báo cáo Agent")
+    parsed = urllib.parse.urlparse(report_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise RuntimeError("worker_report_url không hợp lệ")
+    endpoint = urllib.parse.urlunparse((
+        parsed.scheme, parsed.netloc, "/agent/solver-url", "", "", "",
+    ))
+    request = urllib.request.Request(
+        endpoint,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "Cache-Control": "no-cache",
+            "User-Agent": "Mozilla/5.0",
+            "X-Agent-Secret": secret,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        raw = response.read(4097)
+    if len(raw) > 4096:
+        raise RuntimeError("Phản hồi Solver quá lớn")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception as error:
+        raise RuntimeError("Phản hồi Solver không phải JSON") from error
+    solver_url = payload.get("solver_url") if isinstance(payload, dict) else None
+    if not isinstance(solver_url, str) or not is_valid_url(solver_url.strip()):
+        raise RuntimeError("Worker chưa có Solver URL hợp lệ")
+    return solver_url.strip()
+
+
 def update_solver_url(new_url):
     print(f"\n[*] ĐANG TIẾN HÀNH TRÁO LINK SOLVER...")
     
@@ -1746,6 +1786,10 @@ if __name__ == "__main__":
                                 elif single_cmd == "UPDATE_DELTA":
                                     auto_update_system()
 
+                                elif single_cmd == "UPDATE_SOLVER_SECURE":
+                                    secure_solver_url = fetch_secure_solver_url()
+                                    update_solver_url(secure_solver_url)
+
                                 elif single_cmd.startswith("UPDATE_SOLVER"):
                                     parts = single_cmd.split(" ", 1)
                                     if len(parts) > 1:
@@ -1860,6 +1904,10 @@ if __name__ == "__main__":
 
                 elif single_cmd == "UPDATE_DELTA":
                     auto_update_system()
+
+                elif single_cmd == "UPDATE_SOLVER_SECURE":
+                    secure_solver_url = fetch_secure_solver_url()
+                    update_solver_url(secure_solver_url)
 
                 elif single_cmd.startswith("UPDATE_SOLVER"):
                     parts = single_cmd.split(" ", 1)
