@@ -42,6 +42,23 @@ GROUP_SCRIPT_BACKUP_FILE = (
     "group_script.lua.bak"
 )
 
+AUTOEXECUTE_BACKUP_ROOT = (
+    "/storage/emulated/0/Download/Shouko/"
+    "autoexecute-backup"
+)
+AUTOEXECUTE_RECONCILE_INTERVAL_SECONDS = 300
+AUTOEXECUTE_MAX_TEXT_BYTES = 1048576
+AUTOEXECUTE_LAST_RECONCILE = None
+MANAGED_LOADER_MARKERS = {
+    "MARMOT": (
+        "/Marmotgag2",
+        "/Marmotgag2event",
+    ),
+    "NOVA": (
+        "/Novagag2",
+    ),
+}
+
 
 def log_error(action_name, exception_obj, group=None):
     try:
@@ -580,6 +597,386 @@ def is_valid_url(url):
 
 
 
+def expected_group_script_content(group):
+    if group not in GROUP_SCRIPT_URLS:
+        raise ValueError(
+            f"Unsupported group: {group}"
+        )
+
+    script_url = GROUP_SCRIPT_URLS[group]
+
+    if not is_valid_url(script_url):
+        raise ValueError(
+            "Invalid group script URL"
+        )
+
+    separator = (
+        "&"
+        if "?" in script_url
+        else "?"
+    )
+
+    return (
+        'loadstring(game:HttpGet("'
+        + script_url
+        + separator
+        + 't=" .. tostring(os.time())))()'
+        + "\n"
+    )
+
+
+def group_script_is_current(group):
+    try:
+        expected = (
+            expected_group_script_content(
+                group
+            )
+        )
+
+        with open(
+            GROUP_SCRIPT_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            actual = file.read()
+
+        return actual == expected
+
+    except Exception:
+        return False
+
+
+def managed_loader_groups(content):
+    lowered = content.lower()
+    detected = set()
+
+    for group, markers in (
+        MANAGED_LOADER_MARKERS.items()
+    ):
+        for marker in markers:
+            if marker.lower() in lowered:
+                detected.add(group)
+                break
+
+    return detected
+
+
+def unique_backup_path(
+    directory,
+    name,
+):
+    candidate = os.path.join(
+        directory,
+        name,
+    )
+
+    if not os.path.exists(candidate):
+        return candidate
+
+    stem, suffix = os.path.splitext(
+        name
+    )
+    index = 1
+
+    while True:
+        candidate = os.path.join(
+            directory,
+            f"{stem}.{index}{suffix}",
+        )
+
+        if not os.path.exists(candidate):
+            return candidate
+
+        index += 1
+
+
+def create_autoexecute_backup_directory():
+    os.makedirs(
+        AUTOEXECUTE_BACKUP_ROOT,
+        exist_ok=True,
+    )
+
+    timestamp = (
+        datetime.datetime.utcnow()
+        .strftime(
+            "%Y%m%dT%H%M%SZ"
+        )
+    )
+
+    candidate = os.path.join(
+        AUTOEXECUTE_BACKUP_ROOT,
+        timestamp,
+    )
+    index = 1
+
+    while os.path.exists(candidate):
+        candidate = os.path.join(
+            AUTOEXECUTE_BACKUP_ROOT,
+            f"{timestamp}-{index}",
+        )
+        index += 1
+
+    os.makedirs(
+        candidate,
+        exist_ok=False,
+    )
+
+    return candidate
+
+
+def write_autoexecute_manifest(
+    directory,
+    group,
+    moved,
+):
+    manifest = {
+        "created_at": (
+            datetime.datetime.utcnow()
+            .strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+        ),
+        "device_group": group,
+        "managed_loader":
+            os.path.basename(
+                GROUP_SCRIPT_FILE
+            ),
+        "moved": moved,
+    }
+
+    target = os.path.join(
+        directory,
+        "manifest.json",
+    )
+    temporary = target + ".tmp"
+
+    data = (
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ).rstrip()
+        + "\n"
+    )
+
+    with open(
+        temporary,
+        "w",
+        encoding="utf-8",
+        newline="\n",
+    ) as file:
+        file.write(data)
+        file.flush()
+        os.fsync(
+            file.fileno()
+        )
+
+    os.replace(
+        temporary,
+        target,
+    )
+
+
+def quarantine_conflicting_loaders(group):
+    if group not in GROUP_SCRIPT_URLS:
+        log_error(
+            "quarantine_conflicting_loaders",
+            ValueError(
+                f"Invalid group: {group}"
+            ),
+            group,
+        )
+        return False
+
+    try:
+        os.makedirs(
+            AUTOEXECUTE_DIR,
+            exist_ok=True,
+        )
+
+        backup_directory = None
+        moved = []
+
+        for entry in os.scandir(
+            AUTOEXECUTE_DIR
+        ):
+            try:
+                if not entry.is_file(
+                    follow_symlinks=False
+                ):
+                    continue
+
+                source_path = os.path.abspath(
+                    entry.path
+                )
+
+                if source_path == os.path.abspath(
+                    GROUP_SCRIPT_FILE
+                ):
+                    continue
+
+                suffix = os.path.splitext(
+                    entry.name
+                )[1].lower()
+
+                if suffix in {
+                    ".zip",
+                    ".bak",
+                    ".tmp",
+                    ".json",
+                }:
+                    continue
+
+                size = entry.stat(
+                    follow_symlinks=False
+                ).st_size
+
+                if (
+                    size <= 0
+                    or size
+                    > AUTOEXECUTE_MAX_TEXT_BYTES
+                ):
+                    continue
+
+                with open(
+                    entry.path,
+                    "r",
+                    encoding="utf-8",
+                    errors="ignore",
+                ) as file:
+                    loader_content = file.read(
+                        AUTOEXECUTE_MAX_TEXT_BYTES
+                        + 1
+                    )
+
+                if (
+                    len(
+                        loader_content.encode(
+                            "utf-8",
+                            errors="ignore",
+                        )
+                    )
+                    > AUTOEXECUTE_MAX_TEXT_BYTES
+                ):
+                    continue
+
+                detected = (
+                    managed_loader_groups(
+                        loader_content
+                    )
+                )
+
+                if not detected:
+                    continue
+
+                reason = (
+                    "conflicting_loader"
+                    if any(
+                        item != group
+                        for item in detected
+                    )
+                    else "duplicate_loader"
+                )
+
+                if backup_directory is None:
+                    backup_directory = (
+                        create_autoexecute_backup_directory()
+                    )
+
+                destination = (
+                    unique_backup_path(
+                        backup_directory,
+                        entry.name,
+                    )
+                )
+
+                shutil.move(
+                    entry.path,
+                    destination,
+                )
+
+                moved.append({
+                    "source_name":
+                        entry.name,
+                    "backup_name":
+                        os.path.basename(
+                            destination
+                        ),
+                    "reason": reason,
+                    "detected_groups":
+                        sorted(detected),
+                })
+
+                print(
+                    "[+] AUTOEXECUTE_BACKUP: "
+                    f"{entry.name} -> "
+                    f"{destination} "
+                    f"reason={reason}"
+                )
+
+            except Exception as entry_error:
+                log_error(
+                    "quarantine_conflicting_loaders_entry",
+                    entry_error,
+                    group,
+                )
+
+        if (
+            backup_directory is not None
+            and moved
+        ):
+            write_autoexecute_manifest(
+                backup_directory,
+                group,
+                moved,
+            )
+
+        return True
+
+    except Exception as error:
+        log_error(
+            "quarantine_conflicting_loaders",
+            error,
+            group,
+        )
+        return False
+
+
+def reconcile_autoexecute(
+    group,
+    force=False,
+):
+    global AUTOEXECUTE_LAST_RECONCILE
+
+    now = time.monotonic()
+
+    if (
+        not force
+        and AUTOEXECUTE_LAST_RECONCILE
+        is not None
+        and (
+            now
+            - AUTOEXECUTE_LAST_RECONCILE
+            < AUTOEXECUTE_RECONCILE_INTERVAL_SECONDS
+        )
+    ):
+        return True
+
+    AUTOEXECUTE_LAST_RECONCILE = now
+
+    if not group_script_is_current(
+        group
+    ):
+        if not install_group_script(
+            group
+        ):
+            return False
+
+    return quarantine_conflicting_loaders(
+        group
+    )
+
 def install_group_script(group):
     if group not in GROUP_SCRIPT_URLS:
         log_error(
@@ -1100,6 +1497,8 @@ if __name__ == "__main__":
             state["device_group"] = group
             install_group_script(group)
             save_state(state)
+
+        reconcile_autoexecute(group)
 
         common_text, group_text = fetch_commands_for_group(group)
         if common_text is None and group_text is None:
