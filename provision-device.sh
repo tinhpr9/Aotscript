@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase6-wizard-v2"
+VERSION="phase7-supervisor-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -22,6 +22,8 @@ WIZARD_SHORTCUT_DIR="${MPROVISION_SHORTCUT_DIR:-$HOME/.shortcuts/tasks}"
 WIZARD_SHORTCUT="$WIZARD_SHORTCUT_DIR/AOTSCRIPT_SETUP"
 WIZARD_LEGACY_SHORTCUT="$HOME/.shortcuts/AOTSCRIPT_SETUP"
 WIZARD_LOG="$STATE_DIR/wizard.log"
+WIZARD_SUPERVISOR="$HOME/bin/aotscript-wizard"
+WIZARD_SUPERVISOR_URL="$RAW/wizard-supervisor.sh"
 TERMUX_WIDGET_PACKAGE="com.termux.widget"
 SWIFT_PACKAGE="org.swiftapps.swiftbackup"
 SOURCE_SHOUKO_ID="1vDjK3hNCyT0B_rbAcsPlelD-TJJKzwG1"
@@ -1090,38 +1092,9 @@ backup_remote_for() {
 wizard_shortcut_content() {
   cat <<'__MP_WIZARD_SHORTCUT__'
 #!/data/data/com.termux/files/usr/bin/bash
-set -u
-
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/aotscript"
-LOG="$STATE_DIR/wizard.log"
-TMP="$LOG.tmp.$$"
-
-mkdir -p "$STATE_DIR"
-chmod 700 "$STATE_DIR"
-
-cleanup() {
-  rm -f "$TMP"
-}
-trap cleanup EXIT INT TERM
-
-if /data/data/com.termux/files/usr/bin/mprovision wizard \
-     >"$TMP" 2>&1; then
-  chmod 600 "$TMP"
-  mv -f "$TMP" "$LOG"
-  exit 0
-else
-  status=$?
-  chmod 600 "$TMP" 2>/dev/null || true
-  mv -f "$TMP" "$LOG" 2>/dev/null || true
-
-  su -c "/system/bin/cmd notification post \
-    -t 'Aotscript Setup' \
-    aotscript_setup \
-    'Có lỗi. Mở Termux và xem wizard.log.'" \
-    >/dev/null 2>&1 || true
-
-  exit "$status"
-fi
+# Supervisor delegates to /data/data/com.termux/files/usr/bin/mprovision wizard.
+# Log: $HOME/.local/state/aotscript/wizard.log
+exec /data/data/com.termux/files/home/bin/aotscript-wizard start
 __MP_WIZARD_SHORTCUT__
 }
 
@@ -1190,8 +1163,58 @@ wizard_package_exists() {
   fi
 }
 
+install_wizard_supervisor() {
+  local tmp stamp
+
+  mkdir -p "$HOME/bin"
+  tmp="$WIZARD_SUPERVISOR.tmp.$$"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+
+  rm -f "$tmp"
+
+  curl -fsSL \
+    --retry 3 \
+    --connect-timeout 15 \
+    "$WIZARD_SUPERVISOR_URL?t=$(date +%s)" \
+    -o "$tmp" || {
+      rm -f "$tmp"
+      die "Không tải được wizard-supervisor.sh"
+    }
+
+  [ -s "$tmp" ] || {
+    rm -f "$tmp"
+    die "wizard-supervisor.sh tải về rỗng"
+  }
+
+  bash -n "$tmp" || {
+    rm -f "$tmp"
+    die "wizard-supervisor.sh tải về sai cú pháp"
+  }
+
+  chmod 700 "$tmp"
+
+  if [ -f "$WIZARD_SUPERVISOR" ] &&
+     cmp -s "$tmp" "$WIZARD_SUPERVISOR"; then
+    rm -f "$tmp"
+  else
+    [ ! -f "$WIZARD_SUPERVISOR" ] ||
+      cp -p \
+        "$WIZARD_SUPERVISOR" \
+        "$WIZARD_SUPERVISOR.bak-$stamp"
+
+    mv -f "$tmp" "$WIZARD_SUPERVISOR" || {
+      rm -f "$tmp"
+      die "Không cài được Aotscript Wizard Supervisor"
+    }
+
+    chmod 700 "$WIZARD_SUPERVISOR"
+  fi
+}
+
 install_wizard_shortcut() {
   local tmp legacy_tmp stamp legacy_status="NOT_PRESENT"
+
+  install_wizard_supervisor
 
   mkdir -p "$HOME/.shortcuts" "$WIZARD_SHORTCUT_DIR"
   chmod 700 "$HOME/.shortcuts" "$WIZARD_SHORTCUT_DIR"
@@ -2949,6 +2972,8 @@ __MP_PHASE2_SELF_TEST_PY__
     die "self-test wizard function"
   declare -F install_wizard_shortcut >/dev/null ||
     die "self-test wizard shortcut installer"
+  declare -F install_wizard_supervisor >/dev/null ||
+    die "self-test wizard supervisor installer"
   declare -F wizard_notify >/dev/null ||
     die "self-test wizard notification function"
   declare -F google_account_present >/dev/null ||
