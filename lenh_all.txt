@@ -2,3 +2,8 @@
 # telegram_expires_at=1785992016905
 # telegram_command_id=1785991716905-ff89716b
 IDLE
+
+# telegram_target_ids=m116
+# telegram_expires_at=1785992143911
+# telegram_command_id=1785991843911-b901cd77
+IDLE
