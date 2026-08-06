@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase5-ui-v2"
+VERSION="phase5-ui-v3"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -1800,8 +1800,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 xml_name, mode, package = sys.argv[1:4]
-tree = ET.parse(xml_name)
-root = tree.getroot()
+root = ET.parse(xml_name).getroot()
 bounds_re = re.compile(
     r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$"
 )
@@ -1854,6 +1853,9 @@ for node in root.iter("node"):
     ).strip().casefold()
 
     if mode == "switch":
+        if package and node_package != package:
+            continue
+
         is_switch = (
             "switch" in node_class.casefold()
             or "switch" in resource.casefold()
@@ -1884,6 +1886,37 @@ for node in root.iter("node"):
             score += max(0, 80 - box[1] // 8)
 
         candidates.append((score, box))
+
+    elif mode == "warp_switch":
+        expected_resource = (
+            "com.cloudflare.onedotonedotonedotone:"
+            "id/launchSwitch"
+        )
+
+        if (
+            node_package != package
+            or resource != expected_resource
+            or node_class != "android.widget.Switch"
+            or not clickable
+            or checked == "true"
+        ):
+            continue
+
+        candidates.append((1000, box))
+
+    elif mode == "warp_update_close":
+        if node_package != "com.android.vending":
+            continue
+
+        close_desc = desc.casefold()
+
+        if (
+            "đóng hộp thoại cập nhật" not in close_desc
+            and "close update dialog" not in close_desc
+        ):
+            continue
+
+        candidates.append((1000, box))
 
     elif mode == "permission":
         allowed = (
@@ -1925,7 +1958,6 @@ for node in root.iter("node"):
         if "imagebutton" in node_class.casefold():
             score += 60
 
-        # Ưu tiên nút nằm phía trên và bên phải.
         score += min(box[0] // 10, 80)
         score += max(0, 80 - box[1] // 10)
 
@@ -2003,20 +2035,16 @@ ui_click_permission_dialog() {
 }
 
 ui_dismiss_warp_overlay() {
-  if ui_click_node close "" WARP_UPDATE_CLOSE; then
+  if ui_click_node \
+       warp_update_close \
+       com.android.vending \
+       WARP_UPDATE_CLOSE; then
     echo "WARP_UPDATE_DIALOG=CLOSED_DYNAMIC"
     sleep 2
     return 0
   fi
 
-  if su -c 'input keyevent 4' \
-       >/dev/null 2>&1; then
-    echo "WARP_UPDATE_DIALOG=BACK_SENT"
-    sleep 2
-    return 0
-  fi
-
-  echo "WARP_UPDATE_DIALOG=NEEDS_ATTENTION"
+  echo "WARP_UPDATE_DIALOG=NOT_PRESENT"
   return 1
 }
 
@@ -2146,6 +2174,7 @@ ui_open_all_roblox() {
 ui_start_vpn() {
   local package="com.cloudflare.onedotonedotonedotone"
   local service="${package}/com.cloudflare.app.vpnservice.CloudflareVpnService"
+  local popup_closed=0
 
   if ! ui_package_exists "$package"; then
     echo "VPN_1_1_1_1_PACKAGE=MISSING"
@@ -2165,17 +2194,28 @@ ui_start_vpn() {
     return 0
   fi
 
-  if ! ui_click_unchecked_switch \
-       "$package" \
-       WARP_SWITCH_FIRST; then
-    ui_dismiss_warp_overlay || true
+  if ui_dismiss_warp_overlay; then
+    popup_closed=1
     ui_launch_package "$package" || true
     sleep 3
+  fi
 
-    ui_click_unchecked_switch \
+  if ! ui_click_node \
+       warp_switch \
+       "$package" \
+       WARP_SWITCH; then
+    if [ "$popup_closed" = 0 ]; then
+      ui_launch_package "$package" || true
+      sleep 2
+    fi
+
+    ui_click_node \
+      warp_switch \
       "$package" \
-      WARP_SWITCH_RETRY ||
-      true
+      WARP_SWITCH_RETRY || {
+        echo "VPN_1_1_1_1_SWITCH=NOT_FOUND"
+        return 1
+      }
   fi
 
   sleep 2
@@ -2198,7 +2238,7 @@ ui_post_prepare() {
   local failures=0
 
   echo "UI_POST_AUTOMATION=START"
-  echo "UI_POST_AUTOMATION_VERSION=2"
+  echo "UI_POST_AUTOMATION_VERSION=3"
 
   if ! root_ok; then
     echo "UI_ROOT=NEEDS_ATTENTION"
@@ -2571,6 +2611,38 @@ __MP_UI_SELF_TEST_SWITCH_XML__
   [ "$value" = "150 125" ] ||
     die "self-test UI switch center"
 
+
+  cat > "$tmp/ui-warp-switch.xml" <<'__MP_UI_SELF_TEST_WARP_SWITCH_XML__'
+<hierarchy>
+  <node package="com.cloudflare.onedotonedotonedotone" class="android.widget.Switch" resource-id="com.cloudflare.onedotonedotonedotone:id/launchSwitch" text="TẮT" clickable="true" checked="false" bounds="[564,187][716,263]" />
+</hierarchy>
+__MP_UI_SELF_TEST_WARP_SWITCH_XML__
+
+  value="$(
+    ui_node_center \
+      "$tmp/ui-warp-switch.xml" \
+      warp_switch \
+      com.cloudflare.onedotonedotonedotone
+  )" || die "self-test WARP switch parser"
+
+  [ "$value" = "640 225" ] ||
+    die "self-test WARP switch center"
+
+  cat > "$tmp/ui-warp-popup.xml" <<'__MP_UI_SELF_TEST_WARP_POPUP_XML__'
+<hierarchy>
+  <node package="com.android.vending" class="android.widget.ImageView" content-desc="Đóng hộp thoại cập nhật" clickable="true" bounds="[800,110][856,166]" />
+</hierarchy>
+__MP_UI_SELF_TEST_WARP_POPUP_XML__
+
+  value="$(
+    ui_node_center \
+      "$tmp/ui-warp-popup.xml" \
+      warp_update_close \
+      com.android.vending
+  )" || die "self-test WARP popup parser"
+
+  [ "$value" = "828 138" ] ||
+    die "self-test WARP popup center"
   cat > "$tmp/ui-permission.xml" <<'__MP_UI_SELF_TEST_PERMISSION_XML__'
 <hierarchy>
   <node text="Cho phép" class="android.widget.Button" clickable="true" bounds="[300,400][500,500]" />
