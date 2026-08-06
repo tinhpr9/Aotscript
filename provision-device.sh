@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase5-ui-v3"
+VERSION="phase5-ui-v4"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -1112,7 +1112,7 @@ show_manual_post() {
 [AUTO] done post tự bật Control; chỉ kiểm tra màn hình ngang nếu cần.
 [AUTO] done post tự bật Taskbar, đóng rồi mở lại tất cả package Roblox com.tinh.vv.* ở freeform.
 [ ] Setup cookie, check cookie và login cookie.
-[AUTO] done post tự đóng hộp cập nhật nếu có, bật WARP và xác nhận VPN service.
+[THỦ CÔNG] Bật 1.1.1.1/WARP và xác nhận Connected khi cần.
 [ ] Chỉnh auto-exec.
 [ ] Chạy toolcheck; xác nhận đủ user và không trùng account.
 [ ] Chạy thử winterhub đúng một lần.
@@ -2238,7 +2238,7 @@ ui_post_prepare() {
   local failures=0
 
   echo "UI_POST_AUTOMATION=START"
-  echo "UI_POST_AUTOMATION_VERSION=3"
+  echo "UI_POST_AUTOMATION_VERSION=4"
 
   if ! root_ok; then
     echo "UI_ROOT=NEEDS_ATTENTION"
@@ -2279,8 +2279,7 @@ ui_post_prepare() {
   ui_open_all_roblox ||
     failures=$((failures + 1))
 
-  ui_start_vpn ||
-    failures=$((failures + 1))
+  echo "VPN_1_1_1_1=MANUAL"
 
   if [ "$failures" -ne 0 ]; then
     state_set "ui_post_status=NEEDS_ATTENTION"
