@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase3a-v2"
+VERSION="phase4-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -18,6 +18,11 @@ AGENT="$DL/Agent_Core.py"
 WRAPPER="$HOME/bin/mprovision"
 REPORT_JSON="$SHOUKO/provision_report.json"
 REPORT_TEXT="$SHOUKO/provision_report.txt"
+SOURCE_SHOUKO_ID="1vDjK3hNCyT0B_rbAcsPlelD-TJJKzwG1"
+SOURCE_DELTA_ID="1BkHn3hyDfobTcy5tqhT9LePe01OzEHQ-"
+SOURCE_SHOUKO_REMOTE="gdrive:/Shouko.zip"
+SOURCE_DELTA_REMOTE="gdrive:/Delta.zip"
+SOURCE_HISTORY_ROOT="gdrive:/Aotscript-Source-History"
 
 ok() { printf '[OK] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*"; }
@@ -37,11 +42,14 @@ Lần đầu:
   mprovision done post
   mprovision resume
   mprovision report
+  mprovision publish-next
 
 Quy tắc checkpoint:
   - Xong THỦ CÔNG 1: dùng mprovision done pre
   - Xong THỦ CÔNG 2: dùng mprovision done post
-  - done post tự chạy audit chỉ đọc trước khi hoàn tất.
+  - done post tự chạy audit, backup after và publish nguồn máy kế tiếp.
+  - hoàn tất done post thì không cần lệnh bắt buộc nào khác.
+  - publish-next chỉ dùng để publish lại từ máy đã complete.
   - resume không tự bỏ qua checkpoint thủ công.
 __MP_USAGE__
 }
@@ -277,6 +285,585 @@ zip_delta() {
   unzip -tqq "$part" >/dev/null 2>&1 || { rm -f "$part"; return 1; }
   mv -f "$part" "$out"
   chmod 600 "$out" 2>/dev/null || true
+}
+
+
+extract_setup_source_ids() {
+  local setup_file="$1"
+
+  python - "$setup_file" <<'__MP_PUBLISH_SETUP_IDS_PY_20260806__'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+collapsed = re.sub(r"\\\n[ \t]*", " ", text)
+
+patterns = {
+    "Shouko.zip": (
+        r'download_zip\s+"([^"]+)"\s+"\$SHOUKO_ZIP"'
+    ),
+    "Delta.zip": (
+        r'download_zip\s+"([^"]+)"\s+"\$DELTA_ZIP"'
+    ),
+}
+
+for label, pattern in patterns.items():
+    matches = re.findall(pattern, collapsed)
+    if len(matches) != 1:
+        raise SystemExit(
+            f"{label}: setup source ID match count={len(matches)}"
+        )
+    value = matches[0].strip()
+    if not value:
+        raise SystemExit(f"{label}: setup source ID empty")
+    print(value)
+__MP_PUBLISH_SETUP_IDS_PY_20260806__
+}
+
+setup_source_ids_ok() {
+  local tmp
+  local ids=()
+
+  tmp="$(mktemp)"
+
+  if ! curl -fsSL \
+       --retry 3 \
+       --connect-timeout 15 \
+       "$RAW/setup-m166.sh?t=$(date +%s)" \
+       -o "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  if [ ! -s "$tmp" ] || ! bash -n "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  mapfile -t ids < <(
+    extract_setup_source_ids "$tmp"
+  )
+  rm -f "$tmp"
+
+  [ "${#ids[@]}" = 2 ] &&
+  [ "${ids[0]}" = "$SOURCE_SHOUKO_ID" ] &&
+  [ "${ids[1]}" = "$SOURCE_DELTA_ID" ]
+}
+
+source_id_from_listing() {
+  local listing_file="$1"
+  local expected_name="$2"
+
+  python - "$listing_file" "$expected_name" <<'__MP_PUBLISH_LISTING_ID_PY_20260806__'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+expected = sys.argv[2]
+
+data = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(data, list):
+    raise SystemExit("listing root is not array")
+
+matches = [
+    item
+    for item in data
+    if isinstance(item, dict)
+    and item.get("Path") == expected
+    and not item.get("IsDir", False)
+]
+
+if len(matches) != 1:
+    raise SystemExit(
+        f"{expected}: remote exact match count={len(matches)}"
+    )
+
+file_id = matches[0].get("ID")
+if not isinstance(file_id, str) or not file_id.strip():
+    raise SystemExit(f"{expected}: Drive file ID missing")
+
+print(file_id.strip())
+__MP_PUBLISH_LISTING_ID_PY_20260806__
+}
+
+remote_source_id() {
+  local expected_name="$1"
+  local tmp
+
+  tmp="$(mktemp)"
+
+  if ! rclone lsjson \
+       gdrive: \
+       --max-depth 1 \
+       --files-only \
+       --no-modtime \
+       --no-mimetype \
+       > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  local result=0
+
+  if source_id_from_listing "$tmp" "$expected_name"; then
+    result=0
+  else
+    result=$?
+  fi
+
+  rm -f "$tmp"
+  return "$result"
+}
+
+zip_shouko_next() {
+  local out="$1"
+
+  [ -d "$SHOUKO" ] || return 2
+
+  python - "$DL" "$SHOUKO" "$out" <<'__MP_PUBLISH_SHOUKO_ZIP_PY_20260806__'
+import os
+import pathlib
+import sys
+import zipfile
+
+download = pathlib.Path(sys.argv[1]).resolve()
+shouko = pathlib.Path(sys.argv[2]).resolve()
+output = pathlib.Path(sys.argv[3]).resolve()
+temporary = output.with_name(
+    output.name + f".part-{os.getpid()}"
+)
+
+blocked = (
+    "agent_config.json",
+    "device_id.txt",
+    "device_group.txt",
+    "agent_state.json",
+    "provision_report.json",
+    "provision_report.txt",
+)
+
+extras = (
+    "config-change.json",
+    "cookie.txt",
+    "cookie.txt.bak",
+    "Cookies.txt",
+    "Cookies.txt.bak",
+    "shouko.py",
+)
+
+
+def forbidden(path_name: str) -> bool:
+    base = pathlib.PurePosixPath(
+        path_name.replace("\\", "/")
+    ).name.lower()
+    return any(
+        base == item or base.startswith(item + ".")
+        for item in blocked
+    )
+
+
+try:
+    temporary.unlink()
+except FileNotFoundError:
+    pass
+
+added = 0
+
+try:
+    with zipfile.ZipFile(
+        temporary,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        allowZip64=True,
+    ) as archive:
+        for path in sorted(shouko.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            relative = path.relative_to(download).as_posix()
+            if forbidden(relative):
+                continue
+            archive.write(path, relative)
+            added += 1
+
+        for name in extras:
+            path = download / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            archive.write(path, name)
+            added += 1
+
+    if added == 0:
+        raise RuntimeError("Shouko source archive would be empty")
+
+    with zipfile.ZipFile(temporary) as archive:
+        if archive.testzip() is not None:
+            raise RuntimeError("Shouko source archive CRC failed")
+
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, output)
+finally:
+    try:
+        temporary.unlink()
+    except FileNotFoundError:
+        pass
+__MP_PUBLISH_SHOUKO_ZIP_PY_20260806__
+}
+
+verify_source_zip() {
+  local archive="$1"
+  local kind="$2"
+
+  python - "$archive" "$kind" <<'__MP_PUBLISH_VERIFY_ZIP_PY_20260806__'
+import pathlib
+import sys
+import zipfile
+
+archive_path = pathlib.Path(sys.argv[1])
+kind = sys.argv[2]
+
+blocked = (
+    "agent_config.json",
+    "device_id.txt",
+    "device_group.txt",
+    "agent_state.json",
+    "provision_report.json",
+    "provision_report.txt",
+)
+
+
+def forbidden(path_name: str) -> bool:
+    base = pathlib.PurePosixPath(
+        path_name.replace("\\", "/")
+    ).name.lower()
+    return any(
+        base == item or base.startswith(item + ".")
+        for item in blocked
+    )
+
+
+try:
+    with zipfile.ZipFile(archive_path) as archive:
+        if archive.testzip() is not None:
+            raise SystemExit("ZIP CRC failed")
+
+        names = archive.namelist()
+
+        if len(names) != len(set(names)):
+            raise SystemExit("ZIP has duplicate names")
+
+        normalized = []
+        for name in names:
+            value = name.replace("\\", "/")
+            path = pathlib.PurePosixPath(value)
+            if value.startswith("/") or ".." in path.parts:
+                raise SystemExit("ZIP has unsafe path")
+            normalized.append(value)
+
+        if kind == "shouko":
+            files = [
+                name
+                for name in normalized
+                if name.startswith("Shouko/")
+                and not name.endswith("/")
+            ]
+            if not files:
+                raise SystemExit("Shouko ZIP has no Shouko files")
+            bad = [name for name in normalized if forbidden(name)]
+            if bad:
+                raise SystemExit(
+                    "Shouko ZIP contains forbidden device data"
+                )
+        elif kind == "delta":
+            files = [
+                name
+                for name in normalized
+                if name.startswith("Delta/")
+                and not name.endswith("/")
+            ]
+            if not files:
+                raise SystemExit("Delta ZIP has no Delta files")
+        else:
+            raise SystemExit("unknown ZIP kind")
+except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+    raise SystemExit(str(exc))
+__MP_PUBLISH_VERIFY_ZIP_PY_20260806__
+}
+
+verify_remote_source() {
+  local remote="$1"
+  local expected_id="$2"
+  local expected_name="$3"
+  local expected_sha="$4"
+  local kind="$5"
+  local destination="$6"
+  local actual_id actual_sha
+
+  actual_id="$(remote_source_id "$expected_name")" ||
+    return 1
+
+  [ "$actual_id" = "$expected_id" ] ||
+    return 1
+
+  rm -f "$destination"
+
+  rclone copyto "$remote" "$destination" ||
+    return 1
+
+  [ -s "$destination" ] ||
+    return 1
+
+  actual_sha="$(
+    sha256sum "$destination" |
+      awk 'NR == 1 {print $1}'
+  )"
+
+  [ "$actual_sha" = "$expected_sha" ] ||
+    return 1
+
+  verify_source_zip "$destination" "$kind"
+}
+
+rollback_source_files() {
+  local old_shouko="$1"
+  local old_delta="$2"
+  local old_shouko_sha="$3"
+  local old_delta_sha="$4"
+  local work="$5"
+  local current_id
+
+  rclone copyto "$old_delta" "$SOURCE_DELTA_REMOTE" ||
+    return 1
+
+  rclone copyto "$old_shouko" "$SOURCE_SHOUKO_REMOTE" ||
+    return 1
+
+  current_id="$(remote_source_id Delta.zip)" ||
+    return 1
+  [ "$current_id" = "$SOURCE_DELTA_ID" ] ||
+    return 1
+
+  current_id="$(remote_source_id Shouko.zip)" ||
+    return 1
+  [ "$current_id" = "$SOURCE_SHOUKO_ID" ] ||
+    return 1
+
+  rm -f "$work/rollback-Shouko.zip" "$work/rollback-Delta.zip"
+
+  rclone copyto \
+    "$SOURCE_SHOUKO_REMOTE" \
+    "$work/rollback-Shouko.zip" ||
+    return 1
+
+  rclone copyto \
+    "$SOURCE_DELTA_REMOTE" \
+    "$work/rollback-Delta.zip" ||
+    return 1
+
+  [ "$(
+      sha256sum "$work/rollback-Shouko.zip" |
+        awk 'NR == 1 {print $1}'
+    )" = "$old_shouko_sha" ] ||
+    return 1
+
+  [ "$(
+      sha256sum "$work/rollback-Delta.zip" |
+        awk 'NR == 1 {print $1}'
+    )" = "$old_delta_sha" ] ||
+    return 1
+}
+
+publish_next_sources() {
+  local force="${1:-0}"
+  local phase current_status device stamp work history_remote
+  local old_shouko old_delta new_shouko new_delta
+  local old_shouko_sha old_delta_sha new_shouko_sha new_delta_sha
+  local current_id failure=""
+
+  [ -s "$STATE" ] ||
+    die "Chưa khởi tạo mprovision"
+
+  phase="$(state_get phase)"
+
+  case "$phase" in
+    finalize|complete)
+      ;;
+    *)
+      die "Chỉ publish nguồn ở phase finalize hoặc complete; phase=$phase"
+      ;;
+  esac
+
+  current_status="$(state_get publish_next_status)"
+
+  if [ "$force" != 1 ] && [ "$current_status" = OK ]; then
+    ok "Nguồn máy kế tiếp đã publish; không lặp lại"
+    return 0
+  fi
+
+  rclone_ok ||
+    die "gdrive: chưa sẵn sàng để publish nguồn máy kế tiếp"
+
+  setup_source_ids_ok ||
+    die "ID nguồn trong setup-m166.sh không khớp cấu hình publish"
+
+  current_id="$(remote_source_id Shouko.zip)" ||
+    die "Không xác định duy nhất Shouko.zip trên gdrive:"
+
+  [ "$current_id" = "$SOURCE_SHOUKO_ID" ] ||
+    die "Drive ID của Shouko.zip không khớp setup-m166.sh"
+
+  current_id="$(remote_source_id Delta.zip)" ||
+    die "Không xác định duy nhất Delta.zip trên gdrive:"
+
+  [ "$current_id" = "$SOURCE_DELTA_ID" ] ||
+    die "Drive ID của Delta.zip không khớp setup-m166.sh"
+
+  device="$(state_get device_id)"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  work="$(mktemp -d)"
+
+  old_shouko="$work/old/Shouko.zip"
+  old_delta="$work/old/Delta.zip"
+  new_shouko="$work/new/Shouko.zip"
+  new_delta="$work/new/Delta.zip"
+  history_remote="$SOURCE_HISTORY_ROOT/$device/$stamp-before"
+
+  mkdir -p "$work/old" "$work/new"
+
+  if ! rclone copyto "$SOURCE_SHOUKO_REMOTE" "$old_shouko"; then
+    rm -rf "$work"
+    die "Không tải được nguồn Shouko hiện tại để backup"
+  fi
+
+  if ! rclone copyto "$SOURCE_DELTA_REMOTE" "$old_delta"; then
+    rm -rf "$work"
+    die "Không tải được nguồn Delta hiện tại để backup"
+  fi
+
+  unzip -tqq "$old_shouko" >/dev/null 2>&1 || {
+    rm -rf "$work"
+    die "Nguồn Shouko hiện tại không phải ZIP hợp lệ"
+  }
+
+  unzip -tqq "$old_delta" >/dev/null 2>&1 || {
+    rm -rf "$work"
+    die "Nguồn Delta hiện tại không phải ZIP hợp lệ"
+  }
+
+  old_shouko_sha="$(
+    sha256sum "$old_shouko" |
+      awk 'NR == 1 {print $1}'
+  )"
+  old_delta_sha="$(
+    sha256sum "$old_delta" |
+      awk 'NR == 1 {print $1}'
+  )"
+
+  (
+    cd "$work/old"
+    sha256sum Shouko.zip > Shouko.zip.sha256
+    sha256sum Delta.zip > Delta.zip.sha256
+  )
+
+  if ! rclone copy "$work/old" "$history_remote"; then
+    rm -rf "$work"
+    die "Không lưu được lịch sử nguồn trước publish"
+  fi
+
+  zip_shouko_next "$new_shouko" || {
+    rm -rf "$work"
+    die "Không tạo được Shouko.zip sạch cho máy kế tiếp"
+  }
+
+  zip_delta "$new_delta" || {
+    rm -rf "$work"
+    die "Không tạo được Delta.zip cho máy kế tiếp"
+  }
+
+  verify_source_zip "$new_shouko" shouko || {
+    rm -rf "$work"
+    die "Shouko.zip máy kế tiếp không hợp lệ"
+  }
+
+  verify_source_zip "$new_delta" delta || {
+    rm -rf "$work"
+    die "Delta.zip máy kế tiếp không hợp lệ"
+  }
+
+  new_shouko_sha="$(
+    sha256sum "$new_shouko" |
+      awk 'NR == 1 {print $1}'
+  )"
+  new_delta_sha="$(
+    sha256sum "$new_delta" |
+      awk 'NR == 1 {print $1}'
+  )"
+
+  state_set \
+    "publish_next_status=RUNNING" \
+    "publish_next_started_at=$(utc_now)" \
+    "publish_next_history_remote=$history_remote"
+
+  if ! rclone copyto "$new_delta" "$SOURCE_DELTA_REMOTE"; then
+    failure="upload Delta.zip"
+  elif ! verify_remote_source \
+       "$SOURCE_DELTA_REMOTE" \
+       "$SOURCE_DELTA_ID" \
+       Delta.zip \
+       "$new_delta_sha" \
+       delta \
+       "$work/verify-Delta.zip"; then
+    failure="verify Delta.zip"
+  elif ! rclone copyto "$new_shouko" "$SOURCE_SHOUKO_REMOTE"; then
+    failure="upload Shouko.zip"
+  elif ! verify_remote_source \
+       "$SOURCE_SHOUKO_REMOTE" \
+       "$SOURCE_SHOUKO_ID" \
+       Shouko.zip \
+       "$new_shouko_sha" \
+       shouko \
+       "$work/verify-Shouko.zip"; then
+    failure="verify Shouko.zip"
+  fi
+
+  if [ -n "$failure" ]; then
+    warn "Publish thất bại tại: $failure; đang rollback hai file nguồn"
+
+    if rollback_source_files \
+         "$old_shouko" \
+         "$old_delta" \
+         "$old_shouko_sha" \
+         "$old_delta_sha" \
+         "$work"; then
+      state_set \
+        "publish_next_status=ROLLED_BACK" \
+        "publish_next_failed_step=$failure"
+      rm -rf "$work"
+      die "Publish nguồn thất bại; rollback đã xác minh thành công"
+    fi
+
+    state_set \
+      "publish_next_status=ROLLBACK_FAILED" \
+      "publish_next_failed_step=$failure"
+    rm -rf "$work"
+    die "Publish nguồn thất bại và rollback chưa xác minh được"
+  fi
+
+  state_set \
+    "publish_next_status=OK" \
+    "publish_next_completed_at=$(utc_now)" \
+    "publish_next_failed_step=" \
+    "publish_next_history_remote=$history_remote" \
+    "publish_next_shouko_sha256=$new_shouko_sha" \
+    "publish_next_delta_sha256=$new_delta_sha"
+
+  rm -rf "$work"
+
+  echo "PUBLISH_NEXT=THÀNH_CÔNG"
+  echo "SOURCE_HISTORY_REMOTE=$history_remote"
+  echo "SHOUKO_SOURCE_SHA256=$new_shouko_sha"
+  echo "DELTA_SOURCE_SHA256=$new_delta_sha"
 }
 
 backup_data() {
@@ -815,7 +1402,8 @@ checklist() {
       ;;
     complete)
       echo "CHECKPOINT=HOÀN_TẤT"
-      echo "NEXT=mprovision report"
+      echo "PUBLISH_NEXT=$(state_get publish_next_status)"
+      echo "NEXT=KHÔNG_CẦN_LỆNH_THÊM"
       ;;
     *)
       echo "CHECKPOINT=KHÔNG_CHỜ_THỦ_CÔNG"
@@ -1154,6 +1742,8 @@ finalize() {
     backup_data after 1
   fi
 
+  publish_next_sources 0
+
   completed_at="$(state_get completed_at)"
 
   if [ -z "$completed_at" ]; then
@@ -1176,7 +1766,7 @@ finalize() {
 }
 
 status() {
-  local phase pre_status post_status report_status next
+  local phase pre_status post_status report_status publish_status next
 
   [ -s "$STATE" ] || {
     echo "MPROVISION_STATUS=CHƯA_KHỞI_TẠO"
@@ -1187,6 +1777,8 @@ status() {
   pre_status="PENDING"
   post_status="PENDING"
   report_status="MISSING"
+  publish_status="$(state_get publish_next_status)"
+  [ -n "$publish_status" ] || publish_status="PENDING"
   next="mprovision resume"
 
   [ -z "$(state_get manual_pre_confirmed_at)" ] ||
@@ -1206,7 +1798,7 @@ status() {
       next="mprovision done post"
       ;;
     complete)
-      next="mprovision report"
+      next="KHÔNG_CẦN_LỆNH_THÊM"
       ;;
   esac
 
@@ -1218,6 +1810,7 @@ status() {
   echo "MANUAL_PRE=$pre_status"
   echo "MANUAL_POST=$post_status"
   echo "REPORT=$report_status"
+  echo "PUBLISH_NEXT=$publish_status"
   echo "NEXT=$next"
 }
 
@@ -1426,6 +2019,104 @@ __MP_PHASE2_SELF_TEST_PY__
     grep -Fxq 'DISPLAY_TARGET_700DP=OK' ||
     die "self-test display target"
 
+
+  printf 'sensitive-placeholder\n' > "$SHOUKO/agent_config.json"
+  printf 'm116\n' > "$SHOUKO/device_id.txt"
+  printf 'NOVA\n' > "$SHOUKO/device_group.txt"
+  printf '{}\n' > "$SHOUKO/agent_state.json"
+  printf '{}\n' > "$SHOUKO/provision_report.json"
+
+  zip_shouko_next "$tmp/out/Shouko-next.zip"
+  verify_source_zip "$tmp/out/Shouko-next.zip" shouko
+  verify_source_zip "$tmp/out/Delta.zip" delta
+
+  python - "$tmp/out/Shouko-next.zip" <<'__MP_PUBLISH_SELF_TEST_ZIP_PY_20260806__'
+import pathlib
+import zipfile
+import sys
+
+blocked = (
+    "agent_config.json",
+    "device_id.txt",
+    "device_group.txt",
+    "agent_state.json",
+    "provision_report.json",
+    "provision_report.txt",
+)
+
+with zipfile.ZipFile(pathlib.Path(sys.argv[1])) as archive:
+    names = archive.namelist()
+
+for name in names:
+    base = pathlib.PurePosixPath(name).name.lower()
+    if any(base == item or base.startswith(item + ".") for item in blocked):
+        raise SystemExit(f"forbidden published path: {name}")
+__MP_PUBLISH_SELF_TEST_ZIP_PY_20260806__
+
+  cat > "$tmp/setup-fixture.sh" <<'__MP_PUBLISH_SELF_TEST_SETUP__'
+download_zip \
+  "1vDjK3hNCyT0B_rbAcsPlelD-TJJKzwG1" \
+  "$SHOUKO_ZIP"
+
+download_zip \
+  "1BkHn3hyDfobTcy5tqhT9LePe01OzEHQ-" \
+  "$DELTA_ZIP"
+__MP_PUBLISH_SELF_TEST_SETUP__
+
+  mapfile -t publish_ids < <(
+    extract_setup_source_ids "$tmp/setup-fixture.sh"
+  )
+
+  [ "${#publish_ids[@]}" = 2 ] ||
+    die "self-test publish setup ID count"
+
+  [ "${publish_ids[0]}" = "$SOURCE_SHOUKO_ID" ] ||
+    die "self-test Shouko source ID"
+
+  [ "${publish_ids[1]}" = "$SOURCE_DELTA_ID" ] ||
+    die "self-test Delta source ID"
+
+  cat > "$tmp/listing.json" <<'__MP_PUBLISH_SELF_TEST_LISTING__'
+[
+  {
+    "Path": "Shouko.zip",
+    "Name": "Shouko.zip",
+    "Size": 123,
+    "IsDir": false,
+    "ID": "1vDjK3hNCyT0B_rbAcsPlelD-TJJKzwG1"
+  },
+  {
+    "Path": "Delta.zip",
+    "Name": "Delta.zip",
+    "Size": 456,
+    "IsDir": false,
+    "ID": "1BkHn3hyDfobTcy5tqhT9LePe01OzEHQ-"
+  }
+]
+__MP_PUBLISH_SELF_TEST_LISTING__
+
+  [ "$(
+      source_id_from_listing "$tmp/listing.json" Shouko.zip
+    )" = "$SOURCE_SHOUKO_ID" ] ||
+    die "self-test remote Shouko ID"
+
+  [ "$(
+      source_id_from_listing "$tmp/listing.json" Delta.zip
+    )" = "$SOURCE_DELTA_ID" ] ||
+    die "self-test remote Delta ID"
+
+  state_set publish_next_status=OK
+
+  value="$(status)"
+
+  printf '%s\n' "$value" |
+    grep -Fxq 'PUBLISH_NEXT=OK' ||
+    die "self-test publish status"
+
+  printf '%s\n' "$value" |
+    grep -Fxq 'NEXT=KHÔNG_CẦN_LỆNH_THÊM' ||
+    die "self-test completed next"
+
   python -m json.tool "$STATE" >/dev/null
 
   rm -rf "$tmp"
@@ -1442,6 +2133,7 @@ __MP_PHASE2_SELF_TEST_PY__
   REPORT_TEXT="$old_report_text"
 
   echo "MPROVISION_PHASE3A_SELF_TEST=OK"
+  echo "MPROVISION_PUBLISH_NEXT_SELF_TEST=OK"
 }
 
 main() {
@@ -1489,6 +2181,21 @@ main() {
       install_wrapper
       show_report
       ;;
+    publish-next)
+      [ "$#" = 1 ] ||
+        die "publish-next không nhận tham số"
+      install_wrapper
+      [ -s "$STATE" ] ||
+        die "Chưa khởi tạo mprovision"
+      [ "$(state_get phase)" = complete ] ||
+        die "Chỉ publish lại khi máy đã complete"
+      final_check
+      publish_next_sources 1
+      write_completion_report "$(agent_count)"
+      upload_completion_report ||
+        die "Không upload lại được báo cáo hoàn tất"
+      status
+      ;;
     -h|--help|help|"")
       usage
       ;;
@@ -1528,7 +2235,14 @@ main() {
         completed_at= \
         report_remote= \
         report_json= \
-        report_text=
+        report_text= \
+        publish_next_status= \
+        publish_next_started_at= \
+        publish_next_completed_at= \
+        publish_next_failed_step= \
+        publish_next_history_remote= \
+        publish_next_shouko_sha256= \
+        publish_next_delta_sha256=
 
       preflight
       ;;

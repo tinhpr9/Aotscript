@@ -96,7 +96,8 @@ SD="/storage/emulated/0"
 DL="$SD/Download"
 SHOUKO_DIR="$DL/Shouko"
 AGENT_CONFIG="$SHOUKO_DIR/agent_config.json"
-PRIVATE_AGENT_CONFIG="$HOME/.config/aotscript/agent_config.json"
+PRIVATE_AGENT_CONFIG_DIR="$HOME/.config/aotscript"
+PRIVATE_AGENT_CONFIG="$PRIVATE_AGENT_CONFIG_DIR/agent_config.${DEVICE_ID}.json"
 WORKER_ORIGIN="https://billowing-haze-0cafaotscript-control.tinh1020pr.workers.dev"
 BACKUP="$DL/msetup_settings_before_${STAMP}.txt"
 DISABLED="$HOME/.termux/boot-disabled/$STAMP"
@@ -633,45 +634,60 @@ raise SystemExit(1)
 PY
 }
 
+save_private_agent_config() {
+  local source="$1"
+  local tmp="${PRIVATE_AGENT_CONFIG}.tmp.$$"
+
+  mkdir -p "$PRIVATE_AGENT_CONFIG_DIR"
+  rm -f "$tmp"
+
+  cp -p "$source" "$tmp" ||
+    die "Không lưu được backup Agent riêng theo máy"
+
+  chmod 600 "$tmp" 2>/dev/null || true
+
+  validate_agent_config "$tmp" ||
+    die "Backup Agent riêng theo máy không hợp lệ"
+
+  mv -f "$tmp" "$PRIVATE_AGENT_CONFIG" ||
+    die "Không thay được backup Agent riêng theo máy"
+
+  chmod 600 "$PRIVATE_AGENT_CONFIG" 2>/dev/null || true
+}
+
 install_agent_config() {
   local tmp="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/agent_config.$$"
   local source_name=""
+  local current_device_id=""
 
   rm -f "$tmp" "${tmp}.pair-write"
 
-  if [ -s "$AGENT_CONFIG" ] &&
+  current_device_id="$(
+    tr -d '\r\n ' \
+      < "$SHOUKO_DIR/device_id.txt" \
+      2>/dev/null |
+      tr '[:upper:]' '[:lower:]' ||
+      true
+  )"
+
+  if [ "$current_device_id" = "$DEVICE_ID" ] &&
+     [ -s "$AGENT_CONFIG" ] &&
      validate_agent_config "$AGENT_CONFIG"; then
     chmod 600 "$AGENT_CONFIG" 2>/dev/null || true
-    ok "Giữ nguyên agent_config.json hợp lệ hiện có"
+    save_private_agent_config "$AGENT_CONFIG"
+    ok "Giữ nguyên agent_config.json đúng Device ID"
     return 0
   fi
 
-  if unzip -Z1 "$SHOUKO_ZIP" |
-       tr -d '\r' |
-       grep -Fxq 'Shouko/agent_config.json'; then
-    if unzip -p \
-         "$SHOUKO_ZIP" \
-         'Shouko/agent_config.json' \
-         > "$tmp" &&
-       [ -s "$tmp" ] &&
-       validate_agent_config "$tmp"; then
-      source_name="Shouko.zip riêng tư"
-    else
-      rm -f "$tmp"
-      warn "agent_config.json trong Shouko.zip chưa hợp lệ"
-    fi
-  fi
-
-  if [ -z "$source_name" ] &&
-     [ -s "$PRIVATE_AGENT_CONFIG" ]; then
+  if [ -s "$PRIVATE_AGENT_CONFIG" ]; then
     cp -p "$PRIVATE_AGENT_CONFIG" "$tmp" ||
-      die "Không đọc được backup Agent riêng tư"
+      die "Không đọc được backup Agent riêng của $DEVICE_ID"
 
     if validate_agent_config "$tmp"; then
-      source_name="backup riêng tư trong Termux"
+      source_name="backup riêng theo Device ID"
     else
       rm -f "$tmp"
-      warn "Backup Agent riêng tư chưa hợp lệ"
+      warn "Backup Agent riêng của $DEVICE_ID chưa hợp lệ"
     fi
   fi
 
@@ -695,7 +711,8 @@ install_agent_config() {
      cmp -s "$tmp" "$AGENT_CONFIG"; then
     rm -f "$tmp"
     chmod 600 "$AGENT_CONFIG" 2>/dev/null || true
-    ok "agent_config.json đã đúng"
+    save_private_agent_config "$AGENT_CONFIG"
+    ok "agent_config.json đã đúng cho $DEVICE_ID"
     return 0
   fi
 
@@ -703,7 +720,7 @@ install_agent_config() {
     cp -p \
       "$AGENT_CONFIG" \
       "${AGENT_CONFIG}.bak-${STAMP}" ||
-      die "Không backup được agent_config.json"
+      die "Không backup được agent_config.json cũ"
   fi
 
   chmod 600 "$tmp" 2>/dev/null || true
@@ -716,233 +733,10 @@ install_agent_config() {
   validate_agent_config "$AGENT_CONFIG" ||
     die "agent_config.json sau khi cài không hợp lệ"
 
+  save_private_agent_config "$AGENT_CONFIG"
+
   ok "Đã cài agent_config.json từ $source_name; không hiển thị nội dung"
 }
-
-SHOUKO_ZIP="$DL/Shouko.zip"
-DELTA_ZIP="$DL/Delta.zip"
-
-download_zip \
-  "1vDjK3hNCyT0B_rbAcsPlelD-TJJKzwG1" \
-  "$SHOUKO_ZIP"
-
-download_zip \
-  "1BkHn3hyDfobTcy5tqhT9LePe01OzEHQ-" \
-  "$DELTA_ZIP"
-
-extract_safe "$SHOUKO_ZIP" "$DL" "Shouko"
-extract_safe "$DELTA_ZIP" "$SD" "Delta"
-install_agent_config
-
-TOOLCHECK_CMD="$HOME/bin/toolcheck"
-TOOLCHECK_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/toolcheck.$$"
-
-cat > "$TOOLCHECK_TMP" <<'TOOLCHECK_EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-set -e
-
-PYTHON="/data/data/com.termux/files/usr/bin/python"
-CURL="/data/data/com.termux/files/usr/bin/curl"
-TMP="$(mktemp)"
-
-cleanup() {
-  rm -f "$TMP"
-}
-trap cleanup EXIT
-
-if ! "$PYTHON" -c 'import requests' >/dev/null 2>&1; then
-  echo "[*] Đang cài requests..."
-  "$PYTHON" -m pip install --upgrade requests
-fi
-
-echo "[*] Đang tải Toolcheck mới nhất..."
-
-"$CURL" -fsSL \
-  --retry 3 \
-  --connect-timeout 15 \
-  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/Toolcheck?t=$(date +%s)" \
-  -o "$TMP"
-
-[ -s "$TMP" ] || {
-  echo "[LỖI] Toolcheck tải về bị trống."
-  exit 1
-}
-
-"$PYTHON" -c '
-import pathlib
-import sys
-source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-compile(source, sys.argv[1], "exec")
-' "$TMP"
-
-"$PYTHON" "$TMP"
-TOOLCHECK_EOF
-
-chmod 700 "$TOOLCHECK_TMP"
-
-if [ -f "$TOOLCHECK_CMD" ] &&
-   cmp -s "$TOOLCHECK_TMP" "$TOOLCHECK_CMD"; then
-  rm -f "$TOOLCHECK_TMP"
-  ok "Lệnh toolcheck đã đúng"
-else
-  [ ! -f "$TOOLCHECK_CMD" ] ||
-    cp -p "$TOOLCHECK_CMD" "${TOOLCHECK_CMD}.bak-${STAMP}"
-  mv "$TOOLCHECK_TMP" "$TOOLCHECK_CMD" ||
-    die "Không cài được toolcheck"
-  chmod 700 "$TOOLCHECK_CMD"
-  ok "Đã cài lệnh: toolcheck"
-fi
-
-TOOLCHECK_PATH="${PREFIX:-/data/data/com.termux/files/usr}/bin/toolcheck"
-mkdir -p "$(dirname "$TOOLCHECK_PATH")" ||
-  die "Không tạo được thư mục lệnh Termux"
-
-if [ "$TOOLCHECK_PATH" != "$TOOLCHECK_CMD" ]; then
-  if [ -e "$TOOLCHECK_PATH" ] || [ -L "$TOOLCHECK_PATH" ]; then
-    if ! cmp -s "$TOOLCHECK_CMD" "$TOOLCHECK_PATH" 2>/dev/null; then
-      cp -p         "$TOOLCHECK_PATH"         "${TOOLCHECK_PATH}.bak-${STAMP}" 2>/dev/null || true
-    fi
-    rm -f "$TOOLCHECK_PATH" ||
-      die "Không thay được đường dẫn toolcheck cũ"
-  fi
-
-  ln -s "$TOOLCHECK_CMD" "$TOOLCHECK_PATH" ||
-    die "Không tạo được lệnh toolcheck trong PATH"
-fi
-
-hash -r
-command -v toolcheck >/dev/null 2>&1 ||
-  die "Đã cài nhưng terminal vẫn không tìm thấy toolcheck"
-ok "Có thể dùng ngay bằng lệnh: toolcheck"
-
-SETDEVICE_CMD="$HOME/bin/setdevice"
-SETDEVICE_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/setdevice.$$"
-
-cat > "$SETDEVICE_TMP" <<'SETDEVICE_EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-set -e
-
-NAME_RAW="${1:-}"
-GROUP_RAW="${2:-}"
-DIR="/sdcard/Download/Shouko"
-ID_FILE="$DIR/device_id.txt"
-GROUP_FILE="$DIR/device_group.txt"
-STATE_FILE="$DIR/agent_state.json"
-
-usage() {
-  echo "Cách dùng:"
-  echo "  setdevice 62 1"
-  echo "  setdevice m62 1"
-  echo "  setdevice 116 2"
-  echo "  setdevice m166 2"
-}
-
-[ -n "$NAME_RAW" ] && [ -n "$GROUP_RAW" ] || {
-  usage
-  exit 1
-}
-
-NAME_INPUT="$(
-  printf '%s' "$NAME_RAW" |
-    tr -d '\r\n ' |
-    tr '[:upper:]' '[:lower:]'
-)"
-
-if [[ "$NAME_INPUT" =~ ^[1-9][0-9]{0,5}$ ]]; then
-  NAME="m$NAME_INPUT"
-else
-  NAME="$NAME_INPUT"
-fi
-
-GROUP_INPUT="$(
-  printf '%s' "$GROUP_RAW" |
-    tr -d '\r\n _-' |
-    tr '[:lower:]' '[:upper:]'
-)"
-
-[[ "$NAME" =~ ^m[1-9][0-9]{0,5}$ ]] || {
-  echo "[LỖI] Tên máy không hợp lệ: $NAME_RAW"
-  exit 1
-}
-
-case "$GROUP_INPUT" in
-  1|NHOM1|GROUP1|MARMOT)
-    GROUP="MARMOT"
-    GROUP_LABEL="NHÓM 1"
-    ;;
-  2|NHOM2|GROUP2|NOVA)
-    GROUP="NOVA"
-    GROUP_LABEL="NHÓM 2"
-    ;;
-  *)
-    echo "[LỖI] Nhóm không hợp lệ: $GROUP_RAW; chỉ dùng 1 hoặc 2"
-    exit 1
-    ;;
-esac
-
-mkdir -p "$DIR"
-
-OLD_ID="$(
-  tr -d '\r\n ' < "$ID_FILE" 2>/dev/null |
-    tr '[:upper:]' '[:lower:]' || true
-)"
-
-OLD_GROUP="$(
-  tr -d '\r\n ' < "$GROUP_FILE" 2>/dev/null |
-    tr '[:lower:]' '[:upper:]' || true
-)"
-
-if [ "$OLD_ID" = "$NAME" ] &&
-   [ "$OLD_GROUP" = "$GROUP" ]; then
-  echo "[OK] Máy đã được cấu hình: $NAME / $GROUP_LABEL"
-  exit 0
-fi
-
-STAMP="$(date +%Y%m%d-%H%M%S)"
-
-for file in "$ID_FILE" "$GROUP_FILE" "$STATE_FILE"; do
-  [ ! -f "$file" ] ||
-    cp -p "$file" "${file}.bak-${STAMP}"
-done
-
-printf '%s\n' "$NAME" > "${ID_FILE}.tmp"
-printf '%s\n' "$GROUP" > "${GROUP_FILE}.tmp"
-
-mv "${ID_FILE}.tmp" "$ID_FILE"
-mv "${GROUP_FILE}.tmp" "$GROUP_FILE"
-
-cat > "${STATE_FILE}.tmp" <<'STATE_EOF'
-{
-  "device_group": "",
-  "common_command_hash": "",
-  "group_command_hash": "",
-  "last_processed_at": "",
-  "last_command_id": "",
-  "last_result": ""
-}
-STATE_EOF
-
-mv "${STATE_FILE}.tmp" "$STATE_FILE"
-echo "[OK] Đã cấu hình máy: $NAME / $GROUP_LABEL"
-SETDEVICE_EOF
-
-chmod 700 "$SETDEVICE_TMP"
-
-if [ -f "$SETDEVICE_CMD" ] &&
-   cmp -s "$SETDEVICE_TMP" "$SETDEVICE_CMD"; then
-  rm -f "$SETDEVICE_TMP"
-  ok "Lệnh setdevice đã đúng"
-else
-  [ ! -f "$SETDEVICE_CMD" ] ||
-    cp -p "$SETDEVICE_CMD" "${SETDEVICE_CMD}.bak-${STAMP}"
-  mv "$SETDEVICE_TMP" "$SETDEVICE_CMD" ||
-    die "Không cài được setdevice"
-  chmod 700 "$SETDEVICE_CMD"
-  ok "Đã cài lệnh: setdevice"
-fi
-
-"$SETDEVICE_CMD" "$DEVICE_ID" "$DEVICE_GROUP" ||
-  die "setdevice thất bại"
 
 install_termux_boot_app() {
   local package="com.termux.boot"
