@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase6-wizard-v1"
+VERSION="phase6-wizard-v2"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -18,8 +18,10 @@ AGENT="$DL/Agent_Core.py"
 WRAPPER="$HOME/bin/mprovision"
 REPORT_JSON="$SHOUKO/provision_report.json"
 REPORT_TEXT="$SHOUKO/provision_report.txt"
-WIZARD_SHORTCUT_DIR="${MPROVISION_SHORTCUT_DIR:-$HOME/.shortcuts}"
+WIZARD_SHORTCUT_DIR="${MPROVISION_SHORTCUT_DIR:-$HOME/.shortcuts/tasks}"
 WIZARD_SHORTCUT="$WIZARD_SHORTCUT_DIR/AOTSCRIPT_SETUP"
+WIZARD_LEGACY_SHORTCUT="$HOME/.shortcuts/AOTSCRIPT_SETUP"
+WIZARD_LOG="$STATE_DIR/wizard.log"
 TERMUX_WIDGET_PACKAGE="com.termux.widget"
 SWIFT_PACKAGE="org.swiftapps.swiftbackup"
 SOURCE_SHOUKO_ID="1vDjK3hNCyT0B_rbAcsPlelD-TJJKzwG1"
@@ -1088,8 +1090,94 @@ backup_remote_for() {
 wizard_shortcut_content() {
   cat <<'__MP_WIZARD_SHORTCUT__'
 #!/data/data/com.termux/files/usr/bin/bash
-exec /data/data/com.termux/files/usr/bin/mprovision wizard
+set -u
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/aotscript"
+LOG="$STATE_DIR/wizard.log"
+TMP="$LOG.tmp.$$"
+
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+
+cleanup() {
+  rm -f "$TMP"
+}
+trap cleanup EXIT INT TERM
+
+if /data/data/com.termux/files/usr/bin/mprovision wizard \
+     >"$TMP" 2>&1; then
+  chmod 600 "$TMP"
+  mv -f "$TMP" "$LOG"
+  exit 0
+else
+  status=$?
+  chmod 600 "$TMP" 2>/dev/null || true
+  mv -f "$TMP" "$LOG" 2>/dev/null || true
+
+  su -c "/system/bin/cmd notification post \
+    -t 'Aotscript Setup' \
+    aotscript_setup \
+    'Có lỗi. Mở Termux và xem wizard.log.'" \
+    >/dev/null 2>&1 || true
+
+  exit "$status"
+fi
 __MP_WIZARD_SHORTCUT__
+}
+
+wizard_legacy_shortcut_content() {
+  cat <<'__MP_WIZARD_LEGACY_SHORTCUT__'
+#!/data/data/com.termux/files/usr/bin/bash
+exec /data/data/com.termux/files/usr/bin/mprovision wizard
+__MP_WIZARD_LEGACY_SHORTCUT__
+}
+
+wizard_notify() {
+  local code="$1" text
+
+  case "$code" in
+    complete)
+      text="Máy đã hoàn tất. Không còn bước cần chạy."
+      ;;
+    root)
+      text="Bật root rồi chạm lại AOTSCRIPT_SETUP."
+      ;;
+    google)
+      text="Đăng nhập Google xong chạm lại AOTSCRIPT_SETUP."
+      ;;
+    swift_before)
+      text="Backup Termux và dữ liệu cũ, rồi chạm lại AOTSCRIPT_SETUP."
+      ;;
+    swift_restore)
+      text="Restore nhóm RESTORE_DATA, rồi chạm lại AOTSCRIPT_SETUP."
+      ;;
+    swift_incomplete)
+      text="Restore chưa đủ ứng dụng bắt buộc. Swift Backup đã mở lại."
+      ;;
+    manual_post)
+      text="Còn các bước thủ công sau restore."
+      ;;
+    *)
+      text="Aotscript Setup đã chạy."
+      ;;
+  esac
+
+  if ! root_ok; then
+    echo "WIZARD_NOTIFICATION=SKIPPED_NO_ROOT"
+    return 1
+  fi
+
+  if su -c "/system/bin/cmd notification post \
+       -t 'Aotscript Setup' \
+       aotscript_setup \
+       '$text'" \
+       >/dev/null 2>&1; then
+    echo "WIZARD_NOTIFICATION=$code"
+    return 0
+  fi
+
+  echo "WIZARD_NOTIFICATION=FAILED"
+  return 1
 }
 
 wizard_package_exists() {
@@ -1103,20 +1191,33 @@ wizard_package_exists() {
 }
 
 install_wizard_shortcut() {
-  local tmp stamp
+  local tmp legacy_tmp stamp legacy_status="NOT_PRESENT"
 
-  mkdir -p "$WIZARD_SHORTCUT_DIR"
-  chmod 700 "$WIZARD_SHORTCUT_DIR"
+  mkdir -p "$HOME/.shortcuts" "$WIZARD_SHORTCUT_DIR"
+  chmod 700 "$HOME/.shortcuts" "$WIZARD_SHORTCUT_DIR"
 
   tmp="$WIZARD_SHORTCUT.tmp.$$"
+  legacy_tmp="$WIZARD_SHORTCUT_DIR/.legacy-AOTSCRIPT_SETUP.$$"
   stamp="$(date +%Y%m%d-%H%M%S)"
 
   wizard_shortcut_content > "$tmp"
+  wizard_legacy_shortcut_content > "$legacy_tmp"
   bash -n "$tmp" || {
     rm -f "$tmp"
     die "Shortcut AOTSCRIPT SETUP tạm sai cú pháp"
   }
   chmod 700 "$tmp"
+
+  if [ -f "$WIZARD_LEGACY_SHORTCUT" ]; then
+    if cmp -s "$legacy_tmp" "$WIZARD_LEGACY_SHORTCUT"; then
+      rm -f "$WIZARD_LEGACY_SHORTCUT"
+      legacy_status="REMOVED"
+    else
+      legacy_status="PRESERVED_DIFFERENT_CONTENT"
+      warn "Shortcut foreground cũ khác nội dung; không tự xóa"
+    fi
+  fi
+  rm -f "$legacy_tmp"
 
   if [ -f "$WIZARD_SHORTCUT" ] &&
      cmp -s "$tmp" "$WIZARD_SHORTCUT"; then
@@ -1127,9 +1228,11 @@ install_wizard_shortcut() {
         "$WIZARD_SHORTCUT" \
         "$WIZARD_SHORTCUT.bak-$stamp"
     mv -f "$tmp" "$WIZARD_SHORTCUT" ||
-      die "Không cài được shortcut AOTSCRIPT SETUP"
+      die "Không cài được shortcut AOTSCRIPT SETUP chạy nền"
     chmod 700 "$WIZARD_SHORTCUT"
   fi
+
+  echo "WIZARD_LEGACY_SHORTCUT=$legacy_status"
 
   if wizard_package_exists "$TERMUX_WIDGET_PACKAGE"; then
     if root_ok; then
@@ -1139,11 +1242,11 @@ install_wizard_shortcut() {
         --ei appWidgetId 0" \
         >/dev/null 2>&1 || true
     fi
-    echo "WIZARD_SHORTCUT=READY"
+    echo "WIZARD_SHORTCUT=READY_BACKGROUND"
   else
-    echo "WIZARD_SHORTCUT=READY_WIDGET_MISSING"
+    echo "WIZARD_SHORTCUT=READY_BACKGROUND_WIDGET_MISSING"
     warn "Cần cài Termux:Widget cùng nguồn ký với Termux"
-    warn "Sau đó thêm widget và chọn AOTSCRIPT_SETUP"
+    warn "Sau đó thêm widget và chọn tasks/AOTSCRIPT_SETUP"
   fi
 }
 
@@ -1204,6 +1307,7 @@ wizard_open_restore_step() {
     die "Không mở được Swift Backup"
 
   state_set "wizard_step=await_swift_restore"
+  wizard_notify swift_restore || true
 
   echo "WIZARD_STEP=SWIFT_RESTORE"
   echo "Khôi phục nhóm RESTORE_DATA và các app còn lại."
@@ -1223,6 +1327,7 @@ wizard() {
   case "$phase" in
     preflight|await_root)
       if ! root_ok; then
+        wizard_notify root || true
         echo "WIZARD_STEP=ROOT"
         echo "Bật root rồi chạm lại AOTSCRIPT_SETUP."
         return
@@ -1239,6 +1344,7 @@ wizard() {
       ;;
     manual_pre)
       if ! root_ok; then
+        wizard_notify root || true
         echo "WIZARD_STEP=ROOT"
         echo "Bật root rồi chạm lại AOTSCRIPT_SETUP."
         return
@@ -1250,6 +1356,7 @@ wizard() {
         wizard_open_google_login ||
           die "Không mở được màn hình thêm tài khoản Google"
 
+        wizard_notify google || true
         echo "WIZARD_STEP=GOOGLE_LOGIN"
         echo "Đăng nhập Google xong chạm lại AOTSCRIPT_SETUP."
         return
@@ -1262,6 +1369,7 @@ wizard() {
           die "Không mở được Swift Backup"
 
         state_set "wizard_step=await_swift_backup_before"
+        wizard_notify swift_before || true
 
         echo "WIZARD_STEP=SWIFT_BACKUP_BEFORE"
         echo "Backup Termux kèm data và dữ liệu cũ cần giữ."
@@ -1297,6 +1405,7 @@ wizard() {
           missing="$(wizard_restore_missing_packages)"
 
           if [ -n "$missing" ]; then
+            wizard_notify swift_incomplete || true
             echo "WIZARD_STEP=SWIFT_RESTORE_INCOMPLETE"
             printf '%s\n' "$missing" |
               sed 's/^/MISSING_APP=/'
@@ -1306,12 +1415,14 @@ wizard() {
           fi
 
           state_set "wizard_step=manual_post_remaining"
+          wizard_notify manual_post || true
           echo "WIZARD_STEP=MANUAL_POST_REMAINING"
           echo "REQUIRED_RESTORE_PACKAGES=OK"
           echo "App data vẫn cần xác nhận trực tiếp trong Swift Backup."
           show_manual_post
           ;;
         manual_post_remaining)
+          wizard_notify manual_post || true
           show_manual_post
           ;;
         *)
@@ -1323,6 +1434,8 @@ wizard() {
       resume
       ;;
     complete)
+      wizard_notify complete || true
+      echo "WIZARD_STEP=COMPLETE"
       status
       ;;
     *)
@@ -2836,16 +2949,30 @@ __MP_PHASE2_SELF_TEST_PY__
     die "self-test wizard function"
   declare -F install_wizard_shortcut >/dev/null ||
     die "self-test wizard shortcut installer"
+  declare -F wizard_notify >/dev/null ||
+    die "self-test wizard notification function"
   declare -F google_account_present >/dev/null ||
     die "self-test Google account detector"
+
+  case "$WIZARD_SHORTCUT" in
+    */.shortcuts/tasks/AOTSCRIPT_SETUP)
+      ;;
+    *)
+      die "self-test wizard background path"
+      ;;
+  esac
 
   wizard_shortcut_content > "$tmp/aotscript-setup-shortcut"
   bash -n "$tmp/aotscript-setup-shortcut"
 
-  grep -Fxq \
-    'exec /data/data/com.termux/files/usr/bin/mprovision wizard' \
+  grep -Fq \
+    '/data/data/com.termux/files/usr/bin/mprovision wizard' \
     "$tmp/aotscript-setup-shortcut" ||
     die "self-test wizard shortcut command"
+
+  grep -Fq 'wizard.log' \
+    "$tmp/aotscript-setup-shortcut" ||
+    die "self-test wizard shortcut log"
   declare -F audit >/dev/null ||
     die "self-test audit function"
   declare -F audit_display_values >/dev/null ||
