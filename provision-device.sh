@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase4-v1"
+VERSION="phase5-ui-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -43,6 +43,7 @@ Lần đầu:
   mprovision resume
   mprovision report
   mprovision publish-next
+  mprovision ui-post [com.tinh.vv.hi]
 
 Quy tắc checkpoint:
   - Xong THỦ CÔNG 1: dùng mprovision done pre
@@ -1106,12 +1107,13 @@ show_manual_post() {
 ========== THỦ CÔNG 2 ==========
 [ ] Swift Backup có data: Drive, Control, 1.1.1.1, ZArchiver và Taskbar.
 [ ] Swift Backup các ứng dụng còn lại không data theo quy trình vận hành.
-[ ] Mở Termux:Boot đúng một lần.
+[AUTO] done post tự mở Termux:Boot.
 [ ] Hoàn tất key Shouko trực tiếp trên máy; không gửi key vào chat.
-[ ] Quay ngang Control và kiểm tra hoạt động.
-[ ] Chỉnh khung tab.
+[AUTO] done post tự bật Control; chỉ kiểm tra màn hình ngang nếu cần.
+[AUTO] done post tự bật Taskbar, đóng tab Roblox cũ và mở Roblox gần nhất ở freeform.
+[*] Nếu có nhiều Roblox mà không xác định được tab gần nhất, script sẽ chỉ đúng file target cần tạo.
 [ ] Setup cookie, check cookie và login cookie.
-[ ] Bật 1.1.1.1.
+[AUTO] done post tự mở 1.1.1.1; hộp cấp quyền VPN lần đầu vẫn cần bấm tay.
 [ ] Chỉnh auto-exec.
 [ ] Chạy toolcheck; xác nhận đủ user và không trùng account.
 [ ] Chạy thử winterhub đúng một lần.
@@ -1725,8 +1727,298 @@ automatic() {
   pause_post
 }
 
+ui_package_exists() {
+  su -c "pm path '$1'" >/dev/null 2>&1
+}
+
+ui_service_running() {
+  su -c 'dumpsys activity services' 2>/dev/null |
+    grep -Fq "$1"
+}
+
+ui_launch_package() {
+  su -c "monkey -p '$1' -c android.intent.category.LAUNCHER 1" \
+    >/dev/null 2>&1
+}
+
+ui_try_start_service() {
+  local component="$1"
+
+  su -c "am start-foreground-service -n '$component'" \
+    >/dev/null 2>&1 ||
+  su -c "am startservice -n '$component'" \
+    >/dev/null 2>&1
+}
+
+ui_launcher_component() {
+  local package="$1"
+
+  su -c "cmd package resolve-activity --brief \
+    -a android.intent.action.MAIN \
+    -c android.intent.category.LAUNCHER \
+    '$package'" 2>/dev/null |
+    awk 'NF { line = $0 } END { print line }'
+}
+
+ui_installed_roblox_packages() {
+  su -c 'pm list packages' 2>/dev/null |
+    sed -n 's/^package://p' |
+    grep -E '^com\.tinh\.vv\.[A-Za-z0-9._-]+$' |
+    sort -u ||
+    true
+}
+
+ui_recent_roblox_package() {
+  {
+    su -c 'dumpsys activity recents' 2>/dev/null ||
+      true
+    su -c 'dumpsys activity activities' 2>/dev/null ||
+      true
+  } |
+    grep -Eo 'com\.tinh\.vv\.[A-Za-z0-9._-]+' |
+    head -n 1 ||
+    true
+}
+
+ui_valid_roblox_package() {
+  [[ "$1" =~ ^com\.tinh\.vv\.[A-Za-z0-9._-]+$ ]]
+}
+
+ui_choose_roblox_target() {
+  local requested="${1:-}"
+  local candidate recent target_file
+  local installed=()
+
+  for candidate in \
+    "$requested" \
+    "$(state_get ui_post_target_package)"; do
+    [ -n "$candidate" ] || continue
+
+    if ui_valid_roblox_package "$candidate" &&
+       ui_package_exists "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  target_file="$SHOUKO/taskbar_target_package.txt"
+
+  if [ -s "$target_file" ]; then
+    candidate="$(
+      tr -d '\r\n ' < "$target_file" |
+        tr '[:upper:]' '[:lower:]'
+    )"
+
+    if ui_valid_roblox_package "$candidate" &&
+       ui_package_exists "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+
+    echo "TASKBAR_TARGET_FILE=KHÔNG_HỢP_LỆ" >&2
+    echo "TASKBAR_TARGET_FILE_PATH=$target_file" >&2
+    return 1
+  fi
+
+  recent="$(ui_recent_roblox_package)"
+
+  if [ -n "$recent" ] &&
+     ui_valid_roblox_package "$recent" &&
+     ui_package_exists "$recent"; then
+    printf '%s\n' "$recent"
+    return 0
+  fi
+
+  mapfile -t installed < <(ui_installed_roblox_packages)
+
+  if [ "${#installed[@]}" = 1 ]; then
+    printf '%s\n' "${installed[0]}"
+    return 0
+  fi
+
+  echo "TASKBAR_TARGET=CHƯA_XÁC_ĐỊNH" >&2
+  echo "TASKBAR_TARGET_FILE_PATH=$target_file" >&2
+
+  if [ "${#installed[@]}" -gt 0 ]; then
+    printf 'TASKBAR_INSTALLED_PACKAGES=%s\n' \
+      "$(IFS=,; echo "${installed[*]}")" >&2
+  else
+    echo "TASKBAR_INSTALLED_PACKAGES=KHÔNG_CÓ" >&2
+  fi
+
+  return 1
+}
+
+ui_post_prepare() {
+  local requested="${1:-}"
+  local boot_package="com.termux.boot"
+  local control_package="ahapps.controlthescreenorientation"
+  local control_service="${control_package}/.Control_service"
+  local taskbar_package="com.farmerbb.taskbar"
+  local taskbar_service="${taskbar_package}/.service.TaskbarService"
+  local taskbar_start_service="${taskbar_package}/.service.StartMenuService"
+  local vpn_package="com.cloudflare.onedotonedotonedotone"
+  local vpn_service="${vpn_package}/com.cloudflare.app.vpnservice.CloudflareVpnService"
+  local target="" component="" package
+  local failures=0
+  local installed=()
+
+  echo "UI_POST_AUTOMATION=START"
+
+  if ! root_ok; then
+    echo "UI_ROOT=NEEDS_ATTENTION"
+    state_set "ui_post_status=NEEDS_ATTENTION"
+    return 1
+  fi
+
+  if [ "$(state_get ui_post_status)" = OK ] &&
+     [ -z "$requested" ]; then
+    echo "UI_POST_AUTOMATION=OK_REUSED"
+    return 0
+  fi
+
+  if ui_package_exists "$boot_package" &&
+     ui_launch_package "$boot_package"; then
+    echo "TERMUX_BOOT_OPEN=OK"
+  else
+    echo "TERMUX_BOOT_OPEN=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  if ui_package_exists "$control_package"; then
+    if ! ui_service_running "$control_service"; then
+      ui_try_start_service "$control_service" ||
+        ui_launch_package "$control_package" ||
+        true
+      sleep 2
+    fi
+
+    if ! ui_service_running "$control_service"; then
+      ui_launch_package "$control_package" || true
+      sleep 2
+    fi
+
+    if ui_service_running "$control_service"; then
+      echo "CONTROL_SERVICE=RUNNING"
+    else
+      echo "CONTROL_SERVICE=NEEDS_ATTENTION"
+      failures=$((failures + 1))
+    fi
+  else
+    echo "CONTROL_PACKAGE=MISSING"
+    failures=$((failures + 1))
+  fi
+
+  if ui_package_exists "$taskbar_package"; then
+    if ! ui_service_running "$taskbar_service"; then
+      ui_try_start_service "$taskbar_service" ||
+        ui_launch_package "$taskbar_package" ||
+        true
+      ui_try_start_service "$taskbar_start_service" ||
+        true
+      sleep 2
+    fi
+
+    if ui_service_running "$taskbar_service"; then
+      echo "TASKBAR_SERVICE=RUNNING"
+    else
+      echo "TASKBAR_SERVICE=NEEDS_ATTENTION"
+      failures=$((failures + 1))
+    fi
+  else
+    echo "TASKBAR_PACKAGE=MISSING"
+    failures=$((failures + 1))
+  fi
+
+  if target="$(ui_choose_roblox_target "$requested")"; then
+    echo "TASKBAR_TARGET=$target"
+    mapfile -t installed < <(ui_installed_roblox_packages)
+
+    for package in "${installed[@]}"; do
+      if su -c "am force-stop '$package'" >/dev/null 2>&1; then
+        echo "ROBLOX_CLOSED=$package"
+      else
+        echo "ROBLOX_CLOSE_FAILED=$package"
+        failures=$((failures + 1))
+      fi
+    done
+
+    component="$(ui_launcher_component "$target")"
+
+    case "$component" in
+      "$target"/*)
+        if su -c "am start --windowingMode 5 -n '$component'" \
+             >/dev/null 2>&1; then
+          sleep 4
+
+          if su -c "pidof '$target'" >/dev/null 2>&1 ||
+             su -c 'dumpsys activity activities' 2>/dev/null |
+               grep -E 'mResumedActivity|mFocusedApp|realActivity=' |
+               grep -Fq "$target"; then
+            echo "ROBLOX_FREEFORM=OK"
+          else
+            echo "ROBLOX_FREEFORM=NEEDS_ATTENTION"
+            failures=$((failures + 1))
+          fi
+        else
+          echo "ROBLOX_FREEFORM=START_FAILED"
+          failures=$((failures + 1))
+        fi
+        ;;
+      *)
+        echo "ROBLOX_LAUNCHER=KHÔNG_TÌM_THẤY"
+        failures=$((failures + 1))
+        ;;
+    esac
+  else
+    failures=$((failures + 1))
+  fi
+
+  if ui_package_exists "$vpn_package"; then
+    if ! ui_service_running "$vpn_service"; then
+      ui_launch_package "$vpn_package" || true
+      sleep 4
+    fi
+
+    if ui_service_running "$vpn_service"; then
+      echo "VPN_1_1_1_1=RUNNING"
+    else
+      echo "VPN_1_1_1_1=MANUAL_PERMISSION_OR_TOGGLE_REQUIRED"
+      failures=$((failures + 1))
+    fi
+  else
+    echo "VPN_1_1_1_1_PACKAGE=MISSING"
+    failures=$((failures + 1))
+  fi
+
+  if [ "$failures" -ne 0 ]; then
+    state_set \
+      "ui_post_status=NEEDS_ATTENTION" \
+      "ui_post_target_package=$target"
+    echo "UI_POST_AUTOMATION=NEEDS_ATTENTION"
+    echo "UI_POST_AUTOMATION_FAILURES=$failures"
+    return 1
+  fi
+
+  state_set \
+    "ui_post_status=OK" \
+    "ui_post_target_package=$target"
+
+  echo "UI_POST_AUTOMATION=OK"
+  echo "UI_POST_TARGET_PACKAGE=$target"
+}
+
 finalize() {
   local completed_at
+
+  if ! ui_post_prepare; then
+    state_set \
+      "phase=manual_post" \
+      "manual_post_confirmed_at="
+    warn "Tự động hóa giao diện chưa đạt; xử lý đúng mục NEEDS_ATTENTION rồi chạy lại mprovision done post"
+    show_manual_post
+    return
+  fi
 
   rclone_ok || {
     pause_rclone after
@@ -2007,6 +2299,10 @@ __MP_PHASE2_SELF_TEST_PY__
     die "self-test audit function"
   declare -F audit_display_values >/dev/null ||
     die "self-test audit display function"
+  declare -F ui_post_prepare >/dev/null ||
+    die "self-test UI post function"
+  declare -F ui_choose_roblox_target >/dev/null ||
+    die "self-test UI target function"
 
   value="$(
     audit_display_values \
@@ -2180,6 +2476,14 @@ main() {
         die "report không nhận tham số"
       install_wrapper
       show_report
+      ;;
+    ui-post)
+      [ "$#" -le 2 ] ||
+        die "Cách dùng: mprovision ui-post [com.tinh.vv.hi]"
+      install_wrapper
+      [ -s "$STATE" ] ||
+        die "Chưa khởi tạo mprovision"
+      ui_post_prepare "${2:-}"
       ;;
     publish-next)
       [ "$#" = 1 ] ||
