@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase5-ui-v1"
+VERSION="phase5-ui-v2"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -43,7 +43,7 @@ Lần đầu:
   mprovision resume
   mprovision report
   mprovision publish-next
-  mprovision ui-post [com.tinh.vv.hi]
+  mprovision ui-post
 
 Quy tắc checkpoint:
   - Xong THỦ CÔNG 1: dùng mprovision done pre
@@ -1110,10 +1110,9 @@ show_manual_post() {
 [AUTO] done post tự mở Termux:Boot.
 [ ] Hoàn tất key Shouko trực tiếp trên máy; không gửi key vào chat.
 [AUTO] done post tự bật Control; chỉ kiểm tra màn hình ngang nếu cần.
-[AUTO] done post tự bật Taskbar, đóng tab Roblox cũ và mở Roblox gần nhất ở freeform.
-[*] Nếu có nhiều Roblox mà không xác định được tab gần nhất, script sẽ chỉ đúng file target cần tạo.
+[AUTO] done post tự bật Taskbar, đóng rồi mở lại tất cả package Roblox com.tinh.vv.* ở freeform.
 [ ] Setup cookie, check cookie và login cookie.
-[AUTO] done post tự mở 1.1.1.1; hộp cấp quyền VPN lần đầu vẫn cần bấm tay.
+[AUTO] done post tự đóng hộp cập nhật nếu có, bật WARP và xác nhận VPN service.
 [ ] Chỉnh auto-exec.
 [ ] Chạy toolcheck; xác nhận đủ user và không trùng account.
 [ ] Chạy thử winterhub đúng một lần.
@@ -1737,7 +1736,8 @@ ui_service_running() {
 }
 
 ui_launch_package() {
-  su -c "monkey -p '$1' -c android.intent.category.LAUNCHER 1" \
+  su -c "monkey -p '$1' \
+    -c android.intent.category.LAUNCHER 1" \
     >/dev/null 2>&1
 }
 
@@ -1768,113 +1768,442 @@ ui_installed_roblox_packages() {
     true
 }
 
-ui_recent_roblox_package() {
-  {
-    su -c 'dumpsys activity recents' 2>/dev/null ||
-      true
-    su -c 'dumpsys activity activities' 2>/dev/null ||
-      true
-  } |
-    grep -Eo 'com\.tinh\.vv\.[A-Za-z0-9._-]+' |
-    head -n 1 ||
-    true
-}
+ui_dump_xml() {
+  local label="$1"
+  local safe path
 
-ui_valid_roblox_package() {
-  [[ "$1" =~ ^com\.tinh\.vv\.[A-Za-z0-9._-]+$ ]]
-}
+  safe="$(
+    printf '%s' "$label" |
+      tr -c 'A-Za-z0-9._-' '_'
+  )"
+  path="$DL/.aotscript-ui-${safe}-$$.xml"
 
-ui_choose_roblox_target() {
-  local requested="${1:-}"
-  local candidate recent target_file
-  local installed=()
+  rm -f "$path"
 
-  for candidate in \
-    "$requested" \
-    "$(state_get ui_post_target_package)"; do
-    [ -n "$candidate" ] || continue
-
-    if ui_valid_roblox_package "$candidate" &&
-       ui_package_exists "$candidate"; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-
-  target_file="$SHOUKO/taskbar_target_package.txt"
-
-  if [ -s "$target_file" ]; then
-    candidate="$(
-      tr -d '\r\n ' < "$target_file" |
-        tr '[:upper:]' '[:lower:]'
-    )"
-
-    if ui_valid_roblox_package "$candidate" &&
-       ui_package_exists "$candidate"; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-
-    echo "TASKBAR_TARGET_FILE=KHÔNG_HỢP_LỆ" >&2
-    echo "TASKBAR_TARGET_FILE_PATH=$target_file" >&2
+  su -c "/system/bin/uiautomator dump \
+    --compressed '$path'" \
+    >/dev/null 2>&1 ||
     return 1
-  fi
 
-  recent="$(ui_recent_roblox_package)"
+  [ -s "$path" ] || return 1
+  printf '%s\n' "$path"
+}
 
-  if [ -n "$recent" ] &&
-     ui_valid_roblox_package "$recent" &&
-     ui_package_exists "$recent"; then
-    printf '%s\n' "$recent"
-    return 0
-  fi
+ui_node_center() {
+  local xml="$1"
+  local mode="$2"
+  local package="${3:-}"
 
-  mapfile -t installed < <(ui_installed_roblox_packages)
+  python - "$xml" "$mode" "$package" <<'__MP_UI_NODE_CENTER_PY__'
+import re
+import sys
+import xml.etree.ElementTree as ET
 
-  if [ "${#installed[@]}" = 1 ]; then
-    printf '%s\n' "${installed[0]}"
-    return 0
-  fi
+xml_name, mode, package = sys.argv[1:4]
+tree = ET.parse(xml_name)
+root = tree.getroot()
+bounds_re = re.compile(
+    r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$"
+)
 
-  echo "TASKBAR_TARGET=CHƯA_XÁC_ĐỊNH" >&2
-  echo "TASKBAR_TARGET_FILE_PATH=$target_file" >&2
 
-  if [ "${#installed[@]}" -gt 0 ]; then
-    printf 'TASKBAR_INSTALLED_PACKAGES=%s\n' \
-      "$(IFS=,; echo "${installed[*]}")" >&2
-  else
-    echo "TASKBAR_INSTALLED_PACKAGES=KHÔNG_CÓ" >&2
-  fi
+def parse_bounds(node):
+    match = bounds_re.match(
+        node.attrib.get("bounds", "")
+    )
+    if not match:
+        return None
+
+    left, top, right, bottom = map(
+        int,
+        match.groups(),
+    )
+
+    if right <= left or bottom <= top:
+        return None
+
+    return left, top, right, bottom
+
+
+def center(box):
+    left, top, right, bottom = box
+    return (
+        (left + right) // 2,
+        (top + bottom) // 2,
+    )
+
+
+candidates = []
+
+for node in root.iter("node"):
+    box = parse_bounds(node)
+    if box is None:
+        continue
+
+    node_package = node.attrib.get("package", "")
+    node_class = node.attrib.get("class", "")
+    resource = node.attrib.get("resource-id", "")
+    text = node.attrib.get("text", "")
+    desc = node.attrib.get("content-desc", "")
+    clickable = (
+        node.attrib.get("clickable", "") == "true"
+    )
+    checked = node.attrib.get("checked", "")
+    words = " ".join(
+        (text, desc, resource)
+    ).strip().casefold()
+
+    if mode == "switch":
+        is_switch = (
+            "switch" in node_class.casefold()
+            or "switch" in resource.casefold()
+            or "toggle" in resource.casefold()
+            or checked in {"true", "false"}
+        )
+
+        if not is_switch or checked == "true":
+            continue
+
+        score = 0
+
+        if node_package == package:
+            score += 120
+        if "switch" in node_class.casefold():
+            score += 80
+        if (
+            "switch" in resource.casefold()
+            or "toggle" in resource.casefold()
+        ):
+            score += 60
+        if checked == "false":
+            score += 40
+        if clickable:
+            score += 20
+
+        if package == "com.farmerbb.taskbar":
+            score += max(0, 80 - box[1] // 8)
+
+        candidates.append((score, box))
+
+    elif mode == "permission":
+        allowed = (
+            "allow",
+            "ok",
+            "turn on",
+            "cho phép",
+            "đồng ý",
+            "bật",
+        )
+
+        if not any(word in words for word in allowed):
+            continue
+
+        score = 0
+
+        if clickable:
+            score += 100
+        if node_class.endswith("Button"):
+            score += 60
+
+        candidates.append((score, box))
+
+    elif mode == "close":
+        close_words = (
+            "close",
+            "dismiss",
+            "cancel",
+            "đóng",
+        )
+
+        if not any(word in words for word in close_words):
+            continue
+
+        score = 0
+
+        if clickable:
+            score += 100
+        if "imagebutton" in node_class.casefold():
+            score += 60
+
+        # Ưu tiên nút nằm phía trên và bên phải.
+        score += min(box[0] // 10, 80)
+        score += max(0, 80 - box[1] // 10)
+
+        candidates.append((score, box))
+
+if not candidates:
+    raise SystemExit(1)
+
+candidates.sort(
+    key=lambda item: item[0],
+    reverse=True,
+)
+
+x, y = center(candidates[0][1])
+print(f"{x} {y}")
+__MP_UI_NODE_CENTER_PY__
+}
+
+ui_click_node() {
+  local mode="$1"
+  local package="$2"
+  local label="$3"
+  local xml point x y
+
+  xml="$(ui_dump_xml "$label")" || {
+    echo "${label}_UI_DUMP=FAILED"
+    return 1
+  }
+
+  point="$(
+    ui_node_center "$xml" "$mode" "$package"
+  )" || {
+    rm -f "$xml"
+    echo "${label}_NODE=NOT_FOUND"
+    return 1
+  }
+
+  rm -f "$xml"
+  read -r x y <<<"$point"
+
+  [[ "$x" =~ ^[0-9]+$ ]] &&
+  [[ "$y" =~ ^[0-9]+$ ]] || {
+    echo "${label}_BOUNDS=INVALID"
+    return 1
+  }
+
+  su -c "input tap '$x' '$y'" \
+    >/dev/null 2>&1 || {
+    echo "${label}_CLICK=FAILED"
+    return 1
+  }
+
+  echo "${label}_CLICK=DYNAMIC"
+}
+
+ui_click_unchecked_switch() {
+  ui_click_node switch "$1" "$2"
+}
+
+ui_click_permission_dialog() {
+  local attempt
+
+  for attempt in 1 2 3; do
+    if ui_click_node \
+      permission \
+      "" \
+      "VPN_PERMISSION_$attempt"; then
+      return 0
+    fi
+
+    sleep 1
+  done
 
   return 1
 }
 
+ui_dismiss_warp_overlay() {
+  if ui_click_node close "" WARP_UPDATE_CLOSE; then
+    echo "WARP_UPDATE_DIALOG=CLOSED_DYNAMIC"
+    sleep 2
+    return 0
+  fi
+
+  if su -c 'input keyevent 4' \
+       >/dev/null 2>&1; then
+    echo "WARP_UPDATE_DIALOG=BACK_SENT"
+    sleep 2
+    return 0
+  fi
+
+  echo "WARP_UPDATE_DIALOG=NEEDS_ATTENTION"
+  return 1
+}
+
+ui_start_taskbar() {
+  local package="com.farmerbb.taskbar"
+  local service="${package}/.service.TaskbarService"
+  local start_service="${package}/.service.StartMenuService"
+
+  if ! ui_package_exists "$package"; then
+    echo "TASKBAR_PACKAGE=MISSING"
+    return 1
+  fi
+
+  if ui_service_running "$service"; then
+    echo "TASKBAR_SERVICE=RUNNING_BEFORE"
+    return 0
+  fi
+
+  ui_try_start_service "$service" || true
+  ui_try_start_service "$start_service" || true
+  sleep 2
+
+  if ui_service_running "$service"; then
+    echo "TASKBAR_SERVICE=RUNNING_AFTER_SERVICE_START"
+    return 0
+  fi
+
+  ui_launch_package "$package" || true
+  sleep 2
+  ui_click_unchecked_switch "$package" TASKBAR_SWITCH ||
+    true
+  sleep 2
+
+  if ui_service_running "$service"; then
+    echo "TASKBAR_SERVICE=RUNNING_AFTER_DYNAMIC_SWITCH"
+    return 0
+  fi
+
+  echo "TASKBAR_SERVICE=NEEDS_ATTENTION"
+  return 1
+}
+
+ui_open_all_roblox() {
+  local package component recent
+  local opened_count=0 task_count=0
+  local installed=()
+
+  mapfile -t installed < <(
+    ui_installed_roblox_packages
+  )
+
+  echo "ROBLOX_INSTALLED_COUNT=${#installed[@]}"
+
+  if [ "${#installed[@]}" = 0 ]; then
+    echo "ROBLOX_OPEN_ALL=NO_PACKAGES"
+    return 1
+  fi
+
+  for package in "${installed[@]}"; do
+    if su -c "am force-stop '$package'" \
+         >/dev/null 2>&1; then
+      echo "ROBLOX_CLOSED=$package"
+    else
+      echo "ROBLOX_CLOSE_FAILED=$package"
+      return 1
+    fi
+  done
+
+  sleep 1
+
+  for package in "${installed[@]}"; do
+    component="$(ui_launcher_component "$package")"
+
+    case "$component" in
+      "$package"/*)
+        if su -c "am start \
+             --windowingMode 5 \
+             -n '$component'" \
+             >/dev/null 2>&1; then
+          echo "ROBLOX_FREEFORM_STARTED=$package"
+          opened_count=$((opened_count + 1))
+          sleep 1
+        else
+          echo "ROBLOX_FREEFORM_START_FAILED=$package"
+        fi
+        ;;
+      *)
+        echo "ROBLOX_LAUNCHER_NOT_FOUND=$package"
+        ;;
+    esac
+  done
+
+  sleep 4
+
+  recent="$(
+    su -c 'dumpsys activity recents' 2>/dev/null |
+      grep -Eo \
+        'com\.tinh\.vv\.[A-Za-z0-9._-]+' |
+      sort -u ||
+      true
+  )"
+
+  for package in "${installed[@]}"; do
+    if printf '%s\n' "$recent" |
+       grep -Fxq "$package"; then
+      echo "ROBLOX_TASK_PRESENT=$package"
+      task_count=$((task_count + 1))
+    else
+      echo "ROBLOX_TASK_MISSING=$package"
+    fi
+  done
+
+  echo "ROBLOX_OPENED_COUNT=$opened_count"
+  echo "ROBLOX_TASK_COUNT=$task_count"
+  echo "ROBLOX_EXPECTED_COUNT=${#installed[@]}"
+
+  if [ "$opened_count" = "${#installed[@]}" ] &&
+     [ "$task_count" = "${#installed[@]}" ]; then
+    echo "ROBLOX_OPEN_ALL=OK"
+    return 0
+  fi
+
+  echo "ROBLOX_OPEN_ALL=NEEDS_ATTENTION"
+  return 1
+}
+
+ui_start_vpn() {
+  local package="com.cloudflare.onedotonedotonedotone"
+  local service="${package}/com.cloudflare.app.vpnservice.CloudflareVpnService"
+
+  if ! ui_package_exists "$package"; then
+    echo "VPN_1_1_1_1_PACKAGE=MISSING"
+    return 1
+  fi
+
+  if ui_service_running "$service"; then
+    echo "VPN_1_1_1_1=RUNNING_BEFORE"
+    return 0
+  fi
+
+  ui_launch_package "$package" || true
+  sleep 4
+
+  if ui_service_running "$service"; then
+    echo "VPN_1_1_1_1=RUNNING_AFTER_OPEN"
+    return 0
+  fi
+
+  if ! ui_click_unchecked_switch \
+       "$package" \
+       WARP_SWITCH_FIRST; then
+    ui_dismiss_warp_overlay || true
+    ui_launch_package "$package" || true
+    sleep 3
+
+    ui_click_unchecked_switch \
+      "$package" \
+      WARP_SWITCH_RETRY ||
+      true
+  fi
+
+  sleep 2
+  ui_click_permission_dialog || true
+  sleep 5
+
+  if ui_service_running "$service"; then
+    echo "VPN_1_1_1_1=RUNNING_AFTER_DYNAMIC_SWITCH"
+    return 0
+  fi
+
+  echo "VPN_1_1_1_1=NEEDS_ATTENTION"
+  return 1
+}
+
 ui_post_prepare() {
-  local requested="${1:-}"
   local boot_package="com.termux.boot"
   local control_package="ahapps.controlthescreenorientation"
   local control_service="${control_package}/.Control_service"
-  local taskbar_package="com.farmerbb.taskbar"
-  local taskbar_service="${taskbar_package}/.service.TaskbarService"
-  local taskbar_start_service="${taskbar_package}/.service.StartMenuService"
-  local vpn_package="com.cloudflare.onedotonedotonedotone"
-  local vpn_service="${vpn_package}/com.cloudflare.app.vpnservice.CloudflareVpnService"
-  local target="" component="" package
   local failures=0
-  local installed=()
 
   echo "UI_POST_AUTOMATION=START"
+  echo "UI_POST_AUTOMATION_VERSION=2"
 
   if ! root_ok; then
     echo "UI_ROOT=NEEDS_ATTENTION"
     state_set "ui_post_status=NEEDS_ATTENTION"
     return 1
-  fi
-
-  if [ "$(state_get ui_post_status)" = OK ] &&
-     [ -z "$requested" ]; then
-    echo "UI_POST_AUTOMATION=OK_REUSED"
-    return 0
   fi
 
   if ui_package_exists "$boot_package" &&
@@ -1893,11 +2222,6 @@ ui_post_prepare() {
       sleep 2
     fi
 
-    if ! ui_service_running "$control_service"; then
-      ui_launch_package "$control_package" || true
-      sleep 2
-    fi
-
     if ui_service_running "$control_service"; then
       echo "CONTROL_SERVICE=RUNNING"
     else
@@ -1909,103 +2233,24 @@ ui_post_prepare() {
     failures=$((failures + 1))
   fi
 
-  if ui_package_exists "$taskbar_package"; then
-    if ! ui_service_running "$taskbar_service"; then
-      ui_try_start_service "$taskbar_service" ||
-        ui_launch_package "$taskbar_package" ||
-        true
-      ui_try_start_service "$taskbar_start_service" ||
-        true
-      sleep 2
-    fi
-
-    if ui_service_running "$taskbar_service"; then
-      echo "TASKBAR_SERVICE=RUNNING"
-    else
-      echo "TASKBAR_SERVICE=NEEDS_ATTENTION"
-      failures=$((failures + 1))
-    fi
-  else
-    echo "TASKBAR_PACKAGE=MISSING"
+  ui_start_taskbar ||
     failures=$((failures + 1))
-  fi
 
-  if target="$(ui_choose_roblox_target "$requested")"; then
-    echo "TASKBAR_TARGET=$target"
-    mapfile -t installed < <(ui_installed_roblox_packages)
-
-    for package in "${installed[@]}"; do
-      if su -c "am force-stop '$package'" >/dev/null 2>&1; then
-        echo "ROBLOX_CLOSED=$package"
-      else
-        echo "ROBLOX_CLOSE_FAILED=$package"
-        failures=$((failures + 1))
-      fi
-    done
-
-    component="$(ui_launcher_component "$target")"
-
-    case "$component" in
-      "$target"/*)
-        if su -c "am start --windowingMode 5 -n '$component'" \
-             >/dev/null 2>&1; then
-          sleep 4
-
-          if su -c "pidof '$target'" >/dev/null 2>&1 ||
-             su -c 'dumpsys activity activities' 2>/dev/null |
-               grep -E 'mResumedActivity|mFocusedApp|realActivity=' |
-               grep -Fq "$target"; then
-            echo "ROBLOX_FREEFORM=OK"
-          else
-            echo "ROBLOX_FREEFORM=NEEDS_ATTENTION"
-            failures=$((failures + 1))
-          fi
-        else
-          echo "ROBLOX_FREEFORM=START_FAILED"
-          failures=$((failures + 1))
-        fi
-        ;;
-      *)
-        echo "ROBLOX_LAUNCHER=KHÔNG_TÌM_THẤY"
-        failures=$((failures + 1))
-        ;;
-    esac
-  else
+  ui_open_all_roblox ||
     failures=$((failures + 1))
-  fi
 
-  if ui_package_exists "$vpn_package"; then
-    if ! ui_service_running "$vpn_service"; then
-      ui_launch_package "$vpn_package" || true
-      sleep 4
-    fi
-
-    if ui_service_running "$vpn_service"; then
-      echo "VPN_1_1_1_1=RUNNING"
-    else
-      echo "VPN_1_1_1_1=MANUAL_PERMISSION_OR_TOGGLE_REQUIRED"
-      failures=$((failures + 1))
-    fi
-  else
-    echo "VPN_1_1_1_1_PACKAGE=MISSING"
+  ui_start_vpn ||
     failures=$((failures + 1))
-  fi
 
   if [ "$failures" -ne 0 ]; then
-    state_set \
-      "ui_post_status=NEEDS_ATTENTION" \
-      "ui_post_target_package=$target"
+    state_set "ui_post_status=NEEDS_ATTENTION"
     echo "UI_POST_AUTOMATION=NEEDS_ATTENTION"
     echo "UI_POST_AUTOMATION_FAILURES=$failures"
     return 1
   fi
 
-  state_set \
-    "ui_post_status=OK" \
-    "ui_post_target_package=$target"
-
+  state_set "ui_post_status=OK"
   echo "UI_POST_AUTOMATION=OK"
-  echo "UI_POST_TARGET_PACKAGE=$target"
 }
 
 finalize() {
@@ -2301,8 +2546,46 @@ __MP_PHASE2_SELF_TEST_PY__
     die "self-test audit display function"
   declare -F ui_post_prepare >/dev/null ||
     die "self-test UI post function"
-  declare -F ui_choose_roblox_target >/dev/null ||
-    die "self-test UI target function"
+  declare -F ui_start_taskbar >/dev/null ||
+    die "self-test Taskbar UI function"
+  declare -F ui_open_all_roblox >/dev/null ||
+    die "self-test all Roblox function"
+  declare -F ui_start_vpn >/dev/null ||
+    die "self-test VPN UI function"
+  declare -F ui_node_center >/dev/null ||
+    die "self-test UI parser function"
+
+  cat > "$tmp/ui-switch.xml" <<'__MP_UI_SELF_TEST_SWITCH_XML__'
+<hierarchy>
+  <node package="com.farmerbb.taskbar" class="android.widget.Switch" clickable="true" checked="false" bounds="[100,100][200,150]" />
+</hierarchy>
+__MP_UI_SELF_TEST_SWITCH_XML__
+
+  value="$(
+    ui_node_center \
+      "$tmp/ui-switch.xml" \
+      switch \
+      com.farmerbb.taskbar
+  )" || die "self-test UI switch parser"
+
+  [ "$value" = "150 125" ] ||
+    die "self-test UI switch center"
+
+  cat > "$tmp/ui-permission.xml" <<'__MP_UI_SELF_TEST_PERMISSION_XML__'
+<hierarchy>
+  <node text="Cho phép" class="android.widget.Button" clickable="true" bounds="[300,400][500,500]" />
+</hierarchy>
+__MP_UI_SELF_TEST_PERMISSION_XML__
+
+  value="$(
+    ui_node_center \
+      "$tmp/ui-permission.xml" \
+      permission \
+      ""
+  )" || die "self-test UI permission parser"
+
+  [ "$value" = "400 450" ] ||
+    die "self-test UI permission center"
 
   value="$(
     audit_display_values \
@@ -2478,12 +2761,12 @@ main() {
       show_report
       ;;
     ui-post)
-      [ "$#" -le 2 ] ||
-        die "Cách dùng: mprovision ui-post [com.tinh.vv.hi]"
+      [ "$#" = 1 ] ||
+        die "Cách dùng: mprovision ui-post"
       install_wrapper
       [ -s "$STATE" ] ||
         die "Chưa khởi tạo mprovision"
-      ui_post_prepare "${2:-}"
+      ui_post_prepare
       ;;
     publish-next)
       [ "$#" = 1 ] ||
