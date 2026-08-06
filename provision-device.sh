@@ -1,9 +1,9 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase1-v1"
+VERSION="phase1-v2"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
-SWIFT_URL="https://drive.usercontent.google.com/download?id=1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI&export=download&authuser=0"
+SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
 DL="${MPROVISION_DL:-$SD/Download}"
 SHOUKO="$DL/Shouko"
@@ -158,29 +158,65 @@ apk_ok() {
     unzip -Z1 "$1" 2>/dev/null | tr -d '\r' | grep -Fxq AndroidManifest.xml
 }
 
+ensure_gdown() {
+  if command -v gdown >/dev/null 2>&1; then
+    ok "gdown đã có"
+    return 0
+  fi
+
+  echo "[*] Đang cài gdown..."
+
+  python -m pip install --upgrade gdown ||
+    die "Cài gdown thất bại"
+
+  hash -r
+
+  command -v gdown >/dev/null 2>&1 ||
+    die "Đã cài nhưng không tìm thấy gdown"
+
+  ok "Cài gdown thành công"
+}
+
 install_swift() {
   local part installed=0
+
   part="$SWIFT_APK.part.$$"
   mkdir -p "$DL"
+
   if ! apk_ok "$SWIFT_APK"; then
     rm -f "$part"
-    curl -fL --retry 3 --connect-timeout 15 "$SWIFT_URL" -o "$part" || {
+
+    ensure_gdown
+
+    echo "[*] Đang tải Swift Backup..."
+
+    gdown "$SWIFT_FILE_ID" -O "$part" || {
       rm -f "$part"
-      die "Tải Swift Backup thất bại"
+      die "Tải Swift Backup bằng gdown thất bại"
     }
+
     apk_ok "$part" || {
       rm -f "$part"
       die "Swift Backup tải về không phải APK hợp lệ"
     }
+
     mv -f "$part" "$SWIFT_APK"
     chmod 600 "$SWIFT_APK" 2>/dev/null || true
+
+    ok "Đã tải Swift Backup APK hợp lệ"
+  else
+    ok "Swift Backup APK đã có và hợp lệ"
   fi
-  if su -c "pm install -r '$SWIFT_APK'" >/dev/null 2>&1; then
+
+  if su -c "pm install -r '$SWIFT_APK'" \
+       >/dev/null 2>&1; then
     installed=1
     ok "Đã cài hoặc cập nhật Swift Backup"
   else
+    warn "Không tự cài được Swift Backup"
     warn "Hãy cài thủ công APK tại $SWIFT_APK"
   fi
+
   state_set "swift_install=$installed"
 }
 
