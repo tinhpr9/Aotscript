@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase1-v2"
+VERSION="phase1-v3"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -458,7 +458,13 @@ automatic() {
   fi
   rclone_ok || { pause_rclone before; return; }
   state_set phase=automatic
-  backup_data before 0
+
+  if [ -n "$(state_get backup_before)" ]; then
+    ok "Backup before đã hoàn tất; không tạo lại"
+  else
+    backup_data before 0
+  fi
+
   run_msetup
   install_winterhub
   pause_post

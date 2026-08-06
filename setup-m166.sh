@@ -1105,6 +1105,44 @@ else
   ok "Đã cài 01-agent.sh an toàn"
 fi
 
+list_agent_pids() {
+  python - <<'__AOTSCRIPT_AGENT_PID_SCAN_V2_PY__'
+import os
+import pathlib
+
+pids = []
+
+for entry in os.listdir("/proc"):
+    if not entry.isdigit():
+        continue
+
+    try:
+        arguments = [
+            part.decode(
+                "utf-8",
+                errors="replace",
+            )
+            for part in pathlib.Path(
+                f"/proc/{entry}/cmdline"
+            ).read_bytes().split(b"\0")
+            if part
+        ]
+    except Exception:
+        continue
+
+    if any(
+        argument.endswith(
+            "/Download/Agent_Core.py"
+        )
+        for argument in arguments
+    ):
+        pids.append(int(entry))
+
+for pid in sorted(set(pids)):
+    print(pid)
+__AOTSCRIPT_AGENT_PID_SCAN_V2_PY__
+}
+
 AGENT_TARGET="$DL/Agent_Core.py"
 AGENT_STAGE="${AGENT_TARGET}.msetup.tmp"
 AGENT_LOG="$DL/Agent_Log.txt"
@@ -1142,9 +1180,7 @@ else
   fi
 fi
 
-mapfile -t OLD_AGENT_PIDS < <(
-  pgrep -f '[/]sdcard/Download/Agent_Core.py' 2>/dev/null || true
-)
+mapfile -t OLD_AGENT_PIDS < <(list_agent_pids)
 
 if [ "${#OLD_AGENT_PIDS[@]}" -gt 0 ]; then
   echo "[*] Đang dừng Agent cũ an toàn..."
@@ -1153,14 +1189,10 @@ if [ "${#OLD_AGENT_PIDS[@]}" -gt 0 ]; then
   done
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 1
-    mapfile -t REMAINING_PIDS < <(
-      pgrep -f '[/]sdcard/Download/Agent_Core.py' 2>/dev/null || true
-    )
+    mapfile -t REMAINING_PIDS < <(list_agent_pids)
     [ "${#REMAINING_PIDS[@]}" -eq 0 ] && break
   done
-  mapfile -t REMAINING_PIDS < <(
-    pgrep -f '[/]sdcard/Download/Agent_Core.py' 2>/dev/null || true
-  )
+  mapfile -t REMAINING_PIDS < <(list_agent_pids)
   [ "${#REMAINING_PIDS[@]}" -eq 0 ] ||
     die "Agent cũ chưa dừng; không khởi động thêm tiến trình"
 fi
@@ -1185,9 +1217,7 @@ if ! kill -0 "$NEW_AGENT_PID" 2>/dev/null; then
   die "Agent mới thoát ngay sau khi khởi động"
 fi
 
-mapfile -t NEW_AGENT_PIDS < <(
-  pgrep -f '[/]sdcard/Download/Agent_Core.py' 2>/dev/null || true
-)
+mapfile -t NEW_AGENT_PIDS < <(list_agent_pids)
 
 [ "${#NEW_AGENT_PIDS[@]}" -eq 1 ] ||
   die "Số tiến trình Agent không hợp lệ: ${#NEW_AGENT_PIDS[@]}"

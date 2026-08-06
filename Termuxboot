@@ -14,6 +14,44 @@ LOCK_DIR="$HOME/.cache/aotscript-agent-start.lock"
 
 mkdir -p "/sdcard/Download/Shouko" "$HOME/.cache"
 
+list_agent_pids() {
+  "$PYTHON" - <<'__AOTSCRIPT_AGENT_PID_SCAN_V2_PY__'
+import os
+import pathlib
+
+pids = []
+
+for entry in os.listdir("/proc"):
+    if not entry.isdigit():
+        continue
+
+    try:
+        arguments = [
+            part.decode(
+                "utf-8",
+                errors="replace",
+            )
+            for part in pathlib.Path(
+                f"/proc/{entry}/cmdline"
+            ).read_bytes().split(b"\0")
+            if part
+        ]
+    except Exception:
+        continue
+
+    if any(
+        argument.endswith(
+            "/Download/Agent_Core.py"
+        )
+        for argument in arguments
+    ):
+        pids.append(int(entry))
+
+for pid in sorted(set(pids)):
+    print(pid)
+__AOTSCRIPT_AGENT_PID_SCAN_V2_PY__
+}
+
 {
   echo
   echo "===== AGENT BOOT $(date '+%Y-%m-%d %H:%M:%S') ====="
@@ -43,9 +81,11 @@ mkdir -p "/sdcard/Download/Shouko" "$HOME/.cache"
   }
   trap cleanup_lock EXIT INT TERM
 
-  if pgrep -af '[/]sdcard/Download/Agent_Core.py' >/dev/null 2>&1; then
+  mapfile -t RUNNING_AGENT_PIDS < <(list_agent_pids)
+
+  if [ "${#RUNNING_AGENT_PIDS[@]}" -gt 0 ]; then
     echo "[SKIP] Agent đang chạy, không khởi động thêm:"
-    pgrep -af '[/]sdcard/Download/Agent_Core.py'
+    printf '[PID] %s\n' "${RUNNING_AGENT_PIDS[@]}"
     exit 0
   fi
 
