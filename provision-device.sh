@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase5-ui-v4"
+VERSION="phase6-wizard-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -18,6 +18,10 @@ AGENT="$DL/Agent_Core.py"
 WRAPPER="$HOME/bin/mprovision"
 REPORT_JSON="$SHOUKO/provision_report.json"
 REPORT_TEXT="$SHOUKO/provision_report.txt"
+WIZARD_SHORTCUT_DIR="${MPROVISION_SHORTCUT_DIR:-$HOME/.shortcuts}"
+WIZARD_SHORTCUT="$WIZARD_SHORTCUT_DIR/AOTSCRIPT_SETUP"
+TERMUX_WIDGET_PACKAGE="com.termux.widget"
+SWIFT_PACKAGE="org.swiftapps.swiftbackup"
 SOURCE_SHOUKO_ID="1vDjK3hNCyT0B_rbAcsPlelD-TJJKzwG1"
 SOURCE_DELTA_ID="1BkHn3hyDfobTcy5tqhT9LePe01OzEHQ-"
 SOURCE_SHOUKO_REMOTE="gdrive:/Shouko.zip"
@@ -44,6 +48,7 @@ Lần đầu:
   mprovision report
   mprovision publish-next
   mprovision ui-post
+  mprovision wizard
 
 Quy tắc checkpoint:
   - Xong THỦ CÔNG 1: dùng mprovision done pre
@@ -1080,6 +1085,252 @@ backup_remote_for() {
     "$leaf"
 }
 
+wizard_shortcut_content() {
+  cat <<'__MP_WIZARD_SHORTCUT__'
+#!/data/data/com.termux/files/usr/bin/bash
+exec /data/data/com.termux/files/usr/bin/mprovision wizard
+__MP_WIZARD_SHORTCUT__
+}
+
+wizard_package_exists() {
+  local package="$1"
+
+  if root_ok; then
+    su -c "pm path '$package'" >/dev/null 2>&1
+  else
+    /system/bin/pm path "$package" >/dev/null 2>&1
+  fi
+}
+
+install_wizard_shortcut() {
+  local tmp stamp
+
+  mkdir -p "$WIZARD_SHORTCUT_DIR"
+  chmod 700 "$WIZARD_SHORTCUT_DIR"
+
+  tmp="$WIZARD_SHORTCUT.tmp.$$"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+
+  wizard_shortcut_content > "$tmp"
+  bash -n "$tmp" || {
+    rm -f "$tmp"
+    die "Shortcut AOTSCRIPT SETUP tạm sai cú pháp"
+  }
+  chmod 700 "$tmp"
+
+  if [ -f "$WIZARD_SHORTCUT" ] &&
+     cmp -s "$tmp" "$WIZARD_SHORTCUT"; then
+    rm -f "$tmp"
+  else
+    [ ! -f "$WIZARD_SHORTCUT" ] ||
+      cp -p \
+        "$WIZARD_SHORTCUT" \
+        "$WIZARD_SHORTCUT.bak-$stamp"
+    mv -f "$tmp" "$WIZARD_SHORTCUT" ||
+      die "Không cài được shortcut AOTSCRIPT SETUP"
+    chmod 700 "$WIZARD_SHORTCUT"
+  fi
+
+  if wizard_package_exists "$TERMUX_WIDGET_PACKAGE"; then
+    if root_ok; then
+      su -c "am broadcast \
+        -n com.termux.widget/.TermuxWidgetProvider \
+        -a com.termux.widget.ACTION_REFRESH_WIDGET \
+        --ei appWidgetId 0" \
+        >/dev/null 2>&1 || true
+    fi
+    echo "WIZARD_SHORTCUT=READY"
+  else
+    echo "WIZARD_SHORTCUT=READY_WIDGET_MISSING"
+    warn "Cần cài Termux:Widget cùng nguồn ký với Termux"
+    warn "Sau đó thêm widget và chọn AOTSCRIPT_SETUP"
+  fi
+}
+
+google_account_present() {
+  root_ok || return 1
+
+  su -c 'dumpsys account' 2>/dev/null |
+    python -c '
+import re
+import sys
+
+text = sys.stdin.read()
+pattern = r"type=com[.]google(?:[},\s]|$)"
+raise SystemExit(0 if re.search(pattern, text) else 1)
+'
+}
+
+wizard_open_google_login() {
+  root_ok || return 1
+
+  su -c "am start \
+    -a android.settings.ADD_ACCOUNT_SETTINGS \
+    --esa account_types com.google" \
+    >/dev/null 2>&1
+}
+
+wizard_open_swift() {
+  wizard_package_exists "$SWIFT_PACKAGE" || {
+    echo "SWIFT_BACKUP_PACKAGE=MISSING"
+    return 1
+  }
+
+  ui_launch_package "$SWIFT_PACKAGE"
+}
+
+wizard_restore_missing_packages() {
+  local item label package
+  local required=(
+    "1.1.1.1|com.cloudflare.onedotonedotonedotone"
+    "Control Screen Orientation|ahapps.controlthescreenorientation"
+    "Drive|com.google.android.apps.docs"
+    "Taskbar|com.farmerbb.taskbar"
+    "ZArchiver|ru.zdevs.zarchiver"
+  )
+
+  for item in "${required[@]}"; do
+    label="${item%%|*}"
+    package="${item#*|}"
+
+    if ! ui_package_exists "$package"; then
+      printf '%s\n' "$label"
+    fi
+  done
+}
+
+wizard_open_restore_step() {
+  wizard_open_swift ||
+    die "Không mở được Swift Backup"
+
+  state_set "wizard_step=await_swift_restore"
+
+  echo "WIZARD_STEP=SWIFT_RESTORE"
+  echo "Khôi phục nhóm RESTORE_DATA và các app còn lại."
+  echo "Xong chạm lại AOTSCRIPT_SETUP; không cần gõ lệnh."
+}
+
+wizard() {
+  local phase step missing
+
+  install_wizard_shortcut
+
+  [ -s "$STATE" ] ||
+    die "Chưa khởi tạo mprovision"
+
+  phase="$(state_get phase)"
+
+  case "$phase" in
+    preflight|await_root)
+      if ! root_ok; then
+        echo "WIZARD_STEP=ROOT"
+        echo "Bật root rồi chạm lại AOTSCRIPT_SETUP."
+        return
+      fi
+
+      resume
+      phase="$(state_get phase)"
+
+      if [ "$phase" = manual_pre ]; then
+        wizard
+      else
+        status
+      fi
+      ;;
+    manual_pre)
+      if ! root_ok; then
+        echo "WIZARD_STEP=ROOT"
+        echo "Bật root rồi chạm lại AOTSCRIPT_SETUP."
+        return
+      fi
+
+      if ! google_account_present; then
+        state_set "wizard_step=await_google_login"
+
+        wizard_open_google_login ||
+          die "Không mở được màn hình thêm tài khoản Google"
+
+        echo "WIZARD_STEP=GOOGLE_LOGIN"
+        echo "Đăng nhập Google xong chạm lại AOTSCRIPT_SETUP."
+        return
+      fi
+
+      step="$(state_get wizard_step)"
+
+      if [ "$step" != await_swift_backup_before ]; then
+        wizard_open_swift ||
+          die "Không mở được Swift Backup"
+
+        state_set "wizard_step=await_swift_backup_before"
+
+        echo "WIZARD_STEP=SWIFT_BACKUP_BEFORE"
+        echo "Backup Termux kèm data và dữ liệu cũ cần giữ."
+        echo "Xong chạm lại AOTSCRIPT_SETUP."
+        return
+      fi
+
+      state_set "wizard_step="
+      done_checkpoint pre
+      phase="$(state_get phase)"
+
+      if [ "$phase" = manual_post ]; then
+        wizard_open_restore_step
+      else
+        status
+      fi
+      ;;
+    await_root_setup|await_rclone_before|automatic)
+      resume
+      phase="$(state_get phase)"
+
+      if [ "$phase" = manual_post ]; then
+        wizard_open_restore_step
+      else
+        status
+      fi
+      ;;
+    manual_post)
+      step="$(state_get wizard_step)"
+
+      case "$step" in
+        await_swift_restore)
+          missing="$(wizard_restore_missing_packages)"
+
+          if [ -n "$missing" ]; then
+            echo "WIZARD_STEP=SWIFT_RESTORE_INCOMPLETE"
+            printf '%s\n' "$missing" |
+              sed 's/^/MISSING_APP=/'
+            wizard_open_swift ||
+              die "Không mở lại được Swift Backup"
+            return
+          fi
+
+          state_set "wizard_step=manual_post_remaining"
+          echo "WIZARD_STEP=MANUAL_POST_REMAINING"
+          echo "REQUIRED_RESTORE_PACKAGES=OK"
+          echo "App data vẫn cần xác nhận trực tiếp trong Swift Backup."
+          show_manual_post
+          ;;
+        manual_post_remaining)
+          show_manual_post
+          ;;
+        *)
+          wizard_open_restore_step
+          ;;
+      esac
+      ;;
+    await_rclone_after|finalize)
+      resume
+      ;;
+    complete)
+      status
+      ;;
+    *)
+      die "Phase wizard không hợp lệ: ${phase:-EMPTY}"
+      ;;
+  esac
+}
+
 show_manual_pre() {
   cat <<'__MP_MANUAL_PRE__'
 
@@ -1694,6 +1945,7 @@ pause_post() {
 
 preflight() {
   local cmd
+  install_wizard_shortcut
   if ! root_ok; then
     state_set phase=await_root
     echo "ROOT chưa hoạt động. Bật root, kiểm tra su -c id, rồi chạy mprovision resume."
@@ -2387,6 +2639,7 @@ status() {
   echo "MANUAL_POST=$post_status"
   echo "REPORT=$report_status"
   echo "PUBLISH_NEXT=$publish_status"
+  echo "WIZARD_STEP=$(state_get wizard_step)"
   echo "NEXT=$next"
 }
 
@@ -2579,6 +2832,20 @@ __MP_PHASE2_SELF_TEST_PY__
     grep -Fq 'Swift Backup có data: Drive, Control, 1.1.1.1, ZArchiver và Taskbar.' ||
     die "self-test checklist post"
 
+  declare -F wizard >/dev/null ||
+    die "self-test wizard function"
+  declare -F install_wizard_shortcut >/dev/null ||
+    die "self-test wizard shortcut installer"
+  declare -F google_account_present >/dev/null ||
+    die "self-test Google account detector"
+
+  wizard_shortcut_content > "$tmp/aotscript-setup-shortcut"
+  bash -n "$tmp/aotscript-setup-shortcut"
+
+  grep -Fxq \
+    'exec /data/data/com.termux/files/usr/bin/mprovision wizard' \
+    "$tmp/aotscript-setup-shortcut" ||
+    die "self-test wizard shortcut command"
   declare -F audit >/dev/null ||
     die "self-test audit function"
   declare -F audit_display_values >/dev/null ||
@@ -2839,6 +3106,12 @@ main() {
         die "Chưa khởi tạo mprovision"
       ui_post_prepare
       ;;
+    wizard)
+      [ "$#" = 1 ] ||
+        die "wizard không nhận tham số"
+      install_wrapper
+      wizard
+      ;;
     publish-next)
       [ "$#" = 1 ] ||
         die "publish-next không nhận tham số"
@@ -2888,6 +3161,7 @@ main() {
         backup_after= \
         backup_after_remote= \
         swift_install=0 \
+        wizard_step= \
         manual_pre_confirmed_at= \
         manual_post_confirmed_at= \
         completed_at= \
