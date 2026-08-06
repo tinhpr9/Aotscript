@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase1-v3"
+VERSION="phase2-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -16,6 +16,8 @@ WINTERHUB="${MPROVISION_WINTERHUB:-$HOME/.termux/boot/winterhub.sh}"
 AGENT_BOOT="${MPROVISION_AGENT_BOOT:-$HOME/.termux/boot/01-agent.sh}"
 AGENT="$DL/Agent_Core.py"
 WRAPPER="$HOME/bin/mprovision"
+REPORT_JSON="$SHOUKO/provision_report.json"
+REPORT_TEXT="$SHOUKO/provision_report.txt"
 
 ok() { printf '[OK] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*"; }
@@ -27,9 +29,18 @@ Lần đầu:
   tải provision-device.sh từ main, chạy bash -n, rồi:
   bash provision-device.sh 116 NOVA
 
-Tiếp tục hoặc xem trạng thái:
-  mprovision resume
+Điều khiển:
   mprovision status
+  mprovision checklist
+  mprovision done pre
+  mprovision done post
+  mprovision resume
+  mprovision report
+
+Quy tắc checkpoint:
+  - Xong THỦ CÔNG 1: dùng mprovision done pre
+  - Xong THỦ CÔNG 2: dùng mprovision done post
+  - resume không tự bỏ qua checkpoint thủ công.
 __MP_USAGE__
 }
 
@@ -247,39 +258,71 @@ zip_delta() {
 backup_data() {
   local label="$1" required="$2" device stamp dir remote listing file count=0
   local expected=()
+
   device="$(state_get device_id)"
   stamp="$(date +%Y%m%d-%H%M%S)"
   dir="$BACKUPS/$device/$stamp-$label"
   remote="gdrive:/Aotscript-Backups/$device/$stamp-$label"
+
   mkdir -p "$dir"
+
   if [ -d "$SHOUKO" ]; then
-    zip_shouko "$dir/Shouko.zip" || die "Tạo Shouko.zip thất bại"
-    (cd "$dir" && sha256sum Shouko.zip > Shouko.zip.sha256)
+    zip_shouko "$dir/Shouko.zip" ||
+      die "Tạo Shouko.zip thất bại"
+
+    (
+      cd "$dir"
+      sha256sum Shouko.zip > Shouko.zip.sha256
+    )
+
     expected+=(Shouko.zip Shouko.zip.sha256)
     count=$((count + 1))
   elif [ "$required" = 1 ]; then
     die "Thiếu Shouko ở backup bắt buộc"
   fi
+
   if [ -d "$DELTA" ]; then
-    zip_delta "$dir/Delta.zip" || die "Tạo Delta.zip thất bại"
-    (cd "$dir" && sha256sum Delta.zip > Delta.zip.sha256)
+    zip_delta "$dir/Delta.zip" ||
+      die "Tạo Delta.zip thất bại"
+
+    (
+      cd "$dir"
+      sha256sum Delta.zip > Delta.zip.sha256
+    )
+
     expected+=(Delta.zip Delta.zip.sha256)
     count=$((count + 1))
   elif [ "$required" = 1 ]; then
     die "Thiếu Delta ở backup bắt buộc"
   fi
+
   if [ "$count" = 0 ]; then
     rmdir "$dir" 2>/dev/null || true
-    state_set "backup_$label=SKIPPED_NO_EXISTING_DATA"
+    state_set \
+      "backup_$label=SKIPPED_NO_EXISTING_DATA" \
+      "backup_${label}_remote="
     ok "Không có Shouko hoặc Delta cũ để backup $label"
     return
   fi
-  rclone copy "$dir" "$remote" || die "Upload backup $label thất bại"
-  listing="$(rclone lsf "$remote" --files-only 2>/dev/null || true)"
+
+  rclone copy "$dir" "$remote" ||
+    die "Upload backup $label thất bại"
+
+  listing="$(
+    rclone lsf "$remote" --files-only 2>/dev/null ||
+      true
+  )"
+
   for file in "${expected[@]}"; do
-    printf '%s\n' "$listing" | grep -Fxq "$file" || die "Remote backup thiếu $file"
+    printf '%s\n' "$listing" |
+      grep -Fxq "$file" ||
+      die "Remote backup thiếu $file"
   done
-  state_set "backup_$label=$dir"
+
+  state_set \
+    "backup_$label=$dir" \
+    "backup_${label}_remote=$remote"
+
   ok "Backup $label đã kiểm tra ZIP, SHA-256 và upload"
 }
 
@@ -392,19 +435,359 @@ __MP_AGENT_COMPILE_PY__
   ok "Kiểm tra cuối đạt"
 }
 
-pause_pre() {
-  state_set phase=manual_pre
+utc_now() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+backup_remote_for() {
+  local label="$1" stored local_path device leaf
+
+  stored="$(state_get "backup_${label}_remote")"
+
+  if [ -n "$stored" ]; then
+    printf '%s\n' "$stored"
+    return 0
+  fi
+
+  local_path="$(state_get "backup_$label")"
+
+  case "$local_path" in
+    ""|SKIPPED_*)
+      return 0
+      ;;
+  esac
+
+  device="$(state_get device_id)"
+  leaf="$(basename "$local_path")"
+
+  [ -n "$device" ] && [ -n "$leaf" ] ||
+    return 0
+
+  printf 'gdrive:/Aotscript-Backups/%s/%s\n' \
+    "$device" \
+    "$leaf"
+}
+
+show_manual_pre() {
   cat <<'__MP_MANUAL_PRE__'
 
 ========== THỦ CÔNG 1 ==========
-1. Đăng nhập Google trực tiếp trên máy; không lưu mật khẩu vào script.
-2. Tự kiểm tra Play Protect theo quy trình của bạn.
-3. Mở Swift Backup, backup Termux kèm data và các app cần thiết.
-4. Không gửi mật khẩu, token hoặc key vào chat.
+[ ] Đăng nhập Google trực tiếp trên máy.
+[ ] Kiểm tra Play Protect theo quy trình vận hành.
+[ ] Swift Backup: backup Termux kèm data.
+[ ] Swift Backup: backup các app/data cần thiết.
+[ ] Không lưu hoặc gửi mật khẩu, token hay key.
 
-Xong chạy: mprovision resume
+Làm xong chạy:
+  mprovision done pre
+
+Chỉ xem lại danh sách:
+  mprovision checklist
 ================================
 __MP_MANUAL_PRE__
+}
+
+show_manual_post() {
+  cat <<'__MP_MANUAL_POST__'
+
+========== THỦ CÔNG 2 ==========
+[ ] Khôi phục app/data bằng Swift Backup.
+[ ] Mở Termux:Boot một lần.
+[ ] Hoàn tất key Shouko, cookie và login cookie.
+[ ] Hoàn tất 1.1.1.1, Control, khung tab và auto-exec.
+[ ] Chạy toolcheck; đủ user và không trùng account.
+[ ] Chạy thử winterhub đúng một lần; không reboot lặp.
+
+Làm xong chạy:
+  mprovision done post
+
+Chỉ xem lại danh sách:
+  mprovision checklist
+================================
+__MP_MANUAL_POST__
+}
+
+checklist() {
+  local phase
+
+  [ -s "$STATE" ] ||
+    die "Chưa khởi tạo mprovision"
+
+  phase="$(state_get phase)"
+
+  case "$phase" in
+    manual_pre)
+      show_manual_pre
+      ;;
+    manual_post)
+      show_manual_post
+      ;;
+    complete)
+      echo "CHECKPOINT=HOÀN_TẤT"
+      echo "NEXT=mprovision report"
+      ;;
+    *)
+      echo "CHECKPOINT=KHÔNG_CHỜ_THỦ_CÔNG"
+      status
+      ;;
+  esac
+}
+
+write_completion_report() {
+  local process_count="${1:-}"
+  local generated_at completed_at
+  local backup_before_remote backup_after_remote
+
+  [ -n "$process_count" ] ||
+    process_count="$(agent_count)"
+
+  generated_at="$(utc_now)"
+  completed_at="$(state_get completed_at)"
+
+  [ -n "$completed_at" ] ||
+    completed_at="$generated_at"
+
+  backup_before_remote="$(backup_remote_for before)"
+  backup_after_remote="$(backup_remote_for after)"
+
+  mkdir -p "$SHOUKO"
+
+  python - \
+    "$REPORT_JSON" \
+    "$REPORT_TEXT" \
+    "$VERSION" \
+    "$(state_get device_id)" \
+    "$(state_get device_group)" \
+    "$(state_get run_id)" \
+    "$completed_at" \
+    "$(state_get manual_pre_confirmed_at)" \
+    "$(state_get manual_post_confirmed_at)" \
+    "$(state_get backup_before)" \
+    "$backup_before_remote" \
+    "$(state_get backup_after)" \
+    "$backup_after_remote" \
+    "$process_count" \
+    "$generated_at" \
+    <<'__MP_REPORT_WRITE_PY__'
+import json
+import os
+import pathlib
+import sys
+
+(
+    json_name,
+    text_name,
+    version,
+    device_id,
+    device_group,
+    run_id,
+    completed_at,
+    manual_pre_at,
+    manual_post_at,
+    backup_before,
+    backup_before_remote,
+    backup_after,
+    backup_after_remote,
+    agent_count,
+    generated_at,
+) = sys.argv[1:]
+
+report = {
+    "schema_version": 1,
+    "status": "complete",
+    "provision_version": version,
+    "device_id": device_id,
+    "device_group": device_group,
+    "run_id": run_id,
+    "completed_at": completed_at,
+    "generated_at": generated_at,
+    "manual_pre_confirmed_at": manual_pre_at,
+    "manual_post_confirmed_at": manual_post_at,
+    "backup_before_local": backup_before,
+    "backup_before_remote": backup_before_remote,
+    "backup_after_local": backup_after,
+    "backup_after_remote": backup_after_remote,
+    "agent_process_count": int(agent_count),
+    "final_check": "ok",
+}
+
+json_path = pathlib.Path(json_name)
+text_path = pathlib.Path(text_name)
+
+json_tmp = json_path.with_name(
+    json_path.name + f".tmp-{os.getpid()}"
+)
+text_tmp = text_path.with_name(
+    text_path.name + f".tmp-{os.getpid()}"
+)
+
+text_lines = [
+    "MPROVISION_REPORT",
+    "STATUS=complete",
+    f"VERSION={version}",
+    f"DEVICE_ID={device_id}",
+    f"DEVICE_GROUP={device_group}",
+    f"RUN_ID={run_id}",
+    f"COMPLETED_AT={completed_at}",
+    f"AGENT_PROCESS_COUNT={agent_count}",
+    "FINAL_CHECK=ok",
+    f"BACKUP_AFTER_REMOTE={backup_after_remote}",
+]
+
+try:
+    json_tmp.write_text(
+        json.dumps(
+            report,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    text_tmp.write_text(
+        "\n".join(text_lines) + "\n",
+        encoding="utf-8",
+    )
+
+    checked = json.loads(
+        json_tmp.read_text(encoding="utf-8")
+    )
+
+    if checked.get("status") != "complete":
+        raise ValueError("report status invalid")
+
+    os.chmod(json_tmp, 0o600)
+    os.chmod(text_tmp, 0o600)
+    os.replace(json_tmp, json_path)
+    os.replace(text_tmp, text_path)
+finally:
+    for temporary in (json_tmp, text_tmp):
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+__MP_REPORT_WRITE_PY__
+
+  ok "Đã tạo báo cáo hoàn tất không chứa secret"
+}
+
+upload_completion_report() {
+  local remote listing
+
+  remote="$(backup_remote_for after)"
+
+  [ -n "$remote" ] || {
+    warn "Không xác định được thư mục backup after trên Drive"
+    return 1
+  }
+
+  [ -s "$REPORT_JSON" ] &&
+  [ -s "$REPORT_TEXT" ] || {
+    warn "Thiếu báo cáo hoàn tất cục bộ"
+    return 1
+  }
+
+  rclone copyto \
+    "$REPORT_JSON" \
+    "$remote/provision_report.json" ||
+    return 1
+
+  rclone copyto \
+    "$REPORT_TEXT" \
+    "$remote/provision_report.txt" ||
+    return 1
+
+  listing="$(
+    rclone lsf "$remote" --files-only 2>/dev/null ||
+      true
+  )"
+
+  printf '%s\n' "$listing" |
+    grep -Fxq 'provision_report.json' ||
+    return 1
+
+  printf '%s\n' "$listing" |
+    grep -Fxq 'provision_report.txt' ||
+    return 1
+
+  state_set "report_remote=$remote"
+  ok "Đã upload và xác nhận báo cáo hoàn tất"
+}
+
+done_checkpoint() {
+  local checkpoint="$1" phase now
+
+  [ -s "$STATE" ] ||
+    die "Chưa khởi tạo mprovision"
+
+  phase="$(state_get phase)"
+  now="$(utc_now)"
+
+  case "$checkpoint:$phase" in
+    pre:manual_pre)
+      state_set \
+        "manual_pre_confirmed_at=$now" \
+        "phase=automatic"
+      ok "Đã xác nhận THỦ CÔNG 1"
+      automatic
+      ;;
+    post:manual_post)
+      state_set \
+        "manual_post_confirmed_at=$now" \
+        "phase=finalize"
+      ok "Đã xác nhận THỦ CÔNG 2"
+      finalize
+      ;;
+    pre:*)
+      die "Không ở checkpoint THỦ CÔNG 1; phase=$phase"
+      ;;
+    post:*)
+      die "Không ở checkpoint THỦ CÔNG 2; phase=$phase"
+      ;;
+    *)
+      die "Checkpoint không hợp lệ: $checkpoint"
+      ;;
+  esac
+}
+
+show_report() {
+  local phase completed_at
+
+  [ -s "$STATE" ] ||
+    die "Chưa khởi tạo mprovision"
+
+  phase="$(state_get phase)"
+
+  [ "$phase" = "complete" ] ||
+    die "Máy chưa hoàn tất; phase=$phase"
+
+  final_check
+
+  completed_at="$(state_get completed_at)"
+
+  if [ -z "$completed_at" ]; then
+    completed_at="$(utc_now)"
+    state_set "completed_at=$completed_at"
+  fi
+
+  write_completion_report "$(agent_count)"
+
+  if rclone_ok && [ -n "$(state_get backup_after)" ]; then
+    upload_completion_report ||
+      die "Không upload được báo cáo hoàn tất"
+  else
+    warn "Báo cáo chỉ được tạo cục bộ; Drive chưa sẵn sàng"
+  fi
+
+  cat "$REPORT_TEXT"
+}
+
+pause_pre() {
+  state_set \
+    "phase=manual_pre" \
+    "manual_pre_confirmed_at="
+  show_manual_pre
 }
 
 pause_rclone() {
@@ -422,18 +805,10 @@ __MP_RCLONE__
 }
 
 pause_post() {
-  state_set phase=manual_post
-  cat <<'__MP_MANUAL_POST__'
-
-========== THỦ CÔNG 2 ==========
-1. Khôi phục app/data bằng Swift Backup; mở Termux:Boot một lần.
-2. Hoàn tất key Shouko, cookie, login cookie, 1.1.1.1, Control, khung tab và auto-exec.
-3. Chạy toolcheck, kiểm tra đủ user và không trùng account.
-4. Chạy thử winterhub; không reboot lặp vô hạn.
-
-Xong chạy: mprovision resume
-================================
-__MP_MANUAL_POST__
+  state_set \
+    "phase=manual_post" \
+    "manual_post_confirmed_at="
+  show_manual_post
 }
 
 preflight() {
@@ -471,76 +846,369 @@ automatic() {
 }
 
 finalize() {
-  rclone_ok || { pause_rclone after; return; }
+  local completed_at
+
+  rclone_ok || {
+    pause_rclone after
+    return
+  }
+
   state_set phase=finalize
   final_check
-  backup_data after 1
-  state_set phase=complete
+
+  if [ -n "$(state_get backup_after)" ]; then
+    ok "Backup after đã hoàn tất; không tạo lại"
+  else
+    backup_data after 1
+  fi
+
+  completed_at="$(state_get completed_at)"
+
+  if [ -z "$completed_at" ]; then
+    completed_at="$(utc_now)"
+    state_set "completed_at=$completed_at"
+  fi
+
+  write_completion_report "$(agent_count)"
+
+  upload_completion_report ||
+    die "Không upload được báo cáo hoàn tất"
+
+  state_set \
+    "phase=complete" \
+    "report_json=$REPORT_JSON" \
+    "report_text=$REPORT_TEXT"
+
   echo "MPROVISION=HOÀN_TẤT"
   status
 }
 
 status() {
-  [ -s "$STATE" ] || { echo "MPROVISION_STATUS=CHƯA_KHỞI_TẠO"; return; }
+  local phase pre_status post_status report_status next
+
+  [ -s "$STATE" ] || {
+    echo "MPROVISION_STATUS=CHƯA_KHỞI_TẠO"
+    return
+  }
+
+  phase="$(state_get phase)"
+  pre_status="PENDING"
+  post_status="PENDING"
+  report_status="MISSING"
+  next="mprovision resume"
+
+  [ -z "$(state_get manual_pre_confirmed_at)" ] ||
+    pre_status="CONFIRMED"
+
+  [ -z "$(state_get manual_post_confirmed_at)" ] ||
+    post_status="CONFIRMED"
+
+  [ ! -s "$REPORT_JSON" ] ||
+    report_status="READY"
+
+  case "$phase" in
+    manual_pre)
+      next="mprovision done pre"
+      ;;
+    manual_post)
+      next="mprovision done post"
+      ;;
+    complete)
+      next="mprovision report"
+      ;;
+  esac
+
   echo "VERSION=$VERSION"
   echo "DEVICE_ID=$(state_get device_id)"
   echo "DEVICE_GROUP=$(state_get device_group)"
-  echo "PHASE=$(state_get phase)"
+  echo "PHASE=$phase"
   echo "RUN_ID=$(state_get run_id)"
+  echo "MANUAL_PRE=$pre_status"
+  echo "MANUAL_POST=$post_status"
+  echo "REPORT=$report_status"
+  echo "NEXT=$next"
 }
 
 resume() {
   local phase
-  [ -s "$STATE" ] || die "Chưa khởi tạo mprovision"
+
+  [ -s "$STATE" ] ||
+    die "Chưa khởi tạo mprovision"
+
   phase="$(state_get phase)"
+
   case "$phase" in
-    preflight|await_root) preflight ;;
-    manual_pre|await_root_setup|await_rclone_before|automatic) automatic ;;
-    manual_post|await_rclone_after|finalize) finalize ;;
-    complete) status ;;
-    *) die "Phase không hợp lệ: ${phase:-EMPTY}" ;;
+    preflight|await_root)
+      preflight
+      ;;
+    manual_pre)
+      show_manual_pre
+      ;;
+    await_root_setup|await_rclone_before|automatic)
+      automatic
+      ;;
+    manual_post)
+      show_manual_post
+      ;;
+    await_rclone_after|finalize)
+      finalize
+      ;;
+    complete)
+      status
+      ;;
+    *)
+      die "Phase không hợp lệ: ${phase:-EMPTY}"
+      ;;
   esac
 }
 
 self_test() {
-  local tmp old_state old_state_dir old_sd old_dl old_shouko old_delta old_backups old_winter value
+  local tmp
+  local old_state old_state_dir old_sd old_dl
+  local old_shouko old_delta old_backups old_winter
+  local old_report_json old_report_text
+  local value expected_remote
+
   tmp="$(mktemp -d)"
-  old_state="$STATE"; old_state_dir="$STATE_DIR"; old_sd="$SD"; old_dl="$DL"
-  old_shouko="$SHOUKO"; old_delta="$DELTA"; old_backups="$BACKUPS"; old_winter="$WINTERHUB"
-  STATE_DIR="$tmp/state"; STATE="$STATE_DIR/state.json"; SD="$tmp/sd"; DL="$SD/Download"
-  SHOUKO="$DL/Shouko"; DELTA="$SD/Delta"; BACKUPS="$SD/backups"; WINTERHUB="$tmp/winterhub.sh"
-  value="$(norm_id 116)"; [ "$value" = m116 ] || die "self-test id"
-  value="$(norm_group NOVA)"; [ "$value" = NOVA ] || die "self-test group"
-  state_set device_id=m116 device_group=NOVA phase=manual_pre run_id=test
-  [ "$(state_get phase)" = manual_pre ] || die "self-test state"
+
+  old_state="$STATE"
+  old_state_dir="$STATE_DIR"
+  old_sd="$SD"
+  old_dl="$DL"
+  old_shouko="$SHOUKO"
+  old_delta="$DELTA"
+  old_backups="$BACKUPS"
+  old_winter="$WINTERHUB"
+  old_report_json="$REPORT_JSON"
+  old_report_text="$REPORT_TEXT"
+
+  STATE_DIR="$tmp/state"
+  STATE="$STATE_DIR/state.json"
+  SD="$tmp/sd"
+  DL="$SD/Download"
+  SHOUKO="$DL/Shouko"
+  DELTA="$SD/Delta"
+  BACKUPS="$SD/backups"
+  WINTERHUB="$tmp/winterhub.sh"
+  REPORT_JSON="$SHOUKO/provision_report.json"
+  REPORT_TEXT="$SHOUKO/provision_report.txt"
+
+  value="$(norm_id 116)"
+  [ "$value" = m116 ] ||
+    die "self-test id"
+
+  value="$(norm_group NOVA)"
+  [ "$value" = NOVA ] ||
+    die "self-test group"
+
+  state_set \
+    version="$VERSION" \
+    device_id=m116 \
+    device_group=NOVA \
+    phase=complete \
+    run_id=test \
+    manual_pre_confirmed_at=2026-01-01T00:00:00Z \
+    manual_post_confirmed_at=2026-01-01T01:00:00Z \
+    backup_before="$BACKUPS/m116/20260101-before" \
+    backup_before_remote= \
+    backup_after="$BACKUPS/m116/20260101-after" \
+    backup_after_remote= \
+    completed_at=2026-01-01T02:00:00Z
+
+  [ "$(state_get phase)" = complete ] ||
+    die "self-test state"
+
+  expected_remote="gdrive:/Aotscript-Backups/m116/20260101-after"
+
+  [ "$(backup_remote_for after)" = "$expected_remote" ] ||
+    die "self-test derive remote"
+
   mkdir -p "$SHOUKO" "$DELTA" "$tmp/out"
-  printf 's\n' > "$SHOUKO/test.txt"; printf 'd\n' > "$DELTA/test.txt"
-  zip_shouko "$tmp/out/Shouko.zip"; zip_delta "$tmp/out/Delta.zip"
-  unzip -tqq "$tmp/out/Shouko.zip"; unzip -tqq "$tmp/out/Delta.zip"
-  install_winterhub; bash -n "$WINTERHUB"; python -m json.tool "$STATE" >/dev/null
+
+  printf 's\n' > "$SHOUKO/test.txt"
+  printf 'd\n' > "$DELTA/test.txt"
+
+  zip_shouko "$tmp/out/Shouko.zip"
+  zip_delta "$tmp/out/Delta.zip"
+  unzip -tqq "$tmp/out/Shouko.zip"
+  unzip -tqq "$tmp/out/Delta.zip"
+
+  install_winterhub
+  bash -n "$WINTERHUB"
+
+  write_completion_report 1
+
+  python - \
+    "$REPORT_JSON" \
+    "$REPORT_TEXT" \
+    "$expected_remote" \
+    <<'__MP_PHASE2_SELF_TEST_PY__'
+import json
+import pathlib
+import sys
+
+json_path = pathlib.Path(sys.argv[1])
+text_path = pathlib.Path(sys.argv[2])
+expected_remote = sys.argv[3]
+
+data = json.loads(
+    json_path.read_text(encoding="utf-8")
+)
+
+expected_keys = {
+    "schema_version",
+    "status",
+    "provision_version",
+    "device_id",
+    "device_group",
+    "run_id",
+    "completed_at",
+    "generated_at",
+    "manual_pre_confirmed_at",
+    "manual_post_confirmed_at",
+    "backup_before_local",
+    "backup_before_remote",
+    "backup_after_local",
+    "backup_after_remote",
+    "agent_process_count",
+    "final_check",
+}
+
+if set(data) != expected_keys:
+    raise SystemExit("report keys invalid")
+
+if data["status"] != "complete":
+    raise SystemExit("report status invalid")
+
+if data["backup_after_remote"] != expected_remote:
+    raise SystemExit("report remote invalid")
+
+if data["agent_process_count"] != 1:
+    raise SystemExit("report agent count invalid")
+
+sensitive_fragments = {
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "api_key",
+    "agent_report_secret",
+    "worker_report_url",
+}
+
+serialized = json.dumps(data).lower()
+
+for fragment in sensitive_fragments:
+    if fragment in serialized:
+        raise SystemExit(
+            f"sensitive fragment in report: {fragment}"
+        )
+
+text = text_path.read_text(encoding="utf-8")
+
+if "STATUS=complete" not in text:
+    raise SystemExit("text report invalid")
+__MP_PHASE2_SELF_TEST_PY__
+
+  checklist >/dev/null
+  python -m json.tool "$STATE" >/dev/null
+
   rm -rf "$tmp"
-  STATE="$old_state"; STATE_DIR="$old_state_dir"; SD="$old_sd"; DL="$old_dl"
-  SHOUKO="$old_shouko"; DELTA="$old_delta"; BACKUPS="$old_backups"; WINTERHUB="$old_winter"
-  echo "MPROVISION_SELF_TEST=OK"
+
+  STATE="$old_state"
+  STATE_DIR="$old_state_dir"
+  SD="$old_sd"
+  DL="$old_dl"
+  SHOUKO="$old_shouko"
+  DELTA="$old_delta"
+  BACKUPS="$old_backups"
+  WINTERHUB="$old_winter"
+  REPORT_JSON="$old_report_json"
+  REPORT_TEXT="$old_report_text"
+
+  echo "MPROVISION_PHASE2_SELF_TEST=OK"
 }
 
 main() {
   local id group run
+
   case "${1:-}" in
-    self-test) [ "$#" = 1 ] || die "self-test không nhận tham số"; self_test ;;
-    status) [ "$#" = 1 ] || die "status không nhận tham số"; install_wrapper; status ;;
-    resume) [ "$#" = 1 ] || die "resume không nhận tham số"; install_wrapper; resume ;;
-    -h|--help|help|"") usage ;;
+    self-test)
+      [ "$#" = 1 ] ||
+        die "self-test không nhận tham số"
+      self_test
+      ;;
+    status)
+      [ "$#" = 1 ] ||
+        die "status không nhận tham số"
+      install_wrapper
+      status
+      ;;
+    checklist)
+      [ "$#" = 1 ] ||
+        die "checklist không nhận tham số"
+      install_wrapper
+      checklist
+      ;;
+    done)
+      [ "$#" = 2 ] ||
+        die "Cách dùng: mprovision done pre|post"
+      install_wrapper
+      done_checkpoint "$2"
+      ;;
+    resume)
+      [ "$#" = 1 ] ||
+        die "resume không nhận tham số"
+      install_wrapper
+      resume
+      ;;
+    report)
+      [ "$#" = 1 ] ||
+        die "report không nhận tham số"
+      install_wrapper
+      show_report
+      ;;
+    -h|--help|help|"")
+      usage
+      ;;
     *)
-      [ "$#" = 2 ] || { usage; die "Cần device_id và group"; }
-      id="$(norm_id "$1")" || die "Device ID không hợp lệ: $1"
-      group="$(norm_group "$2")" || die "Nhóm không hợp lệ: $2"
+      [ "$#" = 2 ] || {
+        usage
+        die "Cần device_id và group"
+      }
+
+      id="$(norm_id "$1")" ||
+        die "Device ID không hợp lệ: $1"
+
+      group="$(norm_group "$2")" ||
+        die "Nhóm không hợp lệ: $2"
+
       run="$(date +%Y%m%d-%H%M%S)"
+
       install_wrapper
       mkdir -p "$STATE_DIR"
-      [ ! -s "$STATE" ] || cp -p "$STATE" "$STATE.bak-$run"
-      state_set version="$VERSION" device_id="$id" device_group="$group" \
-        phase=preflight run_id="$run" backup_before= backup_after= swift_install=0
+
+      [ ! -s "$STATE" ] ||
+        cp -p "$STATE" "$STATE.bak-$run"
+
+      state_set \
+        version="$VERSION" \
+        device_id="$id" \
+        device_group="$group" \
+        phase=preflight \
+        run_id="$run" \
+        backup_before= \
+        backup_before_remote= \
+        backup_after= \
+        backup_after_remote= \
+        swift_install=0 \
+        manual_pre_confirmed_at= \
+        manual_post_confirmed_at= \
+        completed_at= \
+        report_remote= \
+        report_json= \
+        report_text=
+
       preflight
       ;;
   esac
