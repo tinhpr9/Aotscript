@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase3a-v1"
+VERSION="phase3a-v2"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -167,8 +167,30 @@ rclone_ok() {
 }
 
 apk_ok() {
-  [ -s "$1" ] && unzip -tqq "$1" >/dev/null 2>&1 &&
-    unzip -Z1 "$1" 2>/dev/null | tr -d '\r' | grep -Fxq AndroidManifest.xml
+  [ -s "$1" ] || return 1
+
+  python - "$1" <<'__MP_APK_VALIDATE_PY_20260806__'
+import pathlib
+import sys
+import zipfile
+
+path = pathlib.Path(sys.argv[1])
+
+try:
+    with zipfile.ZipFile(path) as archive:
+        if archive.testzip() is not None:
+            raise SystemExit(1)
+        names = {
+            name.rstrip("/")
+            for name in archive.namelist()
+        }
+except (OSError, RuntimeError, zipfile.BadZipFile):
+    raise SystemExit(1)
+
+raise SystemExit(
+    0 if "AndroidManifest.xml" in names else 1
+)
+__MP_APK_VALIDATE_PY_20260806__
 }
 
 ensure_gdown() {
