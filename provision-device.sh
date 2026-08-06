@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase2-v1"
+VERSION="phase3a-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -32,6 +32,7 @@ Lần đầu:
 Điều khiển:
   mprovision status
   mprovision checklist
+  mprovision audit
   mprovision done pre
   mprovision done post
   mprovision resume
@@ -40,6 +41,7 @@ Lần đầu:
 Quy tắc checkpoint:
   - Xong THỦ CÔNG 1: dùng mprovision done pre
   - Xong THỦ CÔNG 2: dùng mprovision done post
+  - done post tự chạy audit chỉ đọc trước khi hoàn tất.
   - resume không tự bỏ qua checkpoint thủ công.
 __MP_USAGE__
 }
@@ -472,11 +474,13 @@ show_manual_pre() {
   cat <<'__MP_MANUAL_PRE__'
 
 ========== THỦ CÔNG 1 ==========
-[ ] Đăng nhập Google trực tiếp trên máy.
+[ ] Bật root trước khi bắt đầu; mprovision sẽ tự kiểm tra root.
+[ ] Đăng nhập Google trực tiếp trên máy; không lưu thông tin đăng nhập vào script.
 [ ] Kiểm tra Play Protect theo quy trình vận hành.
 [ ] Swift Backup: backup Termux kèm data.
-[ ] Swift Backup: backup các app/data cần thiết.
-[ ] Không lưu hoặc gửi mật khẩu, token hay key.
+[ ] Swift Backup: backup các app và data cũ cần giữ.
+[ ] Không chạy lại lệnh ZIP/rclone cũ: done pre sẽ tự backup Shouko và Delta.
+[ ] Không gửi mật khẩu, key, cookie hoặc file cấu hình riêng tư vào chat.
 
 Làm xong chạy:
   mprovision done pre
@@ -491,20 +495,285 @@ show_manual_post() {
   cat <<'__MP_MANUAL_POST__'
 
 ========== THỦ CÔNG 2 ==========
-[ ] Khôi phục app/data bằng Swift Backup.
-[ ] Mở Termux:Boot một lần.
-[ ] Hoàn tất key Shouko, cookie và login cookie.
-[ ] Hoàn tất 1.1.1.1, Control, khung tab và auto-exec.
-[ ] Chạy toolcheck; đủ user và không trùng account.
-[ ] Chạy thử winterhub đúng một lần; không reboot lặp.
+[ ] Swift Backup có data: Drive, Control, 1.1.1.1, ZArchiver và Taskbar.
+[ ] Swift Backup các ứng dụng còn lại không data theo quy trình vận hành.
+[ ] Mở Termux:Boot đúng một lần.
+[ ] Hoàn tất key Shouko trực tiếp trên máy; không gửi key vào chat.
+[ ] Quay ngang Control và kiểm tra hoạt động.
+[ ] Chỉnh khung tab.
+[ ] Setup cookie, check cookie và login cookie.
+[ ] Bật 1.1.1.1.
+[ ] Chỉnh auto-exec.
+[ ] Chạy toolcheck; xác nhận đủ user và không trùng account.
+[ ] Chạy thử winterhub đúng một lần.
+[ ] Khởi động lại khi cần để xác nhận Termux:Boot; không lặp vô hạn.
+[ ] Mã hoặc link riêng theo máy vẫn làm thủ công cho đến khi xác định đúng file và định dạng.
+
+Xem audit tự động trước khi hoàn tất, không bắt buộc:
+  mprovision audit
 
 Làm xong chạy:
   mprovision done post
 
-Chỉ xem lại danh sách:
-  mprovision checklist
+Lệnh done post sẽ tự chạy audit chỉ đọc, sau đó mới kiểm tra cuối và backup after.
 ================================
 __MP_MANUAL_POST__
+}
+
+audit_setting() {
+  local key="$1" value label
+
+  label="${key^^}"
+  value="$(su -c "settings get global $key" 2>/dev/null || true)"
+
+  if [ "$value" = 1 ]; then
+    echo "SETTING_${label}=OK"
+    return 0
+  fi
+
+  echo "SETTING_${label}=NEEDS_ATTENTION"
+  return 1
+}
+
+audit_display_values() {
+  python - "$1" "$2" <<'__MP_PHASE3A_DISPLAY_AUDIT_PY_20260806__'
+import re
+import sys
+
+size_text = sys.argv[1]
+density_text = sys.argv[2]
+
+
+def preferred_value(text, value_pattern):
+    matches = re.findall(value_pattern, text)
+    for preferred in ("Override", "Physical"):
+        for match in reversed(matches):
+            if match[0] == preferred:
+                return match[1:]
+    return None
+
+
+size = preferred_value(
+    size_text,
+    r"(Physical|Override) size:\s*(\d+)x(\d+)",
+)
+density = preferred_value(
+    density_text,
+    r"(Physical|Override) density:\s*(\d+)",
+)
+
+if size is None or density is None:
+    print("DISPLAY_SMALLEST_WIDTH_DP=UNKNOWN")
+    print("DISPLAY_TARGET_700DP=NEEDS_ATTENTION")
+    raise SystemExit(1)
+
+width = int(size[0])
+height = int(size[1])
+density_value = int(density[0])
+
+if width <= 0 or height <= 0 or density_value <= 0:
+    print("DISPLAY_SMALLEST_WIDTH_DP=UNKNOWN")
+    print("DISPLAY_TARGET_700DP=NEEDS_ATTENTION")
+    raise SystemExit(1)
+
+smallest_dp = round(min(width, height) * 160 / density_value)
+within_target = 680 <= smallest_dp <= 720
+
+print(f"DISPLAY_SMALLEST_WIDTH_DP={smallest_dp}")
+print(
+    "DISPLAY_TARGET_700DP="
+    + ("OK" if within_target else "NEEDS_ATTENTION")
+)
+
+raise SystemExit(0 if within_target else 1)
+__MP_PHASE3A_DISPLAY_AUDIT_PY_20260806__
+}
+
+audit_display() {
+  local size_output density_output
+
+  size_output="$(su -c 'wm size' 2>/dev/null || true)"
+  density_output="$(su -c 'wm density' 2>/dev/null || true)"
+  audit_display_values "$size_output" "$density_output"
+}
+
+audit() {
+  local failures=0 setting current_id current_group
+  local default_ime agent_processes
+
+  [ -s "$STATE" ] ||
+    die "Chưa khởi tạo mprovision"
+
+  echo "MPROVISION_AUDIT"
+  echo "AUDIT_MODE=READ_ONLY"
+  echo "VERSION=$VERSION"
+  echo "DEVICE_ID=$(state_get device_id)"
+  echo "DEVICE_GROUP=$(state_get device_group)"
+  echo "PHASE=$(state_get phase)"
+  echo "RUN_ID=$(state_get run_id)"
+
+  if root_ok; then
+    echo "ROOT=OK"
+
+    for setting in \
+      development_settings_enabled \
+      force_allow_on_external \
+      force_resizable_activities \
+      enable_freeform_support \
+      force_desktop_mode_on_external_displays; do
+      if audit_setting "$setting"; then
+        :
+      else
+        failures=$((failures + 1))
+      fi
+    done
+
+    if audit_display; then
+      :
+    else
+      failures=$((failures + 1))
+    fi
+
+    if su -c 'pm path com.termux.boot' >/dev/null 2>&1; then
+      echo "TERMUX_BOOT_APP=OK"
+    else
+      echo "TERMUX_BOOT_APP=NEEDS_ATTENTION"
+      failures=$((failures + 1))
+    fi
+
+    if su -c 'pm path com.google.android.inputmethod.latin' \
+         >/dev/null 2>&1; then
+      echo "GBOARD_INSTALLED=OK"
+    else
+      echo "GBOARD_INSTALLED=NEEDS_ATTENTION"
+      failures=$((failures + 1))
+    fi
+
+    default_ime="$(
+      su -c 'settings get secure default_input_method' \
+        2>/dev/null || true
+    )"
+
+    case "$default_ime" in
+      com.google.android.inputmethod.latin/*)
+        echo "GBOARD_DEFAULT=OK"
+        ;;
+      *)
+        echo "GBOARD_DEFAULT=NEEDS_ATTENTION"
+        failures=$((failures + 1))
+        ;;
+    esac
+  else
+    echo "ROOT=NEEDS_ATTENTION"
+    echo "ANDROID_SETTINGS_AUDIT=SKIPPED_NO_ROOT"
+    failures=$((failures + 1))
+  fi
+
+  current_id="$(
+    tr -d '\r\n ' < "$SHOUKO/device_id.txt" \
+      2>/dev/null |
+      tr '[:upper:]' '[:lower:]' || true
+  )"
+  current_group="$(
+    tr -d '\r\n ' < "$SHOUKO/device_group.txt" \
+      2>/dev/null |
+      tr '[:lower:]' '[:upper:]' || true
+  )"
+
+  if [ "$current_id" = "$(state_get device_id)" ]; then
+    echo "DEVICE_ID_FILE=OK"
+  else
+    echo "DEVICE_ID_FILE=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  if [ "$current_group" = "$(state_get device_group)" ]; then
+    echo "DEVICE_GROUP_FILE=OK"
+  else
+    echo "DEVICE_GROUP_FILE=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  if [ -s "$WINTERHUB" ] && bash -n "$WINTERHUB"; then
+    echo "WINTERHUB_SCRIPT=OK"
+  else
+    echo "WINTERHUB_SCRIPT=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  if [ -s "$AGENT_BOOT" ] && bash -n "$AGENT_BOOT"; then
+    echo "AGENT_BOOT_SCRIPT=OK"
+  else
+    echo "AGENT_BOOT_SCRIPT=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  if [ -s "$AGENT" ]; then
+    if python - "$AGENT" <<'__MP_PHASE3A_AGENT_AUDIT_PY_20260806__'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+compile(path.read_text(encoding="utf-8"), str(path), "exec")
+__MP_PHASE3A_AGENT_AUDIT_PY_20260806__
+    then
+      echo "AGENT_SYNTAX=OK"
+    else
+      echo "AGENT_SYNTAX=NEEDS_ATTENTION"
+      failures=$((failures + 1))
+    fi
+  else
+    echo "AGENT_SYNTAX=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  if validate_config >/dev/null 2>&1; then
+    echo "AGENT_CONFIG=OK"
+  else
+    echo "AGENT_CONFIG=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  if command -v toolcheck >/dev/null 2>&1; then
+    echo "TOOLCHECK_COMMAND=OK"
+  else
+    echo "TOOLCHECK_COMMAND=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  agent_processes="$(agent_count)"
+  if [ "$agent_processes" = 1 ]; then
+    echo "AGENT_PROCESS_COUNT=1"
+  else
+    echo "AGENT_PROCESS_COUNT=$agent_processes"
+    failures=$((failures + 1))
+  fi
+
+  if rclone_ok; then
+    echo "GDRIVE_ACCESS=OK"
+  else
+    echo "GDRIVE_ACCESS=NEEDS_ATTENTION"
+    failures=$((failures + 1))
+  fi
+
+  echo "MANUAL_GOOGLE_LOGIN=VISUAL_CONFIRMATION_REQUIRED"
+  echo "MANUAL_PLAY_PROTECT=VISUAL_CONFIRMATION_REQUIRED"
+  echo "MANUAL_SWIFT_RESTORE=VISUAL_CONFIRMATION_REQUIRED"
+  echo "MANUAL_SHOUKO_KEY=VISUAL_CONFIRMATION_REQUIRED"
+  echo "MANUAL_COOKIE_LOGIN=VISUAL_CONFIRMATION_REQUIRED"
+  echo "MANUAL_CONTROL_AND_TAB=VISUAL_CONFIRMATION_REQUIRED"
+  echo "MANUAL_1_1_1_1=VISUAL_CONFIRMATION_REQUIRED"
+  echo "MANUAL_AUTO_EXEC=VISUAL_CONFIRMATION_REQUIRED"
+  echo "MANUAL_TOOLCHECK_USERS=VISUAL_CONFIRMATION_REQUIRED"
+
+  if [ "$failures" = 0 ]; then
+    echo "AUDIT_AUTOMATIC=OK"
+  else
+    echo "AUDIT_AUTOMATIC=NEEDS_ATTENTION"
+    echo "AUDIT_AUTOMATIC_FAILURES=$failures"
+  fi
+
+  return 0
 }
 
 checklist() {
@@ -733,6 +1002,7 @@ done_checkpoint() {
       automatic
       ;;
     post:manual_post)
+      audit
       state_set \
         "manual_post_confirmed_at=$now" \
         "phase=finalize"
@@ -967,7 +1237,7 @@ self_test() {
   local old_state old_state_dir old_sd old_dl
   local old_shouko old_delta old_backups old_winter
   local old_report_json old_report_text
-  local value expected_remote
+  local value expected_remote phase3a_checklist
 
   tmp="$(mktemp -d)"
 
@@ -1111,6 +1381,29 @@ if "STATUS=complete" not in text:
 __MP_PHASE2_SELF_TEST_PY__
 
   checklist >/dev/null
+
+  phase3a_checklist="$(show_manual_post)"
+  printf '%s
+' "$phase3a_checklist" |
+    grep -Fq 'Swift Backup có data: Drive, Control, 1.1.1.1, ZArchiver và Taskbar.' ||
+    die "self-test checklist post"
+
+  declare -F audit >/dev/null ||
+    die "self-test audit function"
+  declare -F audit_display_values >/dev/null ||
+    die "self-test audit display function"
+
+  value="$(
+    audit_display_values \
+      'Physical size: 1600x2560' \
+      'Override density: 366'
+  )" || die "self-test display audit"
+
+  printf '%s
+' "$value" |
+    grep -Fxq 'DISPLAY_TARGET_700DP=OK' ||
+    die "self-test display target"
+
   python -m json.tool "$STATE" >/dev/null
 
   rm -rf "$tmp"
@@ -1126,7 +1419,7 @@ __MP_PHASE2_SELF_TEST_PY__
   REPORT_JSON="$old_report_json"
   REPORT_TEXT="$old_report_text"
 
-  echo "MPROVISION_PHASE2_SELF_TEST=OK"
+  echo "MPROVISION_PHASE3A_SELF_TEST=OK"
 }
 
 main() {
@@ -1161,6 +1454,12 @@ main() {
         die "resume không nhận tham số"
       install_wrapper
       resume
+      ;;
+    audit)
+      [ "$#" = 1 ] ||
+        die "audit không nhận tham số"
+      install_wrapper
+      audit
       ;;
     report)
       [ "$#" = 1 ] ||
