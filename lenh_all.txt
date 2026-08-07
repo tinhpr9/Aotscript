@@ -1,9 +1,4 @@
-# telegram_target_ids=m116
-# telegram_expires_at=1785992016905
-# telegram_command_id=1785991716905-ff89716b
-IDLE
-
-# telegram_target_ids=m116
-# telegram_expires_at=1785992143911
-# telegram_command_id=1785991843911-b901cd77
-IDLE
+# telegram_target_ids=m37
+# telegram_expires_at=1786107223716
+# telegram_command_id=1786106923716-66bf0361
+REBOOT
