@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase16-freeform-normalize-v1"
+VERSION="phase17-taskbar-reclick-recovery-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -3600,6 +3600,168 @@ ui_assert_all_roblox_not_maximized() {
   [ "$count" = "${#installed[@]}" ]
 }
 
+ui_roblox_maximized_like() {
+  local package="$1"
+  local screen_width screen_height left top right bottom
+  local actual_width actual_height max_width_limit max_height_limit
+
+  read -r screen_width screen_height < <(
+    ui_current_screen_size
+  ) || {
+    echo "ROBLOX_MAXIMIZED_CHECK_SCREEN=UNAVAILABLE:$package"
+    return 2
+  }
+
+  if ! read -r left top right bottom < <(
+    ui_roblox_window_bounds "$package"
+  ); then
+    echo "ROBLOX_MAXIMIZED_CHECK_BOUNDS=UNAVAILABLE:$package"
+    return 1
+  fi
+
+  [[ "$left" =~ ^[0-9]+$ ]] &&
+  [[ "$top" =~ ^[0-9]+$ ]] &&
+  [[ "$right" =~ ^[0-9]+$ ]] &&
+  [[ "$bottom" =~ ^[0-9]+$ ]] || {
+    echo "ROBLOX_MAXIMIZED_CHECK_BOUNDS=INVALID:$package"
+    return 1
+  }
+
+  actual_width=$((right - left))
+  actual_height=$((bottom - top))
+  max_width_limit=$((screen_width * 92 / 100))
+  max_height_limit=$((screen_height * 88 / 100))
+
+  if [ "$actual_width" -ge "$max_width_limit" ] &&
+     [ "$actual_height" -ge "$max_height_limit" ]; then
+    echo "ROBLOX_MAXIMIZED_DETECTED=$package"
+    echo "ROBLOX_MAXIMIZED_BOUNDS=${left},${top},${right},${bottom}"
+    return 0
+  fi
+
+  return 1
+}
+
+ui_taskbar_semantic_reclick_roblox() {
+  local package="$1"
+  local component freeform_out launch_out rc
+
+  component="$(
+    su -c "cmd package resolve-activity --brief \
+      -a android.intent.action.MAIN \
+      -c android.intent.category.LAUNCHER \
+      '$package'" 2>/dev/null |
+      tail -n 1 |
+      tr -d '\r'
+  )"
+
+  case "$component" in
+    "$package"/*)
+      ;;
+    *)
+      echo "ROBLOX_RECLICK_LAUNCHER=NOT_FOUND:$package"
+      return 1
+      ;;
+  esac
+
+  echo "ROBLOX_RECLICK_TARGET=$package"
+
+  set +e
+  freeform_out="$(
+    su -c "am start --windowingMode 5 \
+      -n com.farmerbb.taskbar/.activity.InvisibleActivityFreeform" \
+      2>&1
+  )"
+  rc=$?
+  set -e
+
+  if [ "$rc" -ne 0 ] ||
+     printf '%s\n' "$freeform_out" |
+       grep -qiE 'Error|Exception|Security|Unknown'; then
+    echo "ROBLOX_RECLICK_FREEFORM_HACK=FAILED:$package"
+    return 1
+  fi
+
+  sleep 1
+
+  set +e
+  launch_out="$(
+    su -c "am start --windowingMode 5 \
+      -f 0x30000000 \
+      -a android.intent.action.MAIN \
+      -c android.intent.category.LAUNCHER \
+      -n '$component'" \
+      2>&1
+  )"
+  rc=$?
+  set -e
+
+  if [ "$rc" -ne 0 ] ||
+     printf '%s\n' "$launch_out" |
+       grep -qiE 'Error|Exception|Security|Unknown'; then
+    echo "ROBLOX_RECLICK_LAUNCH=FAILED:$package"
+    return 1
+  fi
+
+  echo "ROBLOX_RECLICK_LAUNCH=STARTED:$package"
+  return 0
+}
+
+ui_recover_maximized_roblox() {
+  local package="$1"
+  local attempt
+
+  for attempt in 1 2 3; do
+    if ! ui_roblox_maximized_like "$package"; then
+      if ui_resize_roblox_task_landscape "$package"; then
+        if ! ui_roblox_maximized_like "$package"; then
+          echo "ROBLOX_RECLICK_RECOVERY=NOT_NEEDED_OR_RECOVERED:$package"
+          return 0
+        fi
+      fi
+    fi
+
+    echo "ROBLOX_RECLICK_RECOVERY_ATTEMPT=${attempt}:$package"
+
+    if ! ui_taskbar_semantic_reclick_roblox "$package"; then
+      sleep 1
+      continue
+    fi
+
+    sleep 2
+    ui_resize_roblox_task_landscape "$package" || true
+    sleep 2
+
+    if ! ui_roblox_maximized_like "$package"; then
+      if ui_resize_roblox_task_landscape "$package"; then
+        echo "ROBLOX_RECLICK_RECOVERY=OK:$package"
+        return 0
+      fi
+    fi
+  done
+
+  echo "ROBLOX_RECLICK_RECOVERY=FAILED:$package"
+  return 1
+}
+
+ui_recover_all_maximized_roblox() {
+  local package failures=0 detected=0
+  local installed=("$@")
+
+  for package in "${installed[@]}"; do
+    if ui_roblox_maximized_like "$package"; then
+      detected=$((detected + 1))
+      if ! ui_recover_maximized_roblox "$package"; then
+        failures=$((failures + 1))
+      fi
+    fi
+  done
+
+  echo "ROBLOX_RECLICK_DETECTED_COUNT=$detected"
+  echo "ROBLOX_RECLICK_FAILURES=$failures"
+  [ "$failures" -eq 0 ]
+}
+
 ui_normalize_all_roblox_landscape() {
   local package pass idx failures
   local installed=("$@")
@@ -3615,18 +3777,32 @@ ui_normalize_all_roblox_landscape() {
 
     if [ "$pass" = 1 ]; then
       for package in "${installed[@]}"; do
-        if ! ui_resize_roblox_task_landscape "$package"; then
-          echo "ROBLOX_NORMALIZE_PACKAGE_NEEDS_ATTENTION=$package"
-          failures=$((failures + 1))
+        if ui_roblox_maximized_like "$package"; then
+          if ! ui_recover_maximized_roblox "$package"; then
+            echo "ROBLOX_NORMALIZE_RECLICK_NEEDS_ATTENTION=$package"
+            failures=$((failures + 1))
+          fi
+        elif ! ui_resize_roblox_task_landscape "$package"; then
+          if ! ui_recover_maximized_roblox "$package"; then
+            echo "ROBLOX_NORMALIZE_PACKAGE_NEEDS_ATTENTION=$package"
+            failures=$((failures + 1))
+          fi
         fi
         sleep 1
       done
     else
       for ((idx=${#installed[@]} - 1; idx >= 0; idx--)); do
         package="${installed[$idx]}"
-        if ! ui_resize_roblox_task_landscape "$package"; then
-          echo "ROBLOX_NORMALIZE_PACKAGE_NEEDS_ATTENTION=$package"
-          failures=$((failures + 1))
+        if ui_roblox_maximized_like "$package"; then
+          if ! ui_recover_maximized_roblox "$package"; then
+            echo "ROBLOX_NORMALIZE_RECLICK_NEEDS_ATTENTION=$package"
+            failures=$((failures + 1))
+          fi
+        elif ! ui_resize_roblox_task_landscape "$package"; then
+          if ! ui_recover_maximized_roblox "$package"; then
+            echo "ROBLOX_NORMALIZE_PACKAGE_NEEDS_ATTENTION=$package"
+            failures=$((failures + 1))
+          fi
         fi
         sleep 1
       done
@@ -3635,13 +3811,19 @@ ui_normalize_all_roblox_landscape() {
     echo "ROBLOX_NORMALIZE_FAILURES=$failures"
     sleep 3
 
+    ui_recover_all_maximized_roblox "${installed[@]}" || true
+    sleep 2
+
     if ui_assert_all_roblox_not_maximized "${installed[@]}"; then
       echo "ROBLOX_NORMALIZE_PASS_OK=$pass"
       sleep 3
+      ui_recover_all_maximized_roblox "${installed[@]}" || true
+
       if ui_assert_all_roblox_not_maximized "${installed[@]}"; then
         echo "ROBLOX_NORMALIZE_STABLE=YES"
         return 0
       fi
+
       echo "ROBLOX_NORMALIZE_STABILITY_RECHECK=FAILED"
     fi
   done
@@ -3677,6 +3859,8 @@ ui_open_all_roblox() {
   echo "ROBLOX_INTERMEDIATE_FAILURES=$intermediate_failures"
   sleep 3
 
+  ui_recover_all_maximized_roblox "${installed[@]}" || true
+
   if ! ui_normalize_all_roblox_landscape "${installed[@]}"; then
     echo "ROBLOX_FINAL_NORMALIZE=NEEDS_ATTENTION"
   else
@@ -3684,34 +3868,40 @@ ui_open_all_roblox() {
   fi
 
   sleep 3
+  ui_recover_all_maximized_roblox "${installed[@]}" || true
+  sleep 2
 
   if ui_assert_all_roblox_landscape_freeform "${installed[@]}" &&
      ui_assert_all_roblox_not_maximized "${installed[@]}"; then
     echo "ROBLOX_STABILITY_CHECK_1=OK"
     sleep 4
 
+    ui_recover_all_maximized_roblox "${installed[@]}" || true
+
     if ui_assert_all_roblox_landscape_freeform "${installed[@]}" &&
        ui_assert_all_roblox_not_maximized "${installed[@]}"; then
       echo "ROBLOX_STABILITY_CHECK_2=OK"
-      echo "ROBLOX_OPEN_ALL=OK_STABLE_LANDSCAPE_FREEFORM"
+      echo "ROBLOX_OPEN_ALL=OK_TASKBAR_RECLICK_STABLE"
       return 0
     fi
   fi
 
   echo "ROBLOX_STABILITY_RECOVERY=START"
+  ui_recover_all_maximized_roblox "${installed[@]}" || true
 
   if ui_normalize_all_roblox_landscape "${installed[@]}"; then
     sleep 4
+    ui_recover_all_maximized_roblox "${installed[@]}" || true
 
     if ui_assert_all_roblox_landscape_freeform "${installed[@]}" &&
        ui_assert_all_roblox_not_maximized "${installed[@]}"; then
       echo "ROBLOX_STABILITY_RECOVERY=OK"
-      echo "ROBLOX_OPEN_ALL=OK_STABLE_LANDSCAPE_FREEFORM_AFTER_RECOVERY"
+      echo "ROBLOX_OPEN_ALL=OK_TASKBAR_RECLICK_STABLE_AFTER_RECOVERY"
       return 0
     fi
   fi
 
-  echo "ROBLOX_OPEN_ALL=NEEDS_ATTENTION_UNSTABLE_OR_MAXIMIZED"
+  echo "ROBLOX_OPEN_ALL=NEEDS_ATTENTION_TASKBAR_RECLICK_FAILED"
   return 1
 }
 
@@ -3782,7 +3972,7 @@ ui_post_prepare() {
   local failures=0 gate_rc=0
 
   echo "UI_POST_AUTOMATION=START"
-  echo "UI_POST_AUTOMATION_VERSION=8"
+  echo "UI_POST_AUTOMATION_VERSION=9"
 
   if ! root_ok; then
     echo "UI_ROOT=NEEDS_ATTENTION"
