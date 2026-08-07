@@ -483,6 +483,88 @@ async function setFleetDeviceRevocation(
   }
 }
 
+async function enqueueFastCommand(
+  env,
+  commandId,
+  deviceIds,
+  expiresAt,
+  commandBlock
+) {
+  const result = await fleetStateCall(
+    env,
+    "/command/enqueue",
+    {
+      method: "POST",
+      body: {
+        command_id: commandId,
+        device_ids: deviceIds,
+        expires_at: expiresAt,
+        command_block: commandBlock,
+      },
+    }
+  );
+
+  if (!result.response.ok) {
+    throw new Error(
+      result.data?.error ||
+      `Fast command HTTP ${result.response.status}`
+    );
+  }
+
+  return result.data;
+}
+
+async function handleAgentCommandWebSocket(
+  request,
+  env,
+  url
+) {
+  if (!isAuthorizedAgentRequest(request, env)) {
+    return noStoreJson(
+      { ok: false, error: "unauthorized" },
+      401
+    );
+  }
+
+  if (
+    String(request.headers.get("Upgrade") || "").toLowerCase()
+    !== "websocket"
+  ) {
+    return noStoreJson(
+      { ok: false, error: "upgrade_required" },
+      426
+    );
+  }
+
+  const deviceId = normalizeDeviceId(
+    url.searchParams.get("device_id")
+  );
+
+  if (!deviceId) {
+    return noStoreJson(
+      { ok: false, error: "invalid_device_id" },
+      400
+    );
+  }
+
+  if (await isDeviceRevoked(deviceId, env)) {
+    return noStoreJson(
+      { ok: false, error: "device_revoked" },
+      410
+    );
+  }
+
+  return fleetStateStub(env).fetch(
+    new Request(
+      `https://fleet-state.internal/command/ws?id=${encodeURIComponent(deviceId)}`,
+      {
+        method: "GET",
+        headers: { Upgrade: "websocket" },
+      }
+    )
+  );
+}
+
 
 async function deviceIdsForTarget(target, env) {
   const wantedGroup =
@@ -1996,6 +2078,21 @@ async function dispatchCommandSpec(
     env,
     currentFile
   );
+  try {
+    await enqueueFastCommand(
+      env,
+      commandId,
+      deviceIds,
+      expiresAt,
+      envelope
+    );
+  } catch (error) {
+    console.error(
+      "fast_command_enqueue_failed",
+      error?.message || error
+    );
+  }
+
 
   let metadataStored = true;
   try {
@@ -3191,6 +3288,17 @@ export default {
   async fetch(request, env) {
     try {
       const url = new URL(request.url);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/agent/commands/ws"
+      ) {
+        return await handleAgentCommandWebSocket(
+          request,
+          env,
+          url
+        );
+      }
+
 
       if (request.method === "GET" && url.pathname === "/") {
         return text("Aotscript Control Bot is online");

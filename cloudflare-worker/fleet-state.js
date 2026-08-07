@@ -5,6 +5,11 @@ import {
 
 const REVOCATION_RECHECK_MS =
   10 * 60 * 1000;
+const COMMAND_QUEUE_PREFIX = "command_queue:";
+const COMMAND_QUEUE_MAX = 64;
+const COMMAND_BLOCK_MAX_BYTES = 64 * 1024;
+const COMMAND_MAX_TARGETS = 1000;
+
 
 function json(
   value,
@@ -380,6 +385,195 @@ export class FleetState
       records,
     });
   }
+  commandQueueKey(deviceId) {
+    return `${COMMAND_QUEUE_PREFIX}${deviceId}`;
+  }
+
+  commandSocketTag(deviceId) {
+    return `command:${deviceId}`;
+  }
+
+  cleanCommandQueue(value, now = Date.now()) {
+    if (!Array.isArray(value)) return [];
+    const result = [];
+    const seen = new Set();
+    for (const item of value) {
+      const commandId = String(item?.command_id || "").trim();
+      const expiresAt = Number(item?.expires_at);
+      const block = typeof item?.command_block === "string"
+        ? item.command_block
+        : "";
+      if (
+        !/^[\w-]{1,128}$/.test(commandId) ||
+        !Number.isFinite(expiresAt) ||
+        expiresAt <= now ||
+        !block ||
+        new TextEncoder().encode(block).length > COMMAND_BLOCK_MAX_BYTES ||
+        seen.has(commandId)
+      ) {
+        continue;
+      }
+      seen.add(commandId);
+      result.push({
+        command_id: commandId,
+        expires_at: expiresAt,
+        command_block: block,
+      });
+    }
+    return result.slice(-COMMAND_QUEUE_MAX);
+  }
+
+  async readCommandQueue(deviceId) {
+    return this.cleanCommandQueue(
+      await this.ctx.storage.get(this.commandQueueKey(deviceId))
+    );
+  }
+
+  async writeCommandQueue(deviceId, value) {
+    const key = this.commandQueueKey(deviceId);
+    const queue = this.cleanCommandQueue(value);
+    if (queue.length === 0) {
+      await this.ctx.storage.delete(key);
+      return;
+    }
+    await this.ctx.storage.put(key, queue);
+  }
+
+  sendCommandToSockets(deviceId, item) {
+    const sockets = this.ctx.getWebSockets(
+      this.commandSocketTag(deviceId)
+    );
+    if (sockets.length === 0) return 0;
+    const payload = JSON.stringify({
+      type: "command",
+      command_id: item.command_id,
+      expires_at: item.expires_at,
+      command_block: item.command_block,
+    });
+    let sent = 0;
+    for (const socket of sockets) {
+      try {
+        socket.send(payload);
+        sent += 1;
+      } catch (error) {
+        // GitHub fallback remains authoritative.
+      }
+    }
+    return sent;
+  }
+
+  async flushCommandQueue(deviceId) {
+    const queue = await this.readCommandQueue(deviceId);
+    if (queue.length === 0) return;
+    const remaining = [];
+    for (const item of queue) {
+      if (this.sendCommandToSockets(deviceId, item) === 0) {
+        remaining.push(item);
+      }
+    }
+    await this.writeCommandQueue(deviceId, remaining);
+  }
+
+  async enqueueCommand(request) {
+    const body = await this.readJson(request);
+    const commandId = String(body?.command_id || "").trim();
+    const expiresAt = Number(body?.expires_at);
+    const block = typeof body?.command_block === "string"
+      ? body.command_block
+      : "";
+    const rawIds = Array.isArray(body?.device_ids) ? body.device_ids : [];
+    if (
+      !body ||
+      !/^[\w-]{1,128}$/.test(commandId) ||
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= Date.now() ||
+      !block ||
+      new TextEncoder().encode(block).length > COMMAND_BLOCK_MAX_BYTES ||
+      rawIds.length < 1 ||
+      rawIds.length > COMMAND_MAX_TARGETS
+    ) {
+      return json({ ok: false, error: "invalid_command" }, 400);
+    }
+    const expected = `# telegram_command_id=${commandId}`;
+    if (!block.split(/\r?\n/).map((line) => line.trim()).includes(expected)) {
+      return json({ ok: false, error: "command_id_mismatch" }, 400);
+    }
+    const ids = [];
+    const seen = new Set();
+    for (const raw of rawIds) {
+      const deviceId = validDeviceId(raw);
+      if (!deviceId || seen.has(deviceId)) continue;
+      seen.add(deviceId);
+      ids.push(deviceId);
+    }
+    if (ids.length === 0) {
+      return json({ ok: false, error: "no_valid_devices" }, 400);
+    }
+    const item = {
+      command_id: commandId,
+      expires_at: expiresAt,
+      command_block: block,
+    };
+    let pushed = 0;
+    let queued = 0;
+    for (const deviceId of ids) {
+      if (this.sendCommandToSockets(deviceId, item) > 0) {
+        pushed += 1;
+        continue;
+      }
+      let queue = await this.readCommandQueue(deviceId);
+      queue = queue.filter((old) => old.command_id !== commandId);
+      queue.push(item);
+      await this.writeCommandQueue(deviceId, queue);
+      queued += 1;
+    }
+    return json({
+      ok: true,
+      command_id: commandId,
+      device_count: ids.length,
+      pushed,
+      queued,
+    });
+  }
+
+  async connectCommandWebSocket(url, request) {
+    const deviceId = validDeviceId(url.searchParams.get("id"));
+    if (!deviceId) {
+      return json({ ok: false, error: "invalid_device_id" }, 400);
+    }
+    if (
+      String(request.headers.get("Upgrade") || "").toLowerCase()
+      !== "websocket"
+    ) {
+      return json({ ok: false, error: "upgrade_required" }, 426);
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.ctx.acceptWebSocket(
+      server,
+      [this.commandSocketTag(deviceId)]
+    );
+    this.ctx.waitUntil(this.flushCommandQueue(deviceId));
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    });
+  }
+
+  webSocketMessage(socket, message) {
+    if (message === "ping") {
+      try {
+        socket.send("pong");
+      } catch (error) {
+        // Runtime cleans dead sockets.
+      }
+    }
+  }
+
+  webSocketClose() {}
+
+  webSocketError() {}
+
 
   async setRevocation(
     request,
@@ -418,6 +612,9 @@ export class FleetState
         deviceId
       )
     );
+    await this.ctx.storage.delete(
+      this.commandQueueKey(deviceId)
+    );
     return json({
       ok: true,
       device_id: deviceId,
@@ -428,6 +625,20 @@ export class FleetState
   async fetch(request) {
     const url =
       new URL(request.url);
+    if (
+      request.method === "POST" &&
+      url.pathname === "/command/enqueue"
+    ) {
+      return this.enqueueCommand(request);
+    }
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/command/ws"
+    ) {
+      return this.connectCommandWebSocket(url, request);
+    }
+
     if (
       request.method ===
         "POST" &&

@@ -13,6 +13,11 @@ import hashlib
 import threading
 import shutil
 import urllib.error
+import base64
+import queue
+import socket
+import ssl
+import struct
 
 # ==========================================
 # CẤU HÌNH CLOUD & HỆ THỐNG
@@ -896,8 +901,31 @@ def get_command_sources(group):
 def fetch_commands_for_group(group):
     if not group:
         return None, None
-    common_text = fetch_text(COMMON_COMMAND_URL, "COMMON")
-    group_text = fetch_text(GROUP_COMMAND_URLS.get(group, ""), group)
+
+    common_text = fetch_text(
+        COMMON_COMMAND_URL,
+        "COMMON",
+    )
+    group_text = fetch_text(
+        GROUP_COMMAND_URLS.get(group, ""),
+        group,
+    )
+
+    fast_blocks = drain_fast_command_blocks()
+    if fast_blocks:
+        fast_text = "\n\n".join(
+            block.strip("\n")
+            for block in fast_blocks
+            if isinstance(block, str) and block.strip()
+        )
+        if fast_text:
+            base = (common_text or "").rstrip("\n")
+            common_text = (
+                (base + "\n\n" if base else "")
+                + fast_text
+                + "\n"
+            )
+
     return common_text, group_text
 
 
@@ -2093,6 +2121,251 @@ def setup_vip_servers():
     except Exception as e:
         log_error("setup_vip_servers", e)
 
+
+FAST_COMMAND_QUEUE = queue.Queue(maxsize=128)
+FAST_COMMAND_WAKE = threading.Event()
+FAST_COMMAND_MAX_BYTES = 64 * 1024
+
+def fast_idle_wait(seconds=15):
+    FAST_COMMAND_WAKE.wait(seconds)
+    FAST_COMMAND_WAKE.clear()
+
+
+def drain_fast_command_blocks():
+    blocks = []
+    while True:
+        try:
+            blocks.append(
+                FAST_COMMAND_QUEUE.get_nowait()
+            )
+        except queue.Empty:
+            break
+    return blocks
+
+
+def queue_fast_command_block(command_id, block):
+    command_id = str(command_id or "").strip()
+    if not re.fullmatch(r"[\w-]{1,128}", command_id):
+        return False
+    if not isinstance(block, str):
+        return False
+    raw = block.encode("utf-8")
+    if not raw or len(raw) > FAST_COMMAND_MAX_BYTES:
+        return False
+    expected = f"# telegram_command_id={command_id}"
+    if expected not in {line.strip() for line in block.splitlines()}:
+        return False
+    try:
+        FAST_COMMAND_QUEUE.put_nowait(block)
+    except queue.Full:
+        try:
+            FAST_COMMAND_QUEUE.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            FAST_COMMAND_QUEUE.put_nowait(block)
+        except queue.Full:
+            return False
+    FAST_COMMAND_WAKE.set()
+    print(f"FAST_COMMAND_RECEIVED={command_id}")
+    return True
+
+
+def fast_command_ws_url(report_url, device_id):
+    parsed = urllib.parse.urlparse(str(report_url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    query = urllib.parse.urlencode({"device_id": device_id})
+    return urllib.parse.urlunparse((
+        scheme,
+        parsed.netloc,
+        "/agent/commands/ws",
+        "",
+        query,
+        "",
+    ))
+
+
+def fast_ws_read_exact(sock, size):
+    chunks = []
+    remain = size
+    while remain > 0:
+        chunk = sock.recv(remain)
+        if not chunk:
+            raise ConnectionError("websocket_closed")
+        chunks.append(chunk)
+        remain -= len(chunk)
+    return b"".join(chunks)
+
+
+def fast_ws_read_headers(sock):
+    data = bytearray()
+    while not data.endswith(b"\r\n\r\n"):
+        if len(data) >= 16384:
+            raise RuntimeError("websocket_headers_too_large")
+        chunk = sock.recv(1)
+        if not chunk:
+            raise ConnectionError("websocket_handshake_closed")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def fast_ws_send_frame(sock, opcode, payload=b""):
+    payload = bytes(payload)
+    first = 0x80 | (opcode & 0x0F)
+    length = len(payload)
+    mask = os.urandom(4)
+    if length < 126:
+        header = bytes([first, 0x80 | length])
+    elif length <= 0xFFFF:
+        header = bytes([first, 0x80 | 126]) + struct.pack("!H", length)
+    else:
+        header = bytes([first, 0x80 | 127]) + struct.pack("!Q", length)
+    body = bytes(
+        value ^ mask[index % 4]
+        for index, value in enumerate(payload)
+    )
+    sock.sendall(header + mask + body)
+
+
+def fast_ws_recv_frame(sock):
+    header = fast_ws_read_exact(sock, 2)
+    first, second = header
+    fin = bool(first & 0x80)
+    opcode = first & 0x0F
+    masked = bool(second & 0x80)
+    length = second & 0x7F
+    if length == 126:
+        length = struct.unpack("!H", fast_ws_read_exact(sock, 2))[0]
+    elif length == 127:
+        length = struct.unpack("!Q", fast_ws_read_exact(sock, 8))[0]
+    if length > FAST_COMMAND_MAX_BYTES + 4096:
+        raise RuntimeError("websocket_frame_too_large")
+    mask = fast_ws_read_exact(sock, 4) if masked else b""
+    payload = fast_ws_read_exact(sock, length)
+    if masked:
+        payload = bytes(
+            value ^ mask[index % 4]
+            for index, value in enumerate(payload)
+        )
+    if not fin:
+        raise RuntimeError("websocket_fragmented_frame")
+    return opcode, payload
+
+
+def fast_ws_connect(ws_url, secret):
+    parsed = urllib.parse.urlparse(ws_url)
+    if parsed.scheme not in ("ws", "wss") or not parsed.hostname:
+        raise RuntimeError("invalid_fast_command_url")
+    secure = parsed.scheme == "wss"
+    port = parsed.port or (443 if secure else 80)
+    raw_sock = socket.create_connection((parsed.hostname, port), timeout=10)
+    try:
+        if secure:
+            context = ssl.create_default_context()
+            sock = context.wrap_socket(raw_sock, server_hostname=parsed.hostname)
+        else:
+            sock = raw_sock
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        host = parsed.hostname
+        if parsed.port and parsed.port not in (80, 443):
+            host = f"{host}:{parsed.port}"
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        request = "\r\n".join([
+            f"GET {path} HTTP/1.1",
+            f"Host: {host}",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            f"Sec-WebSocket-Key: {key}",
+            "Sec-WebSocket-Version: 13",
+            "User-Agent: Aotscript-Agent",
+            f"X-Agent-Secret: {secret}",
+            "",
+            "",
+        ])
+        sock.sendall(request.encode("utf-8"))
+        response = fast_ws_read_headers(sock).decode("iso-8859-1", errors="replace")
+        status = response.split("\r\n", 1)[0]
+        if " 101 " not in (status + " "):
+            raise RuntimeError("websocket_upgrade_rejected")
+        headers = {}
+        for line in response.split("\r\n")[1:]:
+            if ":" not in line:
+                continue
+            name, value = line.split(":", 1)
+            headers[name.strip().lower()] = value.strip()
+        expected = base64.b64encode(
+            hashlib.sha1(
+                (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+            ).digest()
+        ).decode("ascii")
+        if headers.get("sec-websocket-accept") != expected:
+            raise RuntimeError("websocket_accept_invalid")
+        sock.settimeout(30)
+        return sock
+    except Exception:
+        try:
+            raw_sock.close()
+        except Exception:
+            pass
+        raise
+
+
+def fast_command_listener(stop_event, device_id):
+    backoff = 2
+    while not stop_event.is_set():
+        sock = None
+        try:
+            cfg = load_agent_config()
+            report_url = cfg.get("worker_report_url")
+            secret = cfg.get("agent_report_secret")
+            ws_url = fast_command_ws_url(report_url, device_id)
+            if not ws_url or not secret:
+                stop_event.wait(15)
+                continue
+            sock = fast_ws_connect(ws_url, secret)
+            backoff = 2
+            print("FAST_COMMAND_CHANNEL=CONNECTED")
+            while not stop_event.is_set():
+                try:
+                    opcode, payload = fast_ws_recv_frame(sock)
+                except socket.timeout:
+                    fast_ws_send_frame(sock, 0x9, b"")
+                    continue
+                if opcode == 0x8:
+                    raise ConnectionError("websocket_closed")
+                if opcode == 0x9:
+                    fast_ws_send_frame(sock, 0xA, payload)
+                    continue
+                if opcode == 0xA:
+                    continue
+                if opcode != 0x1:
+                    continue
+                try:
+                    message = json.loads(payload.decode("utf-8"))
+                except Exception:
+                    continue
+                if not isinstance(message, dict) or message.get("type") != "command":
+                    continue
+                queue_fast_command_block(
+                    message.get("command_id"),
+                    message.get("command_block"),
+                )
+        except Exception as error:
+            print("FAST_COMMAND_CHANNEL=RECONNECT:" + type(error).__name__)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        if stop_event.wait(backoff):
+            break
+        backoff = min(backoff * 2, 30)
+
 if __name__ == "__main__":
     # ==========================================
     # HỆ THỐNG LẮNG NGHE LỆNH (ĐÃ FIX CHỐNG CACHE)
@@ -2117,12 +2390,18 @@ if __name__ == "__main__":
             daemon=True,
         )
         hb_thread.start()
+        fast_thread = threading.Thread(
+            target=fast_command_listener,
+            args=(stop_event, device_id),
+            daemon=True,
+        )
+        fast_thread.start()
 
     while True:
         group = get_device_group()
         if group is None:
             print("[!] Không xác định được device group. Kiểm tra device_group.txt và thử lại sau.")
-            time.sleep(15)
+            fast_idle_wait(15)
             continue
 
         if group != state.get("device_group"):
@@ -2140,7 +2419,7 @@ if __name__ == "__main__":
         common_text, group_text = fetch_commands_for_group(group)
         if common_text is None and group_text is None:
             print("[!] Không thể tải lệnh từ cả common và group sources. Thử lại sau.")
-            time.sleep(15)
+            fast_idle_wait(15)
             continue
 
         common_hash = (
@@ -2164,7 +2443,7 @@ if __name__ == "__main__":
         )
 
         if not common_changed and not group_changed:
-            time.sleep(15)
+            fast_idle_wait(15)
             continue
 
         changed_sources = []
@@ -2604,4 +2883,4 @@ if __name__ == "__main__":
             i += 1
 
         print(f"\n[*] ĐÃ THỰC HIỆN XONG TOÀN BỘ LỆNH. CHỜ VIỆC TIẾP THEO...\nDetected {total_detected} actionable lines.")
-        time.sleep(15)
+        fast_idle_wait(15)
