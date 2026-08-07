@@ -3,12 +3,7 @@
 # telegram_command_id=1786106999275-13126473
 IDLE
 
-# telegram_target_ids=m37
-# telegram_expires_at=1786108184446
-# telegram_command_id=1786107884446-ac20f738
-IDLE
-
-# telegram_target_ids=m37
-# telegram_expires_at=1786108315495
-# telegram_command_id=1786108015495-581c7ab2
-REBOOT
+# telegram_target_ids=m37,m116,m117
+# telegram_expires_at=1786194780926
+# telegram_command_id=1786108380926-a4ebc205
+/script all https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Novagag2
