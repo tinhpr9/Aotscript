@@ -4054,10 +4054,7 @@ async function executeSessionCommands(
             );
           }
 
-          return (
-            `/script ${state.target} ` +
-            `${state.scriptUrl}`
-          );
+          return `Updatescript ${state.scriptUrl}`;
         }
 
         return COMMANDS[key].value;
@@ -5166,7 +5163,7 @@ async function executeScriptCommand(
       commandKeys:
         ["update_script"],
       commandLines:
-        [`/script ${target} ${url}`],
+        [`Updatescript ${url}`],
     },
     env
   );
