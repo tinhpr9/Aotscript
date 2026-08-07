@@ -10,6 +10,8 @@ LOG="/sdcard/Download/Agent_Log.txt"
 ID_FILE="/sdcard/Download/Shouko/device_id.txt"
 GROUP_FILE="/sdcard/Download/Shouko/device_group.txt"
 CONFIG_FILE="/sdcard/Download/Shouko/agent_config.json"
+STATE_FILE="${AOTSCRIPT_STATE_FILE:-$HOME/.local/state/aotscript/mprovision.json}"
+MPROVISION="/data/data/com.termux/files/usr/bin/mprovision"
 LOCK_DIR="$HOME/.cache/aotscript-agent-start.lock"
 
 mkdir -p "/sdcard/Download/Shouko" "$HOME/.cache"
@@ -52,6 +54,66 @@ for pid in sorted(set(pids)):
 __AOTSCRIPT_AGENT_PID_SCAN_V2_PY__
 }
 
+resolve_provision_ref() {
+  "$PYTHON" - "$STATE_FILE" <<'PY_AOTSCRIPT_BOOT_REF'
+import json
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    print("main")
+    raise SystemExit(0)
+
+phase = str(data.get("phase", "")).strip()
+ref = str(data.get("provision_ref", "")).strip()
+
+if phase and phase != "complete" and re.fullmatch(r"[0-9a-f]{40}", ref):
+    print(ref)
+else:
+    print("main")
+PY_AOTSCRIPT_BOOT_REF
+}
+
+provision_incomplete() {
+  "$PYTHON" - "$STATE_FILE" <<'PY_AOTSCRIPT_BOOT_INCOMPLETE'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+phase = str(data.get("phase", "")).strip()
+raise SystemExit(0 if phase and phase != "complete" else 1)
+PY_AOTSCRIPT_BOOT_INCOMPLETE
+}
+
+PROVISION_REF="$(resolve_provision_ref)"
+
+resume_provision() {
+  local pid
+
+  [ -x "$MPROVISION" ] || return 0
+  provision_incomplete || return 0
+
+  nohup env \
+    AOTSCRIPT_PROVISION_REF="$PROVISION_REF" \
+    "$MPROVISION" reconcile \
+    >> "$LOG" 2>&1 &
+
+  pid=$!
+  echo "[OK] mprovision reconcile đã chạy nền PID=$pid"
+}
+
 {
   echo
   echo "===== AGENT BOOT $(date '+%Y-%m-%d %H:%M:%S') ====="
@@ -86,6 +148,7 @@ __AOTSCRIPT_AGENT_PID_SCAN_V2_PY__
   if [ "${#RUNNING_AGENT_PIDS[@]}" -gt 0 ]; then
     echo "[SKIP] Agent đang chạy, không khởi động thêm:"
     printf '[PID] %s\n' "${RUNNING_AGENT_PIDS[@]}"
+    resume_provision
     exit 0
   fi
 
@@ -186,7 +249,7 @@ PY
   if ! "$CURL" -fsSL \
     --retry 3 \
     --connect-timeout 15 \
-    "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/agent?t=$(date +%s)" \
+    "https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF/agent?t=$(date +%s)" \
     -o "$TEMP"
   then
     echo "[LỖI] Không tải được Agent từ GitHub."
@@ -228,4 +291,6 @@ compile(source, sys.argv[1], "exec")
     echo "[LỖI] Agent thoát ngay sau khi khởi động."
     exit 1
   fi
+
+  resume_provision
 } >> "$LOG" 2>&1

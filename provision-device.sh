@@ -1,8 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase18-manual-taskbar-v1"
-RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
+VERSION="phase21-one-brain-core-v1"
+PROVISION_REF="${AOTSCRIPT_PROVISION_REF:-main}"
+[[ "$PROVISION_REF" =~ ^(main|[0-9a-f]{40})$ ]] || {
+  printf '[LỖI] provision ref không hợp lệ: %s\n' "$PROVISION_REF" >&2
+  exit 1
+}
+RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
 DL="${MPROVISION_DL:-$SD/Download}"
@@ -10,6 +15,7 @@ SHOUKO="$DL/Shouko"
 DELTA="$SD/Delta"
 STATE_DIR="${MPROVISION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/aotscript}"
 STATE="$STATE_DIR/mprovision.json"
+RUN_LOCK_DIR="$STATE_DIR/mprovision.run.lock"
 BACKUPS="${MPROVISION_BACKUPS:-$SD/Aotscript-Backups}"
 SWIFT_APK="$DL/SwiftBackup.apk"
 WINTERHUB="${MPROVISION_WINTERHUB:-$HOME/.termux/boot/winterhub.sh}"
@@ -44,6 +50,8 @@ Lần đầu:
 
 Điều khiển:
   mprovision status
+  mprovision intent
+  mprovision reconcile
   mprovision checklist
   mprovision audit
   mprovision done pre
@@ -135,6 +143,44 @@ print(value if isinstance(value, str) else str(value))
 __MP_STATE_GET_PY__
 }
 
+run_lock_acquire() {
+  local owner=""
+
+  mkdir -p "$STATE_DIR"
+
+  if mkdir "$RUN_LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$RUN_LOCK_DIR/pid"
+    return 0
+  fi
+
+  owner="$(cat "$RUN_LOCK_DIR/pid" 2>/dev/null || true)"
+
+  if [[ "$owner" =~ ^[0-9]+$ ]] &&
+     kill -0 "$owner" 2>/dev/null; then
+    die "mprovision đang chạy ở PID=$owner; không chạy đè"
+  fi
+
+  rm -f "$RUN_LOCK_DIR/pid" 2>/dev/null || true
+  rmdir "$RUN_LOCK_DIR" 2>/dev/null ||
+    die "Không dọn được run lock cũ"
+
+  mkdir "$RUN_LOCK_DIR" ||
+    die "Không lấy được run lock"
+
+  printf '%s\n' "$$" > "$RUN_LOCK_DIR/pid"
+}
+
+run_lock_release() {
+  local owner=""
+
+  [ -d "$RUN_LOCK_DIR" ] || return 0
+  owner="$(cat "$RUN_LOCK_DIR/pid" 2>/dev/null || true)"
+  [ "$owner" = "$$" ] || return 0
+
+  rm -f "$RUN_LOCK_DIR/pid" 2>/dev/null || true
+  rmdir "$RUN_LOCK_DIR" 2>/dev/null || true
+}
+
 install_wrapper() {
   local tmp stamp prefix
   mkdir -p "$HOME/bin"
@@ -143,14 +189,55 @@ install_wrapper() {
   cat > "$tmp" <<'__MP_WRAPPER__'
 #!/data/data/com.termux/files/usr/bin/bash
 set -u
+
+PYTHON="/data/data/com.termux/files/usr/bin/python"
+CURL="/data/data/com.termux/files/usr/bin/curl"
+BASH="/data/data/com.termux/files/usr/bin/bash"
+STATE_DIR="${MPROVISION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/aotscript}"
+STATE="${AOTSCRIPT_STATE_FILE:-$STATE_DIR/mprovision.json}"
+REF="${AOTSCRIPT_PROVISION_REF:-}"
+
+if [ -z "$REF" ] && [ -s "$STATE" ]; then
+  REF="$(
+    "$PYTHON" - "$STATE" <<'PY_MPROVISION_WRAPPER_REF'
+import json
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    print("main")
+    raise SystemExit(0)
+
+phase = str(data.get("phase", "")).strip()
+ref = str(data.get("provision_ref", "")).strip()
+
+if phase != "complete" and re.fullmatch(r"[0-9a-f]{40}", ref):
+    print(ref)
+else:
+    print("main")
+PY_MPROVISION_WRAPPER_REF
+  )"
+fi
+
+[[ "$REF" =~ ^(main|[0-9a-f]{40})$ ]] || REF="main"
+
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT INT TERM
-/data/data/com.termux/files/usr/bin/curl -fsSL --retry 3 --connect-timeout 15 \
-  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/provision-device.sh?t=$(date +%s)" \
+
+"$CURL" -fsSL --retry 3 --connect-timeout 15 \
+  "https://raw.githubusercontent.com/tinhpr9/Aotscript/$REF/provision-device.sh?t=$(date +%s)" \
   -o "$TMP" || exit 1
+
 [ -s "$TMP" ] || exit 1
-/data/data/com.termux/files/usr/bin/bash -n "$TMP" || exit 1
-/data/data/com.termux/files/usr/bin/bash "$TMP" "$@"
+"$BASH" -n "$TMP" || exit 1
+
+AOTSCRIPT_PROVISION_REF="$REF" \
+  "$BASH" "$TMP" "$@"
 __MP_WRAPPER__
   chmod 700 "$tmp"
   if [ -f "$WRAPPER" ] && cmp -s "$tmp" "$WRAPPER"; then
@@ -2108,7 +2195,7 @@ Cấu hình remote tên chính xác gdrive: trên máy này.
 Kết quả đúng: rclone lsd gdrive: chạy thành công.
 Không gửi token hoặc rclone.conf vào chat.
 
-Xong chạy: mprovision resume
+Xong chạy: mprovision reconcile
 ================================
 __MP_RCLONE__
 }
@@ -2125,7 +2212,7 @@ preflight() {
   install_wizard_shortcut
   if ! root_ok; then
     state_set phase=await_root
-    echo "ROOT chưa hoạt động. Bật root, kiểm tra su -c id, rồi chạy mprovision resume."
+    echo "ROOT chưa hoạt động. Bật root, kiểm tra su -c id, rồi chạy mprovision reconcile."
     return
   fi
   for cmd in bash curl python zip unzip sha256sum; do
@@ -2138,7 +2225,7 @@ preflight() {
 automatic() {
   if ! root_ok; then
     state_set phase=await_root_setup
-    echo "ROOT không hoạt động. Bật lại root rồi chạy mprovision resume."
+    echo "ROOT không hoạt động. Bật lại root rồi chạy mprovision reconcile."
     return
   fi
   rclone_ok || { pause_rclone before; return; }
@@ -3908,7 +3995,7 @@ status() {
   report_status="MISSING"
   publish_status="$(state_get publish_next_status)"
   [ -n "$publish_status" ] || publish_status="PENDING"
-  next="mprovision resume"
+  next="mprovision reconcile"
 
   [ -z "$(state_get manual_pre_confirmed_at)" ] ||
     pre_status="CONFIRMED"
@@ -3942,6 +4029,128 @@ status() {
   echo "PUBLISH_NEXT=$publish_status"
   echo "WIZARD_STEP=$(state_get wizard_step)"
   echo "NEXT=$next"
+}
+
+intent() {
+  local phase step action manual message ref run action_id=""
+
+  [ -s "$STATE" ] || {
+    echo "MPROVISION_INTENT=UNINITIALIZED"
+    return 1
+  }
+
+  phase="$(state_get phase)"
+  step="$(state_get wizard_step)"
+  ref="$(state_get provision_ref)"
+  run="$(state_get run_id)"
+
+  [ -n "$ref" ] || ref="$PROVISION_REF"
+
+  action="AUTO"
+  manual="NO"
+  message="Tự động tiếp tục"
+
+  case "$phase" in
+    preflight|await_root)
+      if root_ok; then
+        action="AUTO"
+        message="Root đã sẵn sàng"
+      else
+        action="ENABLE_ROOT"
+        manual="YES"
+        message="Bật root"
+      fi
+      ;;
+    manual_pre)
+      if ! root_ok; then
+        action="ENABLE_ROOT"
+        manual="YES"
+        message="Bật root"
+      elif ! google_account_present; then
+        action="OPEN_GOOGLE"
+        manual="YES"
+        message="Đăng nhập Google"
+      elif [ "$step" = "await_swift_backup_before" ]; then
+        action="CONFIRM_SWIFT_BACKUP"
+        manual="YES"
+        message="Xác nhận Swift backup trước"
+      else
+        action="OPEN_SWIFT_BACKUP"
+        manual="YES"
+        message="Backup Termux và dữ liệu cũ bằng Swift"
+      fi
+      ;;
+    await_root_setup)
+      if root_ok; then
+        action="AUTO"
+        message="Tiếp tục setup"
+      else
+        action="ENABLE_ROOT"
+        manual="YES"
+        message="Bật lại root"
+      fi
+      ;;
+    await_rclone_before|await_rclone_after)
+      action="RCLONE_REQUIRED"
+      manual="YES"
+      message="Cấu hình gdrive:"
+      ;;
+    automatic|finalize)
+      action="AUTO"
+      message="Tự động xử lý"
+      ;;
+    manual_post)
+      case "$step" in
+        manual_post_remaining)
+          action="MANUAL_POST"
+          manual="YES"
+          message="Hoàn tất các bước thủ công còn lại"
+          ;;
+        *)
+          action="OPEN_SWIFT_RESTORE"
+          manual="YES"
+          message="Khôi phục RESTORE_DATA bằng Swift"
+          ;;
+      esac
+      ;;
+    complete)
+      action="COMPLETE"
+      manual="NO"
+      message="Hoàn tất"
+      ;;
+    *)
+      action="INVALID_STATE"
+      manual="YES"
+      message="State không hợp lệ"
+      ;;
+  esac
+
+  if [ "$manual" = "YES" ]; then
+    action_id="$(
+      printf '%s|%s|%s|%s\n' \
+        "$(state_get device_id)" \
+        "$run" \
+        "$phase" \
+        "${step:-none}" |
+        sha256sum |
+        awk '{print substr($1,1,20)}'
+    )"
+  fi
+
+  echo "MPROVISION_INTENT=OK"
+  echo "DEVICE_ID=$(state_get device_id)"
+  echo "DEVICE_GROUP=$(state_get device_group)"
+  echo "PROVISION_REF=$ref"
+  echo "PHASE=$phase"
+  echo "STEP=$step"
+  echo "ACTION=$action"
+  echo "MANUAL_REQUIRED=$manual"
+  echo "ACTION_ID=$action_id"
+  echo "MESSAGE=$message"
+}
+
+reconcile() {
+  resume
 }
 
 resume() {
@@ -4374,6 +4583,15 @@ main() {
   local id group run
 
   case "${1:-}" in
+    self-test|status|checklist|audit|intent|-h|--help|help|"")
+      ;;
+    *)
+      run_lock_acquire
+      trap run_lock_release EXIT
+      ;;
+  esac
+
+  case "${1:-}" in
     self-test)
       [ "$#" = 1 ] ||
         die "self-test không nhận tham số"
@@ -4396,6 +4614,17 @@ main() {
         die "Cách dùng: mprovision done pre|post"
       install_wrapper
       done_checkpoint "$2"
+      ;;
+    intent)
+      [ "$#" = 1 ] ||
+        die "intent không nhận tham số"
+      intent
+      ;;
+    reconcile)
+      [ "$#" = 1 ] ||
+        die "reconcile không nhận tham số"
+      install_wrapper
+      reconcile
       ;;
     resume)
       [ "$#" = 1 ] ||
@@ -4470,6 +4699,7 @@ main() {
 
       state_set \
         version="$VERSION" \
+        provision_ref="$PROVISION_REF" \
         device_id="$id" \
         device_group="$group" \
         phase=preflight \

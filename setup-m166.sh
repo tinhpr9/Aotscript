@@ -7,6 +7,11 @@ warn() { echo "⚠️ $*"; }
 die()  { echo "❌ $*"; exit 1; }
 root() { su -c "$1"; }
 
+PROVISION_REF="${AOTSCRIPT_PROVISION_REF:-main}"
+[[ "$PROVISION_REF" =~ ^(main|[0-9a-f]{40})$ ]] ||
+  die "Provision ref không hợp lệ"
+RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
+
 usage() {
   echo "Cách dùng:"
   echo "  msetup 62 1"
@@ -1099,7 +1104,7 @@ AGENT_BOOT_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/01-agent.sh.$$"
 curl -fsSL \
   --retry 3 \
   --connect-timeout 15 \
-  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/Termuxboot?t=$(date +%s)" \
+  "$RAW/Termuxboot?t=$(date +%s)" \
   -o "$AGENT_BOOT_TMP" ||
     die "Không tải được Termuxboot mới nhất"
 
@@ -1172,7 +1177,7 @@ rm -f "$AGENT_STAGE"
 curl -fsSL \
   --retry 3 \
   --connect-timeout 15 \
-  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/agent?t=$(date +%s)" \
+  "$RAW/agent?t=$(date +%s)" \
   -o "$AGENT_STAGE" ||
     die "Không tải được Agent mới nhất"
 
