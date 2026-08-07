@@ -566,6 +566,431 @@ async function handleAgentCommandWebSocket(
 }
 
 
+const AOT_PROTOCOL_VERSION = "phase3-1";
+const AOT_MAX_JSON_BYTES = 384 * 1024;
+const AOT_MAX_TARGETS = 128;
+const AOT_ACTION_TTL_MAX_MS = 30 * 1000;
+
+function normalizeAotSessionId(value) {
+  const raw = String(value || "").trim();
+  return /^[A-Za-z0-9_-]{1,64}$/.test(raw)
+    ? raw
+    : null;
+}
+
+function normalizeAotActionId(value) {
+  const raw = String(value || "").trim();
+  return /^[A-Za-z0-9_-]{1,128}$/.test(raw)
+    ? raw
+    : null;
+}
+
+function normalizeAotFingerprint(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return /^[a-f0-9]{24}$/.test(raw)
+    ? raw
+    : null;
+}
+
+async function readAotJson(request) {
+  const length = Number(
+    request.headers.get("Content-Length") || 0
+  );
+  if (
+    Number.isFinite(length) &&
+    length > AOT_MAX_JSON_BYTES
+  ) {
+    return { error: "payload_too_large" };
+  }
+  const raw = await request.text();
+  if (
+    new TextEncoder().encode(raw).length >
+    AOT_MAX_JSON_BYTES
+  ) {
+    return { error: "payload_too_large" };
+  }
+  try {
+    const value = JSON.parse(raw);
+    return (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+    )
+      ? { value }
+      : { error: "invalid_json_body" };
+  } catch (error) {
+    return { error: "invalid_json_body" };
+  }
+}
+
+function normalizeAotAction(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const kind = String(value.kind || "");
+  if (kind === "tap_selector") {
+    const resourceId = String(
+      value.resource_id || ""
+    ).trim();
+    if (
+      !resourceId ||
+      resourceId.length > 200 ||
+      /[\u0000-\u001f\u007f]/.test(resourceId)
+    ) {
+      return null;
+    }
+    return {
+      kind,
+      resource_id: resourceId,
+    };
+  }
+  if (kind === "back") {
+    return { kind };
+  }
+  if (kind === "swipe") {
+    const values = [
+      Number(value.x1),
+      Number(value.y1),
+      Number(value.x2),
+      Number(value.y2),
+    ];
+    if (
+      values.some(
+        (item) =>
+          !Number.isFinite(item) ||
+          item < 0 ||
+          item > 1
+      )
+    ) {
+      return null;
+    }
+    const duration = Math.min(
+      5000,
+      Math.max(
+        50,
+        Number(value.duration_ms) || 300
+      )
+    );
+    return {
+      kind,
+      x1: values[0],
+      y1: values[1],
+      x2: values[2],
+      y2: values[3],
+      duration_ms: Math.round(duration),
+    };
+  }
+  return null;
+}
+
+async function handleAotControlWebSocket(
+  request,
+  env,
+  url
+) {
+  if (!isAuthorizedAgentRequest(request, env)) {
+    return noStoreJson(
+      { ok: false, error: "unauthorized" },
+      401
+    );
+  }
+  if (
+    String(
+      request.headers.get("Upgrade") || ""
+    ).toLowerCase() !== "websocket"
+  ) {
+    return noStoreJson(
+      { ok: false, error: "upgrade_required" },
+      426
+    );
+  }
+  const deviceId = normalizeDeviceId(
+    url.searchParams.get("device_id")
+  );
+  const role = String(
+    url.searchParams.get("role") || ""
+  ).trim();
+  const sessionId = normalizeAotSessionId(
+    url.searchParams.get("session_id")
+  );
+  if (
+    !deviceId ||
+    !["reference", "follower"].includes(role) ||
+    !sessionId
+  ) {
+    return noStoreJson(
+      { ok: false, error: "invalid_aot_socket" },
+      400
+    );
+  }
+  if (await isDeviceRevoked(deviceId, env)) {
+    return noStoreJson(
+      { ok: false, error: "device_revoked" },
+      410
+    );
+  }
+  const query = new URLSearchParams({
+    id: deviceId,
+    role,
+    session: sessionId,
+  });
+  return fleetStateStub(env).fetch(
+    new Request(
+      `https://fleet-state.internal/aot/ws?${query.toString()}`,
+      {
+        method: "GET",
+        headers: { Upgrade: "websocket" },
+      }
+    )
+  );
+}
+
+async function handleAotControlAction(
+  request,
+  env
+) {
+  if (!isAuthorizedAgentRequest(request, env)) {
+    return noStoreJson(
+      { ok: false, error: "unauthorized" },
+      401
+    );
+  }
+  const parsed = await readAotJson(request);
+  if (parsed.error) {
+    return noStoreJson(
+      { ok: false, error: parsed.error },
+      400
+    );
+  }
+  const body = parsed.value;
+  const sessionId = normalizeAotSessionId(
+    body.session_id
+  );
+  const referenceId = normalizeDeviceId(
+    body.reference_device_id
+  );
+  const actionId = normalizeAotActionId(
+    body.action_id
+  );
+  const precondition = normalizeAotFingerprint(
+    body.precondition
+  );
+  const action = normalizeAotAction(body.action);
+  const expiresAt = Number(body.expires_at);
+  const rawTargets = Array.isArray(
+    body.target_device_ids
+  )
+    ? body.target_device_ids
+    : [];
+  const targets = [];
+  const seen = new Set();
+  for (const raw of rawTargets) {
+    const deviceId = normalizeDeviceId(raw);
+    if (
+      deviceId &&
+      !seen.has(deviceId)
+    ) {
+      seen.add(deviceId);
+      targets.push(deviceId);
+    }
+  }
+  const now = Date.now();
+  if (
+    body.protocol !== AOT_PROTOCOL_VERSION ||
+    !sessionId ||
+    !referenceId ||
+    !actionId ||
+    !precondition ||
+    !action ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= now ||
+    expiresAt - now > AOT_ACTION_TTL_MAX_MS ||
+    targets.length < 1 ||
+    targets.length > AOT_MAX_TARGETS
+  ) {
+    return noStoreJson(
+      { ok: false, error: "invalid_aot_action" },
+      400
+    );
+  }
+  if (await isDeviceRevoked(referenceId, env)) {
+    return noStoreJson(
+      { ok: false, error: "device_revoked" },
+      410
+    );
+  }
+  for (const target of targets) {
+    if (await isDeviceRevoked(target, env)) {
+      return noStoreJson(
+        {
+          ok: false,
+          error: "target_device_revoked",
+          device_id: target,
+        },
+        410
+      );
+    }
+  }
+  const result = await fleetStateCall(
+    env,
+    "/aot/action",
+    {
+      method: "POST",
+      body: {
+        protocol: AOT_PROTOCOL_VERSION,
+        session_id: sessionId,
+        reference_device_id: referenceId,
+        target_device_ids: targets,
+        action_id: actionId,
+        expires_at: expiresAt,
+        precondition,
+        action,
+      },
+    }
+  );
+  return noStoreJson(
+    result.data,
+    result.response.status
+  );
+}
+
+async function handleAotControlAck(
+  request,
+  env
+) {
+  if (!isAuthorizedAgentRequest(request, env)) {
+    return noStoreJson(
+      { ok: false, error: "unauthorized" },
+      401
+    );
+  }
+  const parsed = await readAotJson(request);
+  if (parsed.error) {
+    return noStoreJson(
+      { ok: false, error: parsed.error },
+      400
+    );
+  }
+  const body = parsed.value;
+  const sessionId = normalizeAotSessionId(
+    body.session_id
+  );
+  const referenceId = normalizeDeviceId(
+    body.reference_device_id
+  );
+  const followerId = normalizeDeviceId(
+    body.follower_device_id
+  );
+  const actionId = normalizeAotActionId(
+    body.action_id
+  );
+  const status = String(body.status || "");
+  const allowedStatus = new Set([
+    "success",
+    "duplicate",
+    "out_of_sync",
+    "expired",
+    "error",
+  ]);
+  let preview = null;
+  if (
+    typeof body.preview_b64 === "string" &&
+    body.preview_b64
+  ) {
+    if (
+      body.preview_b64.length > 256 * 1024 ||
+      !/^[A-Za-z0-9+/=]+$/.test(
+        body.preview_b64
+      )
+    ) {
+      return noStoreJson(
+        {
+          ok: false,
+          error: "invalid_preview",
+        },
+        400
+      );
+    }
+    preview = body.preview_b64;
+  }
+  if (
+    body.protocol !== AOT_PROTOCOL_VERSION ||
+    !sessionId ||
+    !referenceId ||
+    !followerId ||
+    !actionId ||
+    !allowedStatus.has(status)
+  ) {
+    return noStoreJson(
+      { ok: false, error: "invalid_aot_ack" },
+      400
+    );
+  }
+  const clean = {
+    protocol: AOT_PROTOCOL_VERSION,
+    session_id: sessionId,
+    reference_device_id: referenceId,
+    follower_device_id: followerId,
+    action_id: actionId,
+    status,
+    executed: body.executed === true,
+    screen_changed: body.screen_changed === true,
+  };
+  for (const key of [
+    "before_fingerprint",
+    "after_fingerprint",
+    "preview_sha256",
+  ]) {
+    if (
+      typeof body[key] === "string" &&
+      body[key].length <= 80
+    ) {
+      clean[key] = body[key];
+    }
+  }
+  if (
+    Number.isFinite(Number(body.preview_bytes)) &&
+    Number(body.preview_bytes) >= 0
+  ) {
+    clean.preview_bytes = Math.floor(
+      Number(body.preview_bytes)
+    );
+  }
+  if (preview) {
+    clean.preview_b64 = preview;
+  }
+  const result = await fleetStateCall(
+    env,
+    "/aot/ack",
+    {
+      method: "POST",
+      body: clean,
+    }
+  );
+  return noStoreJson(
+    result.data,
+    result.response.status
+  );
+}
+
+async function handleAotControlHealth(
+  request,
+  env
+) {
+  if (!isAuthorizedAgentRequest(request, env)) {
+    return noStoreJson(
+      { ok: false, error: "unauthorized" },
+      401
+    );
+  }
+  return noStoreJson({
+    ok: true,
+    protocol: AOT_PROTOCOL_VERSION,
+  });
+}
+
+
+
 async function deviceIdsForTarget(target, env) {
   const wantedGroup =
     target === "all"
@@ -3288,6 +3713,48 @@ export default {
   async fetch(request, env) {
     try {
       const url = new URL(request.url);
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/aot/control/health"
+      ) {
+        return await handleAotControlHealth(
+          request,
+          env
+        );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/aot/control/ws"
+      ) {
+        return await handleAotControlWebSocket(
+          request,
+          env,
+          url
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/aot/control/action"
+      ) {
+        return await handleAotControlAction(
+          request,
+          env
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/aot/control/ack"
+      ) {
+        return await handleAotControlAck(
+          request,
+          env
+        );
+      }
+
       if (
         request.method === "GET" &&
         url.pathname === "/agent/commands/ws"

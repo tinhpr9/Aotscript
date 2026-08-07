@@ -11,6 +11,8 @@ const COMMAND_BLOCK_MAX_BYTES = 64 * 1024;
 const COMMAND_MAX_TARGETS = 1000;
 
 
+const AOT_CONTROL_MAX_TARGETS = 128;
+
 function json(
   value,
   status = 200
@@ -575,6 +577,275 @@ export class FleetState
   webSocketError() {}
 
 
+
+  aotSocketTag(
+    role,
+    sessionId,
+    deviceId
+  ) {
+    return `aot:${role}:${sessionId}:${deviceId}`;
+  }
+
+  sendAotPayload(tag, payload) {
+    const sockets =
+      this.ctx.getWebSockets(tag);
+    if (sockets.length === 0) {
+      return 0;
+    }
+    const text = JSON.stringify(payload);
+    let sent = 0;
+    for (const socket of sockets) {
+      try {
+        socket.send(text);
+        sent += 1;
+      } catch (error) {
+        // No durable queue: stale UI actions must never replay.
+      }
+    }
+    return sent;
+  }
+
+  async connectAotWebSocket(
+    url,
+    request
+  ) {
+    const deviceId = validDeviceId(
+      url.searchParams.get("id")
+    );
+    const role = String(
+      url.searchParams.get("role") || ""
+    ).trim();
+    const sessionId = String(
+      url.searchParams.get("session") || ""
+    ).trim();
+    if (
+      !deviceId ||
+      !["reference", "follower"].includes(role) ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)
+    ) {
+      return json(
+        {
+          ok: false,
+          error: "invalid_aot_socket",
+        },
+        400
+      );
+    }
+    if (
+      String(
+        request.headers.get("Upgrade") || ""
+      ).toLowerCase() !== "websocket"
+    ) {
+      return json(
+        {
+          ok: false,
+          error: "upgrade_required",
+        },
+        426
+      );
+    }
+    const pair = new WebSocketPair();
+    const [client, server] =
+      Object.values(pair);
+    this.ctx.acceptWebSocket(
+      server,
+      [
+        this.aotSocketTag(
+          role,
+          sessionId,
+          deviceId
+        ),
+      ]
+    );
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    });
+  }
+
+  async dispatchAotAction(request) {
+    const body = await this.readJson(
+      request
+    );
+    const sessionId = String(
+      body?.session_id || ""
+    ).trim();
+    const referenceId = validDeviceId(
+      body?.reference_device_id
+    );
+    const actionId = String(
+      body?.action_id || ""
+    ).trim();
+    const expiresAt = Number(
+      body?.expires_at
+    );
+    const precondition = String(
+      body?.precondition || ""
+    ).trim();
+    const action =
+      body?.action &&
+      typeof body.action === "object"
+        ? body.action
+        : null;
+    const rawTargets = Array.isArray(
+      body?.target_device_ids
+    )
+      ? body.target_device_ids
+      : [];
+    if (
+      !body ||
+      body.protocol !== "phase3-1" ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(
+        sessionId
+      ) ||
+      !referenceId ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(
+        actionId
+      ) ||
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= Date.now() ||
+      !/^[a-f0-9]{24}$/.test(
+        precondition
+      ) ||
+      !action ||
+      rawTargets.length < 1 ||
+      rawTargets.length > AOT_CONTROL_MAX_TARGETS
+    ) {
+      return json(
+        {
+          ok: false,
+          error: "invalid_aot_action",
+        },
+        400
+      );
+    }
+    const targets = [];
+    const seen = new Set();
+    for (const raw of rawTargets) {
+      const deviceId = validDeviceId(raw);
+      if (
+        deviceId &&
+        !seen.has(deviceId)
+      ) {
+        seen.add(deviceId);
+        targets.push(deviceId);
+      }
+    }
+    if (targets.length === 0) {
+      return json(
+        {
+          ok: false,
+          error: "no_valid_targets",
+        },
+        400
+      );
+    }
+    const payload = {
+      type: "aot_action",
+      protocol: "phase3-1",
+      session_id: sessionId,
+      reference_device_id: referenceId,
+      action_id: actionId,
+      expires_at: expiresAt,
+      precondition,
+      action,
+    };
+    const offline = [];
+    let pushed = 0;
+    for (const deviceId of targets) {
+      const sent = this.sendAotPayload(
+        this.aotSocketTag(
+          "follower",
+          sessionId,
+          deviceId
+        ),
+        payload
+      );
+      if (sent > 0) {
+        pushed += 1;
+      } else {
+        offline.push(deviceId);
+      }
+    }
+    if (pushed === 0) {
+      return json(
+        {
+          ok: false,
+          error: "followers_offline",
+          offline,
+        },
+        409
+      );
+    }
+    return json({
+      ok: true,
+      pushed,
+      offline,
+    });
+  }
+
+  async dispatchAotAck(request) {
+    const body = await this.readJson(
+      request
+    );
+    const sessionId = String(
+      body?.session_id || ""
+    ).trim();
+    const referenceId = validDeviceId(
+      body?.reference_device_id
+    );
+    const followerId = validDeviceId(
+      body?.follower_device_id
+    );
+    const actionId = String(
+      body?.action_id || ""
+    ).trim();
+    if (
+      !body ||
+      body.protocol !== "phase3-1" ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(
+        sessionId
+      ) ||
+      !referenceId ||
+      !followerId ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(
+        actionId
+      )
+    ) {
+      return json(
+        {
+          ok: false,
+          error: "invalid_aot_ack",
+        },
+        400
+      );
+    }
+    const payload = {
+      type: "aot_ack",
+      ...body,
+    };
+    const sent = this.sendAotPayload(
+      this.aotSocketTag(
+        "reference",
+        sessionId,
+        referenceId
+      ),
+      payload
+    );
+    if (sent === 0) {
+      return json(
+        {
+          ok: false,
+          error: "reference_offline",
+        },
+        409
+      );
+    }
+    return json({
+      ok: true,
+      delivered: sent,
+    });
+  }
   async setRevocation(
     request,
     revoked
@@ -625,6 +896,35 @@ export class FleetState
   async fetch(request) {
     const url =
       new URL(request.url);
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/aot/ws"
+    ) {
+      return this.connectAotWebSocket(
+        url,
+        request
+      );
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/aot/action"
+    ) {
+      return this.dispatchAotAction(
+        request
+      );
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/aot/ack"
+    ) {
+      return this.dispatchAotAck(
+        request
+      );
+    }
+
     if (
       request.method === "POST" &&
       url.pathname === "/command/enqueue"
