@@ -1,0 +1,548 @@
+#!/data/data/com.termux/files/usr/bin/python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shlex
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from typing import Any
+
+UIAUTOMATOR = "/system/bin/uiautomator"
+SCREENCAP = "/system/bin/screencap"
+INPUT = "/system/bin/input"
+DUMPSYS = "/system/bin/dumpsys"
+WM = "/system/bin/wm"
+DEVICE_ID_PATH = pathlib.Path(
+    "/storage/emulated/0/Download/Shouko/device_id.txt"
+)
+DEVICE_GROUP_PATH = pathlib.Path(
+    "/storage/emulated/0/Download/Shouko/device_group.txt"
+)
+
+
+class AotControllerError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Bounds:
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    @property
+    def width(self) -> int:
+        return max(0, self.right - self.left)
+
+    @property
+    def height(self) -> int:
+        return max(0, self.bottom - self.top)
+
+    @property
+    def area(self) -> int:
+        return self.width * self.height
+
+    @property
+    def center(self) -> tuple[int, int]:
+        return (
+            self.left + self.width // 2,
+            self.top + self.height // 2,
+        )
+
+    def contains(self, x: int, y: int) -> bool:
+        return self.left <= x < self.right and self.top <= y < self.bottom
+
+    def as_list(self) -> list[int]:
+        return [self.left, self.top, self.right, self.bottom]
+
+
+@dataclass
+class UiNode:
+    index: int
+    parent: int | None
+    class_name: str
+    resource_id: str
+    bounds: Bounds
+    clickable: bool
+    enabled: bool
+    scrollable: bool
+    password: bool
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "parent": self.parent,
+            "class": self.class_name,
+            "resource_id": self.resource_id,
+            "bounds": self.bounds.as_list(),
+            "clickable": self.clickable,
+            "enabled": self.enabled,
+            "scrollable": self.scrollable,
+            "password": self.password,
+        }
+
+
+def _bool_attr(value: str | None) -> bool:
+    return str(value or "").strip().lower() == "true"
+
+
+def parse_bounds(value: str) -> Bounds:
+    match = re.fullmatch(
+        r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",
+        value.strip(),
+    )
+    if not match:
+        raise AotControllerError(f"invalid bounds: {value!r}")
+    left, top, right, bottom = map(int, match.groups())
+    if right < left or bottom < top:
+        raise AotControllerError("negative bounds size")
+    return Bounds(left, top, right, bottom)
+
+
+def _root_run(command: str, *, binary: bool = False, timeout: int = 12):
+    try:
+        proc = subprocess.run(
+            ["su", "-c", command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+            text=not binary,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AotControllerError(f"root command failed: {type(exc).__name__}") from exc
+    if proc.returncode != 0:
+        if binary:
+            detail = proc.stderr.decode("utf-8", errors="replace").strip()
+        else:
+            detail = proc.stderr.strip()
+        detail = detail[:240]
+        raise AotControllerError(
+            f"root command rc={proc.returncode}: {detail or 'no stderr'}"
+        )
+    return proc.stdout
+
+
+def root_available() -> bool:
+    try:
+        output = _root_run("id", timeout=5)
+    except AotControllerError:
+        return False
+    return "uid=0(root)" in output
+
+
+def _read_small(path: pathlib.Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def device_identity() -> dict[str, str]:
+    return {
+        "device_id": _read_small(DEVICE_ID_PATH),
+        "device_group": _read_small(DEVICE_GROUP_PATH),
+    }
+
+
+def foreground_package() -> str:
+    output = _root_run(f"{shlex.quote(DUMPSYS)} window windows")
+    patterns = (
+        r"mCurrentFocus=.*?\s([A-Za-z0-9._]+)/(?:[A-Za-z0-9._$]+)",
+        r"mFocusedApp=.*?\s([A-Za-z0-9._]+)/(?:[A-Za-z0-9._$]+)",
+        r"\bu\d+\s+([A-Za-z0-9._]+)/(?:[A-Za-z0-9._$]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, output)
+        if match:
+            return match.group(1)
+    return "UNKNOWN"
+
+
+def display_size() -> tuple[int, int]:
+    output = _root_run(f"{shlex.quote(WM)} size")
+    matches = re.findall(r"(?:Override|Physical) size:\s*(\d+)x(\d+)", output)
+    if not matches:
+        raise AotControllerError("wm size unavailable")
+    width, height = matches[-1]
+    return int(width), int(height)
+
+
+def dump_ui_xml() -> str:
+    remote = f"/data/local/tmp/aot-group-ui-{os.getpid()}.xml"
+    command = (
+        f"{shlex.quote(UIAUTOMATOR)} dump --compressed {shlex.quote(remote)} "
+        f">/dev/null 2>&1 && cat {shlex.quote(remote)}; "
+        f"rc=$?; rm -f {shlex.quote(remote)}; exit $rc"
+    )
+    output = _root_run(command, timeout=15)
+    if "<hierarchy" not in output:
+        raise AotControllerError("uiautomator produced no hierarchy")
+    return output
+
+
+def parse_ui_xml(xml_text: str) -> list[UiNode]:
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
+        raise AotControllerError("invalid UI XML") from exc
+
+    nodes: list[UiNode] = []
+
+    def walk(element: ET.Element, parent: int | None) -> None:
+        for child in list(element):
+            if child.tag != "node":
+                walk(child, parent)
+                continue
+            index = len(nodes)
+            try:
+                bounds = parse_bounds(child.attrib.get("bounds", ""))
+            except AotControllerError:
+                bounds = Bounds(0, 0, 0, 0)
+            nodes.append(
+                UiNode(
+                    index=index,
+                    parent=parent,
+                    class_name=child.attrib.get("class", ""),
+                    resource_id=child.attrib.get("resource-id", ""),
+                    bounds=bounds,
+                    clickable=_bool_attr(child.attrib.get("clickable")),
+                    enabled=_bool_attr(child.attrib.get("enabled")),
+                    scrollable=_bool_attr(child.attrib.get("scrollable")),
+                    password=_bool_attr(child.attrib.get("password")),
+                )
+            )
+            walk(child, index)
+
+    walk(root, None)
+    return nodes
+
+
+def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
+    stable = []
+    for node in nodes:
+        stable.append(
+            "|".join(
+                (
+                    node.resource_id,
+                    node.class_name,
+                    "1" if node.clickable else "0",
+                    "1" if node.scrollable else "0",
+                )
+            )
+        )
+    payload = package + "\n" + "\n".join(sorted(stable))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def snapshot(*, include_nodes: bool = True) -> dict[str, Any]:
+    package = foreground_package()
+    width, height = display_size()
+    nodes = parse_ui_xml(dump_ui_xml())
+    data: dict[str, Any] = {
+        "package": package,
+        "fingerprint": ui_fingerprint(package, nodes),
+        "width": width,
+        "height": height,
+        "node_count": len(nodes),
+        "resource_id_count": sum(bool(node.resource_id) for node in nodes),
+        "clickable_count": sum(node.clickable for node in nodes),
+    }
+    if include_nodes:
+        data["nodes"] = [node.public() for node in nodes]
+    return data
+
+
+def _unique_resource_id(nodes: list[UiNode], resource_id: str) -> UiNode:
+    matches = [node for node in nodes if node.resource_id == resource_id]
+    if len(matches) != 1:
+        raise AotControllerError(
+            f"selector match count={len(matches)} for {resource_id!r}"
+        )
+    return matches[0]
+
+
+def _clickable_target(nodes: list[UiNode], node: UiNode) -> UiNode:
+    current = node
+    visited: set[int] = set()
+    while True:
+        if current.enabled and current.clickable and current.bounds.area > 0:
+            return current
+        if current.parent is None or current.parent in visited:
+            break
+        visited.add(current.index)
+        current = nodes[current.parent]
+    if node.enabled and node.bounds.area > 0:
+        return node
+    raise AotControllerError("selector has no actionable bounds")
+
+
+def resolve_normalized_tap(
+    nodes: list[UiNode],
+    width: int,
+    height: int,
+    x_norm: float,
+    y_norm: float,
+) -> dict[str, Any]:
+    if not (0.0 <= x_norm <= 1.0 and 0.0 <= y_norm <= 1.0):
+        raise AotControllerError("normalized tap must be in [0,1]")
+    x = min(width - 1, max(0, round(x_norm * width)))
+    y = min(height - 1, max(0, round(y_norm * height)))
+    candidates = [
+        node
+        for node in nodes
+        if node.enabled and node.bounds.area > 0 and node.bounds.contains(x, y)
+    ]
+    clickable = [node for node in candidates if node.clickable]
+    pool = clickable or candidates
+    pool.sort(
+        key=lambda node: (
+            0 if node.resource_id else 1,
+            node.bounds.area,
+            -node.index,
+        )
+    )
+    if pool:
+        node = pool[0]
+        if node.resource_id:
+            count = sum(item.resource_id == node.resource_id for item in nodes)
+            if count == 1:
+                return {
+                    "mode": "semantic",
+                    "resource_id": node.resource_id,
+                    "x": x,
+                    "y": y,
+                    "node_index": node.index,
+                }
+    return {
+        "mode": "coordinate",
+        "x": x,
+        "y": y,
+        "x_norm": x_norm,
+        "y_norm": y_norm,
+    }
+
+
+def _verify_precondition(current: str, expected: str | None) -> None:
+    if expected and current != expected:
+        raise AotControllerError(
+            f"PRECONDITION_FAILED current={current} expected={expected}"
+        )
+
+
+def _tap_xy(x: int, y: int) -> None:
+    _root_run(f"{shlex.quote(INPUT)} tap {int(x)} {int(y)}")
+
+
+def tap_selector(resource_id: str, expected_fingerprint: str | None = None) -> dict[str, Any]:
+    before = snapshot(include_nodes=False)
+    _verify_precondition(before["fingerprint"], expected_fingerprint)
+    nodes = parse_ui_xml(dump_ui_xml())
+    node = _clickable_target(nodes, _unique_resource_id(nodes, resource_id))
+    x, y = node.bounds.center
+    _tap_xy(x, y)
+    time.sleep(0.25)
+    after = snapshot(include_nodes=False)
+    return {
+        "action": "tap",
+        "mode": "semantic",
+        "resource_id": resource_id,
+        "before_fingerprint": before["fingerprint"],
+        "after_fingerprint": after["fingerprint"],
+        "screen_changed": before["fingerprint"] != after["fingerprint"],
+    }
+
+
+def swipe_normalized(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    duration_ms: int = 300,
+    expected_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    before = snapshot(include_nodes=False)
+    _verify_precondition(before["fingerprint"], expected_fingerprint)
+    width = int(before["width"])
+    height = int(before["height"])
+    values = (x1, y1, x2, y2)
+    if any(value < 0.0 or value > 1.0 for value in values):
+        raise AotControllerError("normalized swipe must be in [0,1]")
+    px = [
+        round(x1 * width),
+        round(y1 * height),
+        round(x2 * width),
+        round(y2 * height),
+    ]
+    duration_ms = min(5000, max(50, int(duration_ms)))
+    _root_run(
+        f"{shlex.quote(INPUT)} swipe {px[0]} {px[1]} {px[2]} {px[3]} {duration_ms}"
+    )
+    time.sleep(0.25)
+    after = snapshot(include_nodes=False)
+    return {
+        "action": "swipe",
+        "before_fingerprint": before["fingerprint"],
+        "after_fingerprint": after["fingerprint"],
+        "screen_changed": before["fingerprint"] != after["fingerprint"],
+    }
+
+
+def press_back(expected_fingerprint: str | None = None) -> dict[str, Any]:
+    before = snapshot(include_nodes=False)
+    _verify_precondition(before["fingerprint"], expected_fingerprint)
+    _root_run(f"{shlex.quote(INPUT)} keyevent 4")
+    time.sleep(0.25)
+    after = snapshot(include_nodes=False)
+    return {
+        "action": "back",
+        "before_fingerprint": before["fingerprint"],
+        "after_fingerprint": after["fingerprint"],
+        "screen_changed": before["fingerprint"] != after["fingerprint"],
+    }
+
+
+def screenshot_bytes() -> bytes:
+    data = _root_run(shlex.quote(SCREENCAP) + " -p", binary=True, timeout=15)
+    if not isinstance(data, bytes) or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise AotControllerError("screencap did not return PNG")
+    return data
+
+
+def save_screenshot(path: pathlib.Path) -> dict[str, Any]:
+    data = screenshot_bytes()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + f".tmp-{os.getpid()}")
+    try:
+        temp.write_bytes(data)
+        if not temp.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"):
+            raise AotControllerError("temporary screenshot validation failed")
+        os.replace(temp, path)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+    return {"path": str(path), "bytes": len(data)}
+
+
+def probe() -> dict[str, Any]:
+    identity = device_identity()
+    data: dict[str, Any] = {
+        "root": root_available(),
+        **identity,
+    }
+    if not data["root"]:
+        return data
+    snap = snapshot(include_nodes=False)
+    frame = screenshot_bytes()
+    data.update(snap)
+    data["screenshot_bytes"] = len(frame)
+    return data
+
+
+def _json_print(data: Any) -> None:
+    print(json.dumps(data, ensure_ascii=False, sort_keys=True))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="AOT Group Control local controller MVP")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("health")
+    sub.add_parser("probe")
+    sub.add_parser("snapshot")
+
+    resolve = sub.add_parser("resolve-tap")
+    resolve.add_argument("x_norm", type=float)
+    resolve.add_argument("y_norm", type=float)
+
+    tap = sub.add_parser("tap-selector")
+    tap.add_argument("resource_id")
+    tap.add_argument("--expect-fingerprint")
+
+    swipe = sub.add_parser("swipe")
+    swipe.add_argument("x1", type=float)
+    swipe.add_argument("y1", type=float)
+    swipe.add_argument("x2", type=float)
+    swipe.add_argument("y2", type=float)
+    swipe.add_argument("--duration-ms", type=int, default=300)
+    swipe.add_argument("--expect-fingerprint")
+
+    back = sub.add_parser("back")
+    back.add_argument("--expect-fingerprint")
+
+    shot = sub.add_parser("screencap")
+    shot.add_argument("path")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        if args.command == "health":
+            data = {"root": root_available(), **device_identity()}
+        elif args.command == "probe":
+            data = probe()
+        elif args.command == "snapshot":
+            data = snapshot(include_nodes=True)
+        elif args.command == "resolve-tap":
+            snap = snapshot(include_nodes=True)
+            nodes = [
+                UiNode(
+                    index=item["index"],
+                    parent=item["parent"],
+                    class_name=item["class"],
+                    resource_id=item["resource_id"],
+                    bounds=Bounds(*item["bounds"]),
+                    clickable=item["clickable"],
+                    enabled=item["enabled"],
+                    scrollable=item["scrollable"],
+                    password=item["password"],
+                )
+                for item in snap["nodes"]
+            ]
+            data = {
+                "fingerprint": snap["fingerprint"],
+                "resolution": resolve_normalized_tap(
+                    nodes,
+                    int(snap["width"]),
+                    int(snap["height"]),
+                    args.x_norm,
+                    args.y_norm,
+                ),
+            }
+        elif args.command == "tap-selector":
+            data = tap_selector(args.resource_id, args.expect_fingerprint)
+        elif args.command == "swipe":
+            data = swipe_normalized(
+                args.x1,
+                args.y1,
+                args.x2,
+                args.y2,
+                duration_ms=args.duration_ms,
+                expected_fingerprint=args.expect_fingerprint,
+            )
+        elif args.command == "back":
+            data = press_back(args.expect_fingerprint)
+        elif args.command == "screencap":
+            data = save_screenshot(pathlib.Path(args.path))
+        else:
+            raise AotControllerError("unknown command")
+    except AotControllerError as exc:
+        _json_print({"ok": False, "error": str(exc)})
+        return 2
+    _json_print({"ok": True, "result": data})
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
