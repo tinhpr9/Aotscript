@@ -228,8 +228,45 @@ def parse_ui_xml(xml_text: str) -> list[UiNode]:
 
 
 def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
+    by_index = {node.index: node for node in nodes}
+
+    def has_scrollable_ancestor(node: UiNode) -> bool:
+        parent = node.parent
+        visited: set[int] = set()
+        while parent is not None and parent not in visited:
+            visited.add(parent)
+            ancestor = by_index.get(parent)
+            if ancestor is None:
+                return False
+            if ancestor.scrollable:
+                return True
+            parent = ancestor.parent
+        return False
+
+    candidates = [
+        node
+        for node in nodes
+        if (
+            node.resource_id
+            and node.bounds.area > 0
+            and not has_scrollable_ancestor(node)
+        )
+    ]
+    actionable = [
+        node
+        for node in candidates
+        if node.clickable or node.scrollable
+    ]
+    pool = actionable or candidates
+
+    counts: dict[str, int] = {}
+    for node in pool:
+        counts[node.resource_id] = counts.get(node.resource_id, 0) + 1
+
     stable = []
-    for node in nodes:
+    for node in pool:
+        if counts.get(node.resource_id) != 1:
+            continue
         stable.append(
             "|".join(
                 (
@@ -240,6 +277,19 @@ def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
                 )
             )
         )
+
+    if not stable:
+        stable = [
+            "|".join(
+                (
+                    node.class_name,
+                    "1" if node.clickable else "0",
+                    "1" if node.scrollable else "0",
+                )
+            )
+            for node in nodes
+        ]
+
     payload = package + "\n" + "\n".join(sorted(stable))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 

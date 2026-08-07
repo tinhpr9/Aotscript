@@ -41,6 +41,47 @@ fingerprint_a = module.ui_fingerprint("pkg", nodes)
 fingerprint_b = module.ui_fingerprint("pkg", list(reversed(nodes)))
 assert fingerprint_a == fingerprint_b
 
+# Fingerprint must distinguish navigation selection state.
+state_nodes = module.parse_ui_xml(xml)
+state_nodes[1].clickable = False
+fingerprint_state = module.ui_fingerprint("pkg", state_nodes)
+assert fingerprint_state != fingerprint_a
+
+# Dynamic children inside a scrollable container must not make the screen
+# fingerprint flap while the stable app chrome is unchanged.
+dynamic_a = (
+    "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>\n"
+    "<hierarchy rotation='0'>\n"
+    "  <node index='0' class='android.widget.FrameLayout' resource-id='root' "
+    "clickable='false' enabled='true' scrollable='false' password='false' "
+    "bounds='[0,0][1000,2000]'>\n"
+    "    <node index='1' class='android.widget.Button' resource-id='pkg:id/nav' "
+    "clickable='true' enabled='true' scrollable='false' password='false' "
+    "bounds='[0,1700][1000,2000]' />\n"
+    "    <node index='2' class='androidx.recyclerview.widget.RecyclerView' "
+    "resource-id='pkg:id/list' clickable='false' enabled='true' "
+    "scrollable='true' password='false' bounds='[0,0][1000,1700]'>\n"
+    "      <node index='3' class='android.widget.TextView' "
+    "resource-id='pkg:id/dynamic_a' clickable='true' enabled='true' "
+    "scrollable='false' password='false' bounds='[0,0][500,200]' />\n"
+    "    </node>\n"
+    "  </node>\n"
+    "</hierarchy>"
+)
+
+dynamic_b = dynamic_a.replace(
+    "pkg:id/dynamic_a",
+    "pkg:id/dynamic_b",
+)
+
+dynamic_nodes_a = module.parse_ui_xml(dynamic_a)
+dynamic_nodes_b = module.parse_ui_xml(dynamic_b)
+
+assert (
+    module.ui_fingerprint("pkg", dynamic_nodes_a)
+    == module.ui_fingerprint("pkg", dynamic_nodes_b)
+)
+
 resolved = module.resolve_normalized_tap(nodes, 1000, 2000, 0.25, 0.15)
 assert resolved["mode"] == "semantic"
 assert resolved["resource_id"] == "pkg:id/account"
