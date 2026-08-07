@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase10-google-bootstrap-v1"
+VERSION="phase12-taskbar-task-launch-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -2516,9 +2516,329 @@ ui_start_taskbar() {
   return 1
 }
 
+ui_taskbar_point() {
+  local mode="$1"
+  local expected="${2:-1}"
+  local index="${3:-0}"
+  local label="${4:-TASKBAR_POINT}"
+  local xml point x y
+
+  xml="$(ui_dump_xml "$label")" || {
+    echo "${label}_UI_DUMP=FAILED"
+    return 1
+  }
+
+  if ! point="$(
+    python - "$xml" "$mode" "$expected" "$index" <<'__MP_TASKBAR_POINT_PY_20260807__'
+import itertools
+import math
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+xml_name, mode, expected_raw, index_raw = sys.argv[1:5]
+expected = int(expected_raw)
+index = int(index_raw)
+root = ET.parse(xml_name).getroot()
+bounds_re = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
+
+
+def parse_bounds(node):
+    match = bounds_re.match(node.attrib.get("bounds", ""))
+    if not match:
+        return None
+    left, top, right, bottom = map(int, match.groups())
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def center(box):
+    left, top, right, bottom = box
+    return (left + right) // 2, (top + bottom) // 2
+
+
+def words_for(node):
+    return " ".join(
+        (
+            node.attrib.get("text", ""),
+            node.attrib.get("content-desc", ""),
+            node.attrib.get("resource-id", ""),
+        )
+    ).casefold()
+
+
+def dedupe(items):
+    by_box = {}
+    for score, box in items:
+        current = by_box.get(box)
+        if current is None or score > current:
+            by_box[box] = score
+    return [(score, box) for box, score in by_box.items()]
+
+
+root_box = parse_bounds(root)
+if root_box is None:
+    root_box = (0, 0, 0, 0)
+_, _, root_right, root_bottom = root_box
+
+nodes = []
+for node in root.iter("node"):
+    box = parse_bounds(node)
+    if box is None:
+        continue
+    package = node.attrib.get("package", "")
+    clickable = node.attrib.get("clickable", "") == "true"
+    enabled = node.attrib.get("enabled", "") != "false"
+    klass = node.attrib.get("class", "").casefold()
+    resource = node.attrib.get("resource-id", "").casefold()
+    text = node.attrib.get("text", "").strip()
+    desc = node.attrib.get("content-desc", "").strip()
+    words = words_for(node)
+    nodes.append(
+        {
+            "box": box,
+            "package": package,
+            "clickable": clickable,
+            "enabled": enabled,
+            "klass": klass,
+            "resource": resource,
+            "text": text,
+            "desc": desc,
+            "words": words,
+        }
+    )
+
+if root_bottom <= 0 and nodes:
+    root_bottom = max(item["box"][3] for item in nodes)
+
+if mode in {"taskbar_expand", "taskbar_start"}:
+    candidates = []
+    for item in nodes:
+        if item["package"] != "com.farmerbb.taskbar" or not item["enabled"]:
+            continue
+        words = item["words"]
+        resource = item["resource"]
+        score = 0
+        if item["clickable"]:
+            score += 40
+        if "button" in item["klass"] or "imageview" in item["klass"]:
+            score += 15
+
+        if mode == "taskbar_expand":
+            positive = (
+                "collapse_button",
+                "expand_button",
+                "show_taskbar",
+                "hide_taskbar",
+                "toggle_taskbar",
+                "taskbar_toggle",
+                "collapse",
+                "expand",
+                "chevron",
+                "arrow",
+                "show taskbar",
+                "hide taskbar",
+            )
+            negative = ("start", "menu", "drawer", "apps")
+            if any(token in words for token in positive):
+                score += 120
+            if any(token in resource for token in positive):
+                score += 80
+            if any(token in words for token in negative):
+                score -= 120
+        else:
+            positive = (
+                "start_button",
+                "start_menu",
+                "start menu",
+                "all_apps",
+                "app_drawer",
+                "drawer",
+                "apps_button",
+            )
+            negative = ("collapse", "expand", "chevron", "arrow")
+            if any(token in words for token in positive):
+                score += 140
+            if any(token in resource for token in positive):
+                score += 100
+            if any(token in words for token in negative):
+                score -= 120
+
+        if score >= 100:
+            candidates.append((score, item["box"]))
+
+    candidates = dedupe(candidates)
+    if not candidates:
+        raise SystemExit(11)
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score = candidates[0][0]
+    best = [item for item in candidates if item[0] == best_score]
+    if len(best) != 1:
+        raise SystemExit(12)
+    x, y = center(best[0][1])
+    print(f"{x} {y}")
+    raise SystemExit(0)
+
+if mode == "taskbar_roblox":
+    raw = []
+    for item in nodes:
+        if item["package"] != "com.farmerbb.taskbar" or not item["enabled"]:
+            continue
+        text = item["text"].casefold()
+        desc = item["desc"].casefold()
+        if text == "roblox" or desc == "roblox":
+            score = 100 + (30 if item["clickable"] else 0)
+            raw.append((score, item["box"]))
+
+    raw = dedupe(raw)
+    if root_bottom > 0 and len(raw) > expected:
+        cutoff = int(root_bottom * 0.86)
+        above_taskbar = [item for item in raw if center(item[1])[1] < cutoff]
+        if len(above_taskbar) >= expected:
+            raw = above_taskbar
+
+    if len(raw) != expected:
+        print(f"TASKBAR_ROBLOX_NODE_COUNT={len(raw)}", file=sys.stderr)
+        print(f"TASKBAR_ROBLOX_EXPECTED={expected}", file=sys.stderr)
+        raise SystemExit(21)
+    if index < 0 or index >= expected:
+        raise SystemExit(22)
+
+    raw.sort(key=lambda item: (center(item[1])[1], center(item[1])[0]))
+    x, y = center(raw[index][1])
+    print(f"{x} {y}")
+    raise SystemExit(0)
+
+raise SystemExit(30)
+__MP_TASKBAR_POINT_PY_20260807__
+  )"; then
+    rm -f "$xml"
+    echo "${label}_NODE=NOT_UNIQUE_OR_NOT_FOUND"
+    return 1
+  fi
+
+  rm -f "$xml"
+  read -r x y <<<"$point"
+
+  [[ "$x" =~ ^[0-9]+$ ]] &&
+  [[ "$y" =~ ^[0-9]+$ ]] || {
+    echo "${label}_BOUNDS=INVALID"
+    return 1
+  }
+
+  su -c "input tap '$x' '$y'" >/dev/null 2>&1 || {
+    echo "${label}_CLICK=FAILED"
+    return 1
+  }
+
+  echo "${label}_CLICK=DYNAMIC"
+}
+
+ui_taskbar_open_start_menu() {
+  local attempt
+
+  for attempt in 1 2 3; do
+    if ui_taskbar_point taskbar_start 1 0 "TASKBAR_START_$attempt"; then
+      sleep 2
+      return 0
+    fi
+
+    ui_taskbar_point taskbar_expand 1 0 "TASKBAR_EXPAND_$attempt" || true
+    sleep 1
+
+    if ui_taskbar_point taskbar_start 1 0 "TASKBAR_START_RETRY_$attempt"; then
+      sleep 2
+      return 0
+    fi
+  done
+
+  echo "TASKBAR_START_MENU=NEEDS_ATTENTION"
+  return 1
+}
+
+ui_roblox_freeform_packages() {
+  local dump
+
+  dump="$(
+    su -c 'dumpsys activity activities; dumpsys activity recents' \
+      2>/dev/null || true
+  )"
+
+  python - 3<<<"$dump" <<'__MP_ROBLOX_FREEFORM_PY_20260807__'
+import os
+import re
+
+text = os.fdopen(3, "r", encoding="utf-8", errors="replace").read()
+packages = sorted(
+    set(
+        re.findall(
+            r"com\.tinh\.vv\.[A-Za-z0-9._-]+",
+            text,
+        )
+    )
+)
+
+freeform_tokens = (
+    "mode=freeform",
+    "windowingmode=freeform",
+    "mwindowingmode=freeform",
+    "windowingmode=5",
+    "mwindowingmode=5",
+    "windowing_mode_freeform",
+)
+
+lines = text.splitlines()
+blocks = []
+current = []
+for line in lines:
+    if re.search(r"(?:^|\s)(?:Task|TaskRecord)\{", line):
+        if current:
+            blocks.append("\n".join(current))
+        current = [line]
+    elif current:
+        current.append(line)
+if current:
+    blocks.append("\n".join(current))
+
+for package in packages:
+    proven = False
+    for block in blocks:
+        if package not in block:
+            continue
+        context = block.casefold()
+        if any(token in context for token in freeform_tokens):
+            proven = True
+            break
+    if proven:
+        print(package)
+__MP_ROBLOX_FREEFORM_PY_20260807__
+}
+
+ui_assert_all_roblox_freeform() {
+  local package freeform
+  local installed=("$@")
+  local count=0
+
+  freeform="$(ui_roblox_freeform_packages)"
+
+  for package in "${installed[@]}"; do
+    if printf '%s\n' "$freeform" | grep -Fxq "$package"; then
+      echo "ROBLOX_FREEFORM_OK=$package"
+      count=$((count + 1))
+    else
+      echo "ROBLOX_FREEFORM_MISSING=$package"
+    fi
+  done
+
+  echo "ROBLOX_FREEFORM_COUNT=$count"
+  echo "ROBLOX_EXPECTED_COUNT=${#installed[@]}"
+
+  [ "$count" = "${#installed[@]}" ]
+}
+
 ui_open_all_roblox() {
-  local package component recent
-  local opened_count=0 task_count=0
+  local package index
   local installed=()
 
   mapfile -t installed < <(
@@ -2533,8 +2853,7 @@ ui_open_all_roblox() {
   fi
 
   for package in "${installed[@]}"; do
-    if su -c "am force-stop '$package'" \
-         >/dev/null 2>&1; then
+    if su -c "am force-stop '$package'" >/dev/null 2>&1; then
       echo "ROBLOX_CLOSED=$package"
     else
       echo "ROBLOX_CLOSE_FAILED=$package"
@@ -2542,61 +2861,40 @@ ui_open_all_roblox() {
     fi
   done
 
-  sleep 1
+  sleep 2
 
-  for package in "${installed[@]}"; do
-    component="$(ui_launcher_component "$package")"
+  ui_start_taskbar || {
+    echo "ROBLOX_TASKBAR=NOT_READY"
+    return 1
+  }
 
-    case "$component" in
-      "$package"/*)
-        if su -c "am start \
-             --windowingMode 5 \
-             -n '$component'" \
-             >/dev/null 2>&1; then
-          echo "ROBLOX_FREEFORM_STARTED=$package"
-          opened_count=$((opened_count + 1))
-          sleep 1
-        else
-          echo "ROBLOX_FREEFORM_START_FAILED=$package"
-        fi
-        ;;
-      *)
-        echo "ROBLOX_LAUNCHER_NOT_FOUND=$package"
-        ;;
-    esac
-  done
+  for ((index = 0; index < ${#installed[@]}; index++)); do
+    ui_taskbar_open_start_menu || {
+      echo "ROBLOX_TASKBAR_MENU_FAILED_INDEX=$index"
+      return 1
+    }
 
-  sleep 4
-
-  recent="$(
-    su -c 'dumpsys activity recents' 2>/dev/null |
-      grep -Eo \
-        'com\.tinh\.vv\.[A-Za-z0-9._-]+' |
-      sort -u ||
-      true
-  )"
-
-  for package in "${installed[@]}"; do
-    if printf '%s\n' "$recent" |
-       grep -Fxq "$package"; then
-      echo "ROBLOX_TASK_PRESENT=$package"
-      task_count=$((task_count + 1))
-    else
-      echo "ROBLOX_TASK_MISSING=$package"
+    if ! ui_taskbar_point \
+      taskbar_roblox \
+      "${#installed[@]}" \
+      "$index" \
+      "TASKBAR_ROBLOX_$index"; then
+      echo "ROBLOX_TASKBAR_CLICK_FAILED_INDEX=$index"
+      return 1
     fi
+
+    echo "ROBLOX_TASKBAR_CLICKED_INDEX=$index"
+    sleep 3
   done
 
-  echo "ROBLOX_OPENED_COUNT=$opened_count"
-  echo "ROBLOX_TASK_COUNT=$task_count"
-  echo "ROBLOX_EXPECTED_COUNT=${#installed[@]}"
+  sleep 5
 
-  if [ "$opened_count" = "${#installed[@]}" ] &&
-     [ "$task_count" = "${#installed[@]}" ]; then
-    echo "ROBLOX_OPEN_ALL=OK"
+  if ui_assert_all_roblox_freeform "${installed[@]}"; then
+    echo "ROBLOX_OPEN_ALL=OK_FREEFORM_PROVEN"
     return 0
   fi
 
-  echo "ROBLOX_OPEN_ALL=NEEDS_ATTENTION"
+  echo "ROBLOX_OPEN_ALL=NEEDS_ATTENTION_FREEFORM_NOT_PROVEN"
   return 1
 }
 
