@@ -40,6 +40,8 @@ MAX_WS_FRAME_BYTES = 512 * 1024
 MAX_HTTP_JSON_BYTES = 384 * 1024
 MAX_PREVIEW_BYTES = 180 * 1024
 PROCESSED_ACTIONS_MAX = 256
+HUB_PROTOCOL_VERSION = "phase4-1"
+LIVE_STATUS_INTERVAL_SECONDS = 2.5
 
 
 class AotRelayError(RuntimeError):
@@ -499,20 +501,561 @@ def _execute_action(action: dict[str, Any], precondition: str) -> dict[str, Any]
     raise AotRelayError("unsupported_action_kind")
 
 
+
+def normalize_target_ids(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    result = []
+    seen = set()
+    for value in values:
+        device_id = normalize_device_id(value)
+        if not device_id or device_id in seen:
+            continue
+        seen.add(device_id)
+        result.append(device_id)
+    return result
+
+
+def _ws_send_json(
+    sock: socket.socket,
+    payload: dict[str, Any],
+) -> None:
+    _ws_send_frame(
+        sock,
+        0x1,
+        json.dumps(
+            payload,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+    )
+
+
+def _live_status_payload(
+    *,
+    role: str,
+    session_id: str,
+    device_id: str,
+    include_preview: bool,
+) -> dict[str, Any]:
+    snap = controller.snapshot(include_nodes=False)
+    payload: dict[str, Any] = {
+        "type": "aot_status",
+        "protocol": HUB_PROTOCOL_VERSION,
+        "role": role,
+        "session_id": session_id,
+        "device_id": device_id,
+        "package": snap.get("package"),
+        "fingerprint": snap.get("fingerprint"),
+        "width": snap.get("width"),
+        "height": snap.get("height"),
+        "updated_at": int(time.time() * 1000),
+    }
+    if include_preview:
+        try:
+            frame = controller.screenshot_bytes()
+        except controller.AotControllerError:
+            frame = b""
+        if frame:
+            payload["preview_bytes"] = len(frame)
+            payload["preview_sha256"] = hashlib.sha256(
+                frame
+            ).hexdigest()
+            if len(frame) <= MAX_PREVIEW_BYTES:
+                payload["preview_b64"] = base64.b64encode(
+                    frame
+                ).decode("ascii")
+    return payload
+
+
+def _send_live_status(
+    sock: socket.socket,
+    *,
+    role: str,
+    session_id: str,
+    device_id: str,
+    previous_preview_sha: str | None,
+    force_preview: bool = False,
+) -> str | None:
+    payload = _live_status_payload(
+        role=role,
+        session_id=session_id,
+        device_id=device_id,
+        include_preview=True,
+    )
+    current_sha = payload.get("preview_sha256")
+    if (
+        not force_preview
+        and current_sha
+        and current_sha == previous_preview_sha
+    ):
+        payload.pop("preview_b64", None)
+    _ws_send_json(sock, payload)
+    return (
+        current_sha
+        if isinstance(current_sha, str)
+        else previous_preview_sha
+    )
+
+
+def _send_control_result(
+    sock: socket.socket,
+    *,
+    session_id: str,
+    device_id: str,
+    control_id: str,
+    status: str,
+    reason: str | None = None,
+    action_id: str | None = None,
+    before_fingerprint: str | None = None,
+    after_fingerprint: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "type": "aot_control_result",
+        "protocol": HUB_PROTOCOL_VERSION,
+        "session_id": session_id,
+        "device_id": device_id,
+        "control_id": control_id,
+        "status": status,
+        "updated_at": int(time.time() * 1000),
+    }
+    if reason:
+        payload["reason"] = reason[:160]
+    if action_id:
+        payload["action_id"] = action_id
+    if before_fingerprint:
+        payload["before_fingerprint"] = before_fingerprint
+    if after_fingerprint:
+        payload["after_fingerprint"] = after_fingerprint
+    _ws_send_json(sock, payload)
+
+
+def _resolve_reference_tap(
+    x_norm: float,
+    y_norm: float,
+) -> tuple[str, str]:
+    package = controller.foreground_package()
+    width, height = controller.display_size()
+    nodes = controller.parse_ui_xml(
+        controller.dump_ui_xml()
+    )
+    fingerprint = controller.ui_fingerprint(
+        package,
+        nodes,
+    )
+    resolved = controller.resolve_normalized_tap(
+        nodes,
+        width,
+        height,
+        x_norm,
+        y_norm,
+    )
+    if resolved.get("mode") != "semantic":
+        raise AotRelayError(
+            "semantic_target_not_found"
+        )
+    resource_id = str(
+        resolved.get("resource_id") or ""
+    ).strip()
+    if not resource_id:
+        raise AotRelayError(
+            "semantic_target_missing_resource_id"
+        )
+    return fingerprint, resource_id
+
+
+def _handle_hub_action(
+    sock: socket.socket,
+    cfg: dict[str, str],
+    *,
+    local_id: str,
+    session_id: str,
+    message: dict[str, Any],
+) -> None:
+    if message.get("protocol") != HUB_PROTOCOL_VERSION:
+        return
+    if (
+        normalize_session_id(message.get("session_id"))
+        != session_id
+    ):
+        return
+    control_id = normalize_action_id(
+        message.get("control_id")
+    )
+    if not control_id:
+        return
+    action = message.get("action")
+    if not isinstance(action, dict):
+        _send_control_result(
+            sock,
+            session_id=session_id,
+            device_id=local_id,
+            control_id=control_id,
+            status="error",
+            reason="invalid_hub_action",
+        )
+        return
+    targets = [
+        device_id
+        for device_id in normalize_target_ids(
+            message.get("target_device_ids")
+        )
+        if device_id != local_id
+    ]
+    kind = str(action.get("kind") or "")
+    follower_action: dict[str, Any]
+    try:
+        if kind == "tap":
+            x_norm = float(action.get("x_norm"))
+            y_norm = float(action.get("y_norm"))
+            if not (
+                0.0 <= x_norm <= 1.0
+                and 0.0 <= y_norm <= 1.0
+            ):
+                raise AotRelayError(
+                    "tap_coordinates_out_of_range"
+                )
+            before_fp, resource_id = (
+                _resolve_reference_tap(
+                    x_norm,
+                    y_norm,
+                )
+            )
+            local_result = controller.tap_selector(
+                resource_id,
+                before_fp,
+            )
+            follower_action = {
+                "kind": "tap_selector",
+                "resource_id": resource_id,
+            }
+        elif kind == "back":
+            before = controller.snapshot(
+                include_nodes=False
+            )
+            before_fp = str(
+                before.get("fingerprint") or ""
+            )
+            local_result = controller.press_back(
+                before_fp
+            )
+            follower_action = {
+                "kind": "back",
+            }
+        elif kind == "swipe":
+            values = [
+                float(action.get("x1")),
+                float(action.get("y1")),
+                float(action.get("x2")),
+                float(action.get("y2")),
+            ]
+            if any(
+                value < 0.0 or value > 1.0
+                for value in values
+            ):
+                raise AotRelayError(
+                    "swipe_coordinates_out_of_range"
+                )
+            duration_ms = min(
+                5000,
+                max(
+                    50,
+                    int(action.get("duration_ms") or 300),
+                ),
+            )
+            before = controller.snapshot(
+                include_nodes=False
+            )
+            before_fp = str(
+                before.get("fingerprint") or ""
+            )
+            local_result = controller.swipe_normalized(
+                values[0],
+                values[1],
+                values[2],
+                values[3],
+                duration_ms=duration_ms,
+                expected_fingerprint=before_fp,
+            )
+            follower_action = {
+                "kind": "swipe",
+                "x1": values[0],
+                "y1": values[1],
+                "x2": values[2],
+                "y2": values[3],
+                "duration_ms": duration_ms,
+            }
+        else:
+            raise AotRelayError(
+                "unsupported_hub_action"
+            )
+    except (
+        AotRelayError,
+        controller.AotControllerError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        _send_control_result(
+            sock,
+            session_id=session_id,
+            device_id=local_id,
+            control_id=control_id,
+            status="error",
+            reason=str(exc),
+        )
+        return
+
+    action_id = _make_action_id("hub")
+    dispatch = {
+        "protocol": PROTOCOL_VERSION,
+        "session_id": session_id,
+        "reference_device_id": local_id,
+        "target_device_ids": targets,
+        "action_id": action_id,
+        "expires_at": int(time.time() * 1000) + 15000,
+        "precondition": before_fp,
+        "action": follower_action,
+    }
+    dispatch_status = "success"
+    dispatch_reason = None
+    if targets:
+        try:
+            _dispatch_action(cfg, dispatch)
+        except AotRelayError as exc:
+            dispatch_status = "partial"
+            dispatch_reason = str(exc)
+
+    _send_control_result(
+        sock,
+        session_id=session_id,
+        device_id=local_id,
+        control_id=control_id,
+        status=dispatch_status,
+        reason=dispatch_reason,
+        action_id=action_id,
+        before_fingerprint=str(
+            local_result.get(
+                "before_fingerprint"
+            )
+            or before_fp
+        ),
+        after_fingerprint=str(
+            local_result.get(
+                "after_fingerprint"
+            )
+            or ""
+        ),
+    )
+
+
+def reference_loop(
+    *,
+    session_id: str,
+    open_package: str | None,
+) -> int:
+    local_id = normalize_device_id(
+        _read_small(DEVICE_ID_PATH)
+    )
+    if not local_id:
+        raise AotRelayError(
+            "invalid_local_device_id"
+        )
+    group = _read_small(
+        DEVICE_GROUP_PATH
+    ).upper()
+    if group not in {"NOVA", "MARMOT"}:
+        raise AotRelayError(
+            "invalid_local_device_group"
+        )
+    if not controller.root_available():
+        raise AotRelayError(
+            "root_not_available"
+        )
+    if open_package:
+        _launch_package(open_package)
+    cfg = load_agent_config()
+    url = websocket_url(
+        cfg["worker_report_url"],
+        device_id=local_id,
+        role="reference",
+        session_id=session_id,
+    )
+    reconnect_delay = 2
+    while True:
+        sock = None
+        try:
+            sock = ws_connect(
+                url,
+                cfg["agent_report_secret"],
+            )
+            sock.settimeout(2)
+            reconnect_delay = 2
+            print(f"AOT_REFERENCE={local_id}")
+            print(f"AOT_SESSION={session_id}")
+            print(
+                "AOT_REFERENCE_CHANNEL=CONNECTED"
+            )
+            previous_sha = None
+            previous_sha = _send_live_status(
+                sock,
+                role="reference",
+                session_id=session_id,
+                device_id=local_id,
+                previous_preview_sha=previous_sha,
+                force_preview=True,
+            )
+            next_status = (
+                time.monotonic()
+                + LIVE_STATUS_INTERVAL_SECONDS
+            )
+            while True:
+                now = time.monotonic()
+                if now >= next_status:
+                    try:
+                        previous_sha = (
+                            _send_live_status(
+                                sock,
+                                role="reference",
+                                session_id=session_id,
+                                device_id=local_id,
+                                previous_preview_sha=previous_sha,
+                            )
+                        )
+                    except (
+                        OSError,
+                        controller.AotControllerError,
+                    ):
+                        pass
+                    next_status = (
+                        time.monotonic()
+                        + LIVE_STATUS_INTERVAL_SECONDS
+                    )
+                try:
+                    opcode, payload = (
+                        _ws_recv_frame(sock)
+                    )
+                except socket.timeout:
+                    continue
+                if opcode == 0x8:
+                    raise ConnectionError(
+                        "websocket_closed"
+                    )
+                if opcode == 0x9:
+                    _ws_send_frame(
+                        sock,
+                        0xA,
+                        payload,
+                    )
+                    continue
+                if opcode == 0xA:
+                    continue
+                if opcode != 0x1:
+                    continue
+                try:
+                    message = json.loads(
+                        payload.decode("utf-8")
+                    )
+                except Exception:
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                if (
+                    message.get("type")
+                    == "aot_hub_action"
+                ):
+                    _handle_hub_action(
+                        sock,
+                        cfg,
+                        local_id=local_id,
+                        session_id=session_id,
+                        message=message,
+                    )
+                    try:
+                        previous_sha = (
+                            _send_live_status(
+                                sock,
+                                role="reference",
+                                session_id=session_id,
+                                device_id=local_id,
+                                previous_preview_sha=previous_sha,
+                                force_preview=True,
+                            )
+                        )
+                    except (
+                        OSError,
+                        controller.AotControllerError,
+                    ):
+                        pass
+                elif (
+                    message.get("type")
+                    == "aot_ack"
+                ):
+                    follower = (
+                        normalize_device_id(
+                            message.get(
+                                "follower_device_id"
+                            )
+                        )
+                        or "unknown"
+                    )
+                    status = str(
+                        message.get("status")
+                        or "unknown"
+                    )
+                    print(
+                        "AOT_ACK="
+                        + follower
+                        + ":"
+                        + status
+                    )
+        except KeyboardInterrupt:
+            raise
+        except (
+            OSError,
+            ConnectionError,
+            AotRelayError,
+            controller.AotControllerError,
+        ) as exc:
+            print(
+                "AOT_REFERENCE_CHANNEL=RECONNECT:"
+                + type(exc).__name__
+            )
+            time.sleep(reconnect_delay)
+            reconnect_delay = min(
+                15,
+                reconnect_delay + 2,
+            )
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+
 def follower_loop(
     *,
     session_id: str,
     reference_device: str,
     open_package: str | None,
 ) -> int:
-    local_id = normalize_device_id(_read_small(DEVICE_ID_PATH))
+    local_id = normalize_device_id(
+        _read_small(DEVICE_ID_PATH)
+    )
     if not local_id:
-        raise AotRelayError("invalid_local_device_id")
-    group = _read_small(DEVICE_GROUP_PATH).upper()
+        raise AotRelayError(
+            "invalid_local_device_id"
+        )
+    group = _read_small(
+        DEVICE_GROUP_PATH
+    ).upper()
     if group not in {"NOVA", "MARMOT"}:
-        raise AotRelayError("invalid_local_device_group")
+        raise AotRelayError(
+            "invalid_local_device_group"
+        )
     if not controller.root_available():
-        raise AotRelayError("root_not_available")
+        raise AotRelayError(
+            "root_not_available"
+        )
     if open_package:
         _launch_package(open_package)
     cfg = load_agent_config()
@@ -522,175 +1065,364 @@ def follower_loop(
         role="follower",
         session_id=session_id,
     )
-    sock = ws_connect(
-        url,
-        cfg["agent_report_secret"],
-    )
     state = _load_state()
-    print(f"AOT_FOLLOWER={local_id}")
-    print(f"AOT_SESSION={session_id}")
-    print("AOT_FOLLOWER_CHANNEL=CONNECTED")
-    try:
-        while True:
-            try:
-                opcode, payload = _ws_recv_frame(sock)
-            except socket.timeout:
-                _ws_send_frame(sock, 0x9, b"")
-                continue
-            if opcode == 0x8:
-                raise ConnectionError("websocket_closed")
-            if opcode == 0x9:
-                _ws_send_frame(sock, 0xA, payload)
-                continue
-            if opcode == 0xA:
-                continue
-            if opcode != 0x1:
-                continue
-            try:
-                message = json.loads(payload.decode("utf-8"))
-            except Exception:
-                continue
-            if not isinstance(message, dict):
-                continue
-            if message.get("type") != "aot_action":
-                continue
-            if message.get("protocol") != PROTOCOL_VERSION:
-                continue
-            action_id = normalize_action_id(
-                message.get("action_id")
-            )
-            if not action_id:
-                continue
-            if (
-                normalize_session_id(message.get("session_id"))
-                != session_id
-            ):
-                continue
-            if (
-                normalize_device_id(
-                    message.get("reference_device_id")
-                )
-                != reference_device
-            ):
-                continue
-            expires_at = int(message.get("expires_at") or 0)
-            if expires_at <= int(time.time() * 1000):
-                _send_ack(
-                    cfg,
-                    {
-                        "protocol": PROTOCOL_VERSION,
-                        "session_id": session_id,
-                        "reference_device_id": reference_device,
-                        "follower_device_id": local_id,
-                        "action_id": action_id,
-                        "status": "expired",
-                        "executed": False,
-                    },
-                )
-                continue
-            if action_already_processed(state, action_id):
-                _send_ack(
-                    cfg,
-                    {
-                        "protocol": PROTOCOL_VERSION,
-                        "session_id": session_id,
-                        "reference_device_id": reference_device,
-                        "follower_device_id": local_id,
-                        "action_id": action_id,
-                        "status": "duplicate",
-                        "executed": False,
-                    },
-                )
-                print(f"AOT_ACTION_DUPLICATE={action_id}")
-                continue
-            precondition = str(
-                message.get("precondition") or ""
-            ).strip()
-            current = controller.snapshot(
-                include_nodes=False
-            )
-            if current.get("fingerprint") != precondition:
-                mark_action_processed(
-                    state,
-                    action_id,
-                )
-                _send_ack(
-                    cfg,
-                    {
-                        "protocol": PROTOCOL_VERSION,
-                        "session_id": session_id,
-                        "reference_device_id": reference_device,
-                        "follower_device_id": local_id,
-                        "action_id": action_id,
-                        "status": "out_of_sync",
-                        "executed": False,
-                        "before_fingerprint": current.get(
-                            "fingerprint"
-                        ),
-                    },
-                )
-                print(f"AOT_OUT_OF_SYNC={action_id}")
-                continue
-            try:
-                result = _execute_action(
-                    message.get("action") or {},
-                    precondition,
-                )
-            except controller.AotControllerError:
-                mark_action_processed(
-                    state,
-                    action_id,
-                )
-                _send_ack(
-                    cfg,
-                    {
-                        "protocol": PROTOCOL_VERSION,
-                        "session_id": session_id,
-                        "reference_device_id": reference_device,
-                        "follower_device_id": local_id,
-                        "action_id": action_id,
-                        "status": "error",
-                        "executed": False,
-                    },
-                )
-                print(f"AOT_ACTION_ERROR={action_id}")
-                continue
-            mark_action_processed(
-                state,
-                action_id,
-            )
-            preview_b64, preview_bytes, preview_sha = (
-                _preview_payload()
-            )
-            ack = {
-                "protocol": PROTOCOL_VERSION,
-                "session_id": session_id,
-                "reference_device_id": reference_device,
-                "follower_device_id": local_id,
-                "action_id": action_id,
-                "status": "success",
-                "executed": True,
-                "before_fingerprint": result.get(
-                    "before_fingerprint"
-                ),
-                "after_fingerprint": result.get(
-                    "after_fingerprint"
-                ),
-                "screen_changed": bool(
-                    result.get("screen_changed")
-                ),
-                "preview_bytes": preview_bytes,
-                "preview_sha256": preview_sha,
-            }
-            if preview_b64:
-                ack["preview_b64"] = preview_b64
-            _send_ack(cfg, ack)
-            print(f"AOT_ACTION_SUCCESS={action_id}")
-    finally:
+    reconnect_delay = 2
+
+    while True:
+        sock = None
         try:
-            sock.close()
-        except Exception:
-            pass
+            sock = ws_connect(
+                url,
+                cfg["agent_report_secret"],
+            )
+            sock.settimeout(2)
+            reconnect_delay = 2
+            print(f"AOT_FOLLOWER={local_id}")
+            print(f"AOT_SESSION={session_id}")
+            print(
+                "AOT_FOLLOWER_CHANNEL=CONNECTED"
+            )
+            previous_sha = None
+            try:
+                previous_sha = _send_live_status(
+                    sock,
+                    role="follower",
+                    session_id=session_id,
+                    device_id=local_id,
+                    previous_preview_sha=previous_sha,
+                    force_preview=True,
+                )
+            except (
+                OSError,
+                controller.AotControllerError,
+            ):
+                pass
+            next_status = (
+                time.monotonic()
+                + LIVE_STATUS_INTERVAL_SECONDS
+            )
+
+            while True:
+                now = time.monotonic()
+                if now >= next_status:
+                    try:
+                        previous_sha = (
+                            _send_live_status(
+                                sock,
+                                role="follower",
+                                session_id=session_id,
+                                device_id=local_id,
+                                previous_preview_sha=previous_sha,
+                            )
+                        )
+                    except (
+                        OSError,
+                        controller.AotControllerError,
+                    ):
+                        pass
+                    next_status = (
+                        time.monotonic()
+                        + LIVE_STATUS_INTERVAL_SECONDS
+                    )
+                try:
+                    opcode, payload = (
+                        _ws_recv_frame(sock)
+                    )
+                except socket.timeout:
+                    continue
+                if opcode == 0x8:
+                    raise ConnectionError(
+                        "websocket_closed"
+                    )
+                if opcode == 0x9:
+                    _ws_send_frame(
+                        sock,
+                        0xA,
+                        payload,
+                    )
+                    continue
+                if opcode == 0xA:
+                    continue
+                if opcode != 0x1:
+                    continue
+                try:
+                    message = json.loads(
+                        payload.decode("utf-8")
+                    )
+                except Exception:
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                if (
+                    message.get("type")
+                    != "aot_action"
+                ):
+                    continue
+                if (
+                    message.get("protocol")
+                    != PROTOCOL_VERSION
+                ):
+                    continue
+                action_id = (
+                    normalize_action_id(
+                        message.get(
+                            "action_id"
+                        )
+                    )
+                )
+                if not action_id:
+                    continue
+                if (
+                    normalize_session_id(
+                        message.get(
+                            "session_id"
+                        )
+                    )
+                    != session_id
+                ):
+                    continue
+                if (
+                    normalize_device_id(
+                        message.get(
+                            "reference_device_id"
+                        )
+                    )
+                    != reference_device
+                ):
+                    continue
+                expires_at = int(
+                    message.get(
+                        "expires_at"
+                    )
+                    or 0
+                )
+                if expires_at <= int(
+                    time.time() * 1000
+                ):
+                    _send_ack(
+                        cfg,
+                        {
+                            "protocol":
+                                PROTOCOL_VERSION,
+                            "session_id":
+                                session_id,
+                            "reference_device_id":
+                                reference_device,
+                            "follower_device_id":
+                                local_id,
+                            "action_id":
+                                action_id,
+                            "status":
+                                "expired",
+                            "executed":
+                                False,
+                        },
+                    )
+                    continue
+                if action_already_processed(
+                    state,
+                    action_id,
+                ):
+                    _send_ack(
+                        cfg,
+                        {
+                            "protocol":
+                                PROTOCOL_VERSION,
+                            "session_id":
+                                session_id,
+                            "reference_device_id":
+                                reference_device,
+                            "follower_device_id":
+                                local_id,
+                            "action_id":
+                                action_id,
+                            "status":
+                                "duplicate",
+                            "executed":
+                                False,
+                        },
+                    )
+                    print(
+                        "AOT_ACTION_DUPLICATE="
+                        + action_id
+                    )
+                    continue
+                precondition = str(
+                    message.get(
+                        "precondition"
+                    )
+                    or ""
+                ).strip()
+                current = controller.snapshot(
+                    include_nodes=False
+                )
+                if (
+                    current.get(
+                        "fingerprint"
+                    )
+                    != precondition
+                ):
+                    mark_action_processed(
+                        state,
+                        action_id,
+                    )
+                    _send_ack(
+                        cfg,
+                        {
+                            "protocol":
+                                PROTOCOL_VERSION,
+                            "session_id":
+                                session_id,
+                            "reference_device_id":
+                                reference_device,
+                            "follower_device_id":
+                                local_id,
+                            "action_id":
+                                action_id,
+                            "status":
+                                "out_of_sync",
+                            "executed":
+                                False,
+                            "before_fingerprint":
+                                current.get(
+                                    "fingerprint"
+                                ),
+                        },
+                    )
+                    print(
+                        "AOT_OUT_OF_SYNC="
+                        + action_id
+                    )
+                    continue
+                try:
+                    result = _execute_action(
+                        message.get(
+                            "action"
+                        )
+                        or {},
+                        precondition,
+                    )
+                except (
+                    controller.AotControllerError
+                ):
+                    mark_action_processed(
+                        state,
+                        action_id,
+                    )
+                    _send_ack(
+                        cfg,
+                        {
+                            "protocol":
+                                PROTOCOL_VERSION,
+                            "session_id":
+                                session_id,
+                            "reference_device_id":
+                                reference_device,
+                            "follower_device_id":
+                                local_id,
+                            "action_id":
+                                action_id,
+                            "status":
+                                "error",
+                            "executed":
+                                False,
+                        },
+                    )
+                    print(
+                        "AOT_ACTION_ERROR="
+                        + action_id
+                    )
+                    continue
+                mark_action_processed(
+                    state,
+                    action_id,
+                )
+                preview_b64, preview_bytes, (
+                    preview_sha
+                ) = _preview_payload()
+                ack = {
+                    "protocol":
+                        PROTOCOL_VERSION,
+                    "session_id":
+                        session_id,
+                    "reference_device_id":
+                        reference_device,
+                    "follower_device_id":
+                        local_id,
+                    "action_id":
+                        action_id,
+                    "status":
+                        "success",
+                    "executed":
+                        True,
+                    "before_fingerprint":
+                        result.get(
+                            "before_fingerprint"
+                        ),
+                    "after_fingerprint":
+                        result.get(
+                            "after_fingerprint"
+                        ),
+                    "screen_changed":
+                        bool(
+                            result.get(
+                                "screen_changed"
+                            )
+                        ),
+                    "preview_bytes":
+                        preview_bytes,
+                    "preview_sha256":
+                        preview_sha,
+                }
+                if preview_b64:
+                    ack[
+                        "preview_b64"
+                    ] = preview_b64
+                _send_ack(cfg, ack)
+                print(
+                    "AOT_ACTION_SUCCESS="
+                    + action_id
+                )
+                try:
+                    previous_sha = (
+                        _send_live_status(
+                            sock,
+                            role="follower",
+                            session_id=session_id,
+                            device_id=local_id,
+                            previous_preview_sha=previous_sha,
+                            force_preview=True,
+                        )
+                    )
+                except (
+                    OSError,
+                    controller.AotControllerError,
+                ):
+                    pass
+        except KeyboardInterrupt:
+            raise
+        except (
+            OSError,
+            ConnectionError,
+            AotRelayError,
+            controller.AotControllerError,
+        ) as exc:
+            print(
+                "AOT_FOLLOWER_CHANNEL=RECONNECT:"
+                + type(exc).__name__
+            )
+            time.sleep(reconnect_delay)
+            reconnect_delay = min(
+                15,
+                reconnect_delay + 2,
+            )
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
 
 
 def _recv_ack(
@@ -1013,28 +1745,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     follower.add_argument("--open-package")
 
-    reference = sub.add_parser("reference-test")
+    reference = sub.add_parser("reference")
     reference.add_argument("--session", required=True)
-    reference.add_argument("--follower", required=True)
-    reference.add_argument(
+    reference.add_argument("--open-package")
+
+    reference_test_parser = sub.add_parser(
+        "reference-test"
+    )
+    reference_test_parser.add_argument(
+        "--session",
+        required=True,
+    )
+    reference_test_parser.add_argument(
+        "--follower",
+        required=True,
+    )
+    reference_test_parser.add_argument(
         "--selector",
         default=(
             "org.swiftapps.swiftbackup:id/nav_account"
         ),
     )
-    reference.add_argument(
+    reference_test_parser.add_argument(
         "--open-package",
         default="org.swiftapps.swiftbackup",
     )
     return parser
 
 
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        session_id = normalize_session_id(args.session)
+        session_id = normalize_session_id(
+            args.session
+        )
         if not session_id:
-            raise AotRelayError("invalid_session_id")
+            raise AotRelayError(
+                "invalid_session_id"
+            )
         if args.command == "follower":
             reference = normalize_device_id(
                 args.reference_device
@@ -1048,8 +1797,15 @@ def main(argv: list[str] | None = None) -> int:
                 reference_device=reference,
                 open_package=args.open_package,
             )
+        if args.command == "reference":
+            return reference_loop(
+                session_id=session_id,
+                open_package=args.open_package,
+            )
         if args.command == "reference-test":
-            follower = normalize_device_id(args.follower)
+            follower = normalize_device_id(
+                args.follower
+            )
             if not follower:
                 raise AotRelayError(
                     "invalid_follower_device"
@@ -1060,11 +1816,14 @@ def main(argv: list[str] | None = None) -> int:
                 selector=args.selector,
                 open_package=args.open_package,
             )
-        raise AotRelayError("unknown_command")
+        raise AotRelayError(
+            "unknown_command"
+        )
     except AotRelayError as exc:
         print("AOT_RELAY=FAILED")
         print("REASON=" + str(exc))
         return 2
+
 
 
 if __name__ == "__main__":

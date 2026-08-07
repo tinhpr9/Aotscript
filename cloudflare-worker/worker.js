@@ -990,6 +990,794 @@ async function handleAotControlHealth(
 }
 
 
+const AOT_HUB_PROTOCOL_VERSION = "phase4-1";
+const AOT_HUB_AUTH_MAX_AGE_SECONDS = 60 * 60;
+const AOT_HUB_INITDATA_MAX_BYTES = 16 * 1024;
+const AOT_HUB_FALLBACK_URL =
+  "https://billowing-haze-0cafaotscript-control.tinh1020pr.workers.dev/aot/hub";
+
+function aotHubPublicUrl(env) {
+  const configured = String(
+    env.AOT_HUB_URL || ""
+  ).trim();
+  if (isValidUrl(configured)) {
+    return configured;
+  }
+  return AOT_HUB_FALLBACK_URL;
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes)
+    .map(
+      (byte) =>
+        byte.toString(16).padStart(2, "0")
+    )
+    .join("");
+}
+
+async function hmacSha256Bytes(
+  keyBytes,
+  dataBytes
+) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    {
+      name: "HMAC",
+      hash: "SHA-256",
+    },
+    false,
+    ["sign"]
+  );
+  const signature =
+    await crypto.subtle.sign(
+      "HMAC",
+      key,
+      dataBytes
+    );
+  return new Uint8Array(signature);
+}
+
+function constantTimeTextEqual(left, right) {
+  const a = String(left || "");
+  const b = String(right || "");
+  if (a.length !== b.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    diff |=
+      a.charCodeAt(index) ^
+      b.charCodeAt(index);
+  }
+  return diff === 0;
+}
+
+async function validateAotTelegramInitData(
+  rawValue,
+  env
+) {
+  const raw = String(rawValue || "");
+  if (
+    !raw ||
+    new TextEncoder().encode(raw).length >
+      AOT_HUB_INITDATA_MAX_BYTES
+  ) {
+    return null;
+  }
+  const botToken = String(
+    env.TELEGRAM_BOT_TOKEN || ""
+  );
+  const adminId = String(
+    env.TELEGRAM_ADMIN_USER_ID || ""
+  ).trim();
+  if (!botToken || !adminId) {
+    return null;
+  }
+  const params = new URLSearchParams(raw);
+  const hash = String(
+    params.get("hash") || ""
+  ).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(hash)) {
+    return null;
+  }
+  params.delete("hash");
+  const entries = [
+    ...params.entries(),
+  ].sort((left, right) =>
+    left[0].localeCompare(right[0])
+  );
+  const dataCheckString = entries
+    .map(
+      ([key, value]) =>
+        `${key}=${value}`
+    )
+    .join("\n");
+  const encoder = new TextEncoder();
+  const secretKey =
+    await hmacSha256Bytes(
+      encoder.encode("WebAppData"),
+      encoder.encode(botToken)
+    );
+  const calculated = bytesToHex(
+    await hmacSha256Bytes(
+      secretKey,
+      encoder.encode(dataCheckString)
+    )
+  );
+  if (
+    !constantTimeTextEqual(
+      calculated,
+      hash
+    )
+  ) {
+    return null;
+  }
+  const authDate = Number(
+    params.get("auth_date")
+  );
+  const nowSeconds = Math.floor(
+    Date.now() / 1000
+  );
+  if (
+    !Number.isFinite(authDate) ||
+    authDate <= 0 ||
+    authDate > nowSeconds + 60 ||
+    nowSeconds - authDate >
+      AOT_HUB_AUTH_MAX_AGE_SECONDS
+  ) {
+    return null;
+  }
+  let user;
+  try {
+    user = JSON.parse(
+      params.get("user") || "{}"
+    );
+  } catch (error) {
+    return null;
+  }
+  if (
+    !user ||
+    typeof user !== "object" ||
+    String(user.id || "") !== adminId
+  ) {
+    return null;
+  }
+  return {
+    id: String(user.id),
+    first_name:
+      String(user.first_name || "")
+        .slice(0, 80),
+  };
+}
+
+async function requireAotHubAdmin(
+  request,
+  env
+) {
+  const user =
+    await validateAotTelegramInitData(
+      request.headers.get(
+        "X-Telegram-Init-Data"
+      ),
+      env
+    );
+  if (!user) {
+    return {
+      ok: false,
+      response: noStoreJson(
+        {
+          ok: false,
+          error: "hub_unauthorized",
+        },
+        401
+      ),
+    };
+  }
+  return {
+    ok: true,
+    user,
+  };
+}
+
+function aotHubHtml() {
+  return `<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>AOT Group Control</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      background: #101114;
+      color: #f5f7fb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #101114;
+      color: #f5f7fb;
+    }
+    button,input {
+      font: inherit;
+    }
+    .app {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 14px;
+    }
+    .top {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0;
+      flex: 1;
+    }
+    .session {
+      display: flex;
+      gap: 6px;
+      width: 100%;
+    }
+    .session input {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid #343843;
+      border-radius: 10px;
+      padding: 10px;
+      background: #181a20;
+      color: inherit;
+    }
+    button {
+      border: 1px solid #3a3f4c;
+      border-radius: 10px;
+      background: #20232b;
+      color: inherit;
+      padding: 10px 12px;
+      font-weight: 650;
+    }
+    button:disabled {
+      opacity: .45;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4,minmax(0,1fr));
+      gap: 8px;
+      margin: 10px 0 14px;
+    }
+    .metric,.card {
+      background: #181a20;
+      border: 1px solid #2b2f39;
+      border-radius: 14px;
+    }
+    .metric {
+      padding: 10px;
+      text-align: center;
+    }
+    .metric strong {
+      display: block;
+      font-size: 20px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit,minmax(240px,1fr));
+      gap: 10px;
+    }
+    .card {
+      overflow: hidden;
+    }
+    .card header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+    }
+    .device {
+      font-weight: 750;
+    }
+    .status {
+      font-size: 12px;
+      font-weight: 800;
+      padding: 4px 7px;
+      border-radius: 999px;
+      background: #30343e;
+    }
+    .status.SYNCED,.status.REFERENCE {
+      background: #173d2a;
+      color: #8df1b8;
+    }
+    .status.OUT_OF_SYNC {
+      background: #4b3214;
+      color: #ffd28a;
+    }
+    .status.OFFLINE {
+      background: #3f2024;
+      color: #ff9ca6;
+    }
+    .status.WAITING {
+      background: #273044;
+      color: #aac3ff;
+    }
+    .preview {
+      width: 100%;
+      display: block;
+      background: #090a0c;
+      min-height: 160px;
+      object-fit: contain;
+      touch-action: manipulation;
+    }
+    .placeholder {
+      min-height: 160px;
+      display: grid;
+      place-items: center;
+      color: #8f96a3;
+      background: #090a0c;
+    }
+    .meta {
+      padding: 9px 12px 12px;
+      color: #aeb4c0;
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .controls {
+      position: sticky;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: repeat(5,minmax(0,1fr));
+      gap: 7px;
+      padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+      background: linear-gradient(180deg,transparent,#101114 24%);
+    }
+    .error {
+      color: #ff9ca6;
+      min-height: 22px;
+      margin: 8px 0;
+      font-size: 13px;
+    }
+    .hint {
+      color: #9ba3b0;
+      font-size: 12px;
+      margin: 8px 0;
+    }
+    @media (max-width: 560px) {
+      .summary {
+        grid-template-columns: repeat(2,minmax(0,1fr));
+      }
+      .controls {
+        grid-template-columns: repeat(3,minmax(0,1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="top">
+      <h1>AOT GROUP CONTROL</h1>
+      <button id="refresh">Làm mới</button>
+    </div>
+    <div class="session">
+      <input id="session" value="m37-m117-p3" autocomplete="off" spellcheck="false">
+      <button id="apply">Mở</button>
+    </div>
+    <div class="hint">
+      Chạm trực tiếp lên ảnh REFERENCE để gửi semantic tap. Nếu điểm chạm không ánh xạ được node an toàn, hệ thống sẽ từ chối.
+    </div>
+    <div id="error" class="error"></div>
+    <section class="summary">
+      <div class="metric"><strong id="online">0</strong>ONLINE</div>
+      <div class="metric"><strong id="synced">0</strong>SYNCED</div>
+      <div class="metric"><strong id="out">0</strong>OUT OF SYNC</div>
+      <div class="metric"><strong id="offline">0</strong>OFFLINE</div>
+    </section>
+    <section id="reference"></section>
+    <h2 style="font-size:16px;margin:16px 0 8px">FOLLOWERS</h2>
+    <section id="followers" class="grid"></section>
+    <div id="lastControl" class="hint"></div>
+    <nav class="controls">
+      <button id="pause">PAUSE</button>
+      <button id="resume">RESUME</button>
+      <button id="back">BACK</button>
+      <button id="up">SWIPE ↑</button>
+      <button id="down">SWIPE ↓</button>
+    </nav>
+  </main>
+  <script>
+  (function () {
+    "use strict";
+    var tg = window.Telegram && window.Telegram.WebApp;
+    var auth = tg ? String(tg.initData || "") : "";
+    var currentState = null;
+    var timer = null;
+    var sessionInput = document.getElementById("session");
+    var errorEl = document.getElementById("error");
+    var referenceEl = document.getElementById("reference");
+    var followersEl = document.getElementById("followers");
+    var lastControlEl = document.getElementById("lastControl");
+
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      try { tg.disableVerticalSwipes(); } catch (e) {}
+    }
+
+    function esc(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function sessionId() {
+      return String(sessionInput.value || "").trim();
+    }
+
+    async function api(path, options) {
+      if (!auth) {
+        throw new Error("Hãy mở AOT HUB từ nút trong Telegram.");
+      }
+      var init = options || {};
+      init.headers = Object.assign(
+        {},
+        init.headers || {},
+        {
+          "X-Telegram-Init-Data": auth,
+          "Accept": "application/json"
+        }
+      );
+      if (init.body && typeof init.body !== "string") {
+        init.headers["Content-Type"] = "application/json";
+        init.body = JSON.stringify(init.body);
+      }
+      var response = await fetch(path, init);
+      var data = await response.json().catch(function () {
+        return { ok: false, error: "invalid_response" };
+      });
+      if (!response.ok || data.ok !== true) {
+        throw new Error(String(data.error || ("HTTP " + response.status)));
+      }
+      return data;
+    }
+
+    function preview(device, isReference) {
+      if (!device || !device.preview_b64) {
+        return '<div class="placeholder">Chưa có preview</div>';
+      }
+      var id = isReference ? ' id="referencePreview"' : "";
+      return '<img' + id + ' class="preview" alt="preview" src="data:image/png;base64,' +
+        device.preview_b64 + '">';
+    }
+
+    function card(device, isReference) {
+      if (!device) {
+        return '<div class="card"><div class="placeholder">REFERENCE chưa kết nối</div></div>';
+      }
+      var state = esc(device.status || "WAITING");
+      var role = isReference ? "REFERENCE" : "FOLLOWER";
+      return '<article class="card">' +
+        '<header><div><div class="device">' + esc(device.device_id) +
+        '</div><div class="hint" style="margin:2px 0 0">' + role +
+        '</div></div><span class="status ' + state + '">' + state +
+        '</span></header>' +
+        preview(device, isReference) +
+        '<div class="meta">' +
+        esc(device.package || "-") + '<br>' +
+        'FP ' + esc(device.fingerprint || "-") +
+        '</div></article>';
+    }
+
+    function render(data) {
+      currentState = data;
+      var summary = data.summary || {};
+      document.getElementById("online").textContent = summary.online || 0;
+      document.getElementById("synced").textContent = summary.synced || 0;
+      document.getElementById("out").textContent = summary.out_of_sync || 0;
+      document.getElementById("offline").textContent = summary.offline || 0;
+      referenceEl.innerHTML = card(data.reference, true);
+      followersEl.innerHTML = (data.followers || [])
+        .map(function (item) { return card(item, false); })
+        .join("");
+      document.getElementById("pause").disabled = !!data.paused;
+      document.getElementById("resume").disabled = !data.paused;
+      var last = data.last_control;
+      lastControlEl.textContent = last
+        ? ("Control: " + String(last.status || "-") +
+           (last.reason ? " — " + String(last.reason) : ""))
+        : "";
+      var image = document.getElementById("referencePreview");
+      if (image) {
+        image.addEventListener("click", function (event) {
+          if (!currentState || currentState.paused) {
+            return;
+          }
+          var rect = image.getBoundingClientRect();
+          if (!rect.width || !rect.height) {
+            return;
+          }
+          var x = (event.clientX - rect.left) / rect.width;
+          var y = (event.clientY - rect.top) / rect.height;
+          sendControl("tap", {
+            x_norm: Math.max(0, Math.min(1, x)),
+            y_norm: Math.max(0, Math.min(1, y))
+          });
+        });
+      }
+    }
+
+    async function loadState() {
+      var session = sessionId();
+      if (!session) {
+        return;
+      }
+      try {
+        var data = await api(
+          "/aot/hub/api/state?session_id=" +
+          encodeURIComponent(session)
+        );
+        errorEl.textContent = "";
+        render(data);
+      } catch (error) {
+        errorEl.textContent = String(error.message || error);
+      }
+    }
+
+    async function sendControl(kind, extra) {
+      try {
+        errorEl.textContent = "";
+        await api("/aot/hub/api/control", {
+          method: "POST",
+          body: Object.assign(
+            {
+              session_id: sessionId(),
+              kind: kind
+            },
+            extra || {}
+          )
+        });
+        window.setTimeout(loadState, 250);
+      } catch (error) {
+        errorEl.textContent = String(error.message || error);
+      }
+    }
+
+    function startPolling() {
+      if (timer) {
+        window.clearInterval(timer);
+      }
+      loadState();
+      timer = window.setInterval(loadState, 1500);
+    }
+
+    document.getElementById("refresh").onclick = loadState;
+    document.getElementById("apply").onclick = startPolling;
+    document.getElementById("pause").onclick = function () {
+      sendControl("pause");
+    };
+    document.getElementById("resume").onclick = function () {
+      sendControl("resume");
+    };
+    document.getElementById("back").onclick = function () {
+      sendControl("back");
+    };
+    document.getElementById("up").onclick = function () {
+      sendControl("swipe", {
+        x1: 0.5, y1: 0.75, x2: 0.5, y2: 0.28, duration_ms: 300
+      });
+    };
+    document.getElementById("down").onclick = function () {
+      sendControl("swipe", {
+        x1: 0.5, y1: 0.28, x2: 0.5, y2: 0.75, duration_ms: 300
+      });
+    };
+
+    startPolling();
+  }());
+  </script>
+</body>
+</html>`;
+}
+
+async function handleAotHubPage() {
+  return new Response(
+    aotHubHtml(),
+    {
+      status: 200,
+      headers: {
+        "Content-Type":
+          "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy":
+          "default-src 'self'; " +
+          "script-src 'self' https://telegram.org 'unsafe-inline'; " +
+          "img-src 'self' data:; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "connect-src 'self'; " +
+          "frame-ancestors https://web.telegram.org https://*.telegram.org",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+      },
+    }
+  );
+}
+
+async function handleAotHubState(
+  request,
+  env,
+  url
+) {
+  const auth = await requireAotHubAdmin(
+    request,
+    env
+  );
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const sessionId = normalizeAotSessionId(
+    url.searchParams.get("session_id")
+  );
+  if (!sessionId) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_session_id",
+      },
+      400
+    );
+  }
+  const result = await fleetStateCall(
+    env,
+    `/aot/hub/state?session=${encodeURIComponent(sessionId)}`
+  );
+  return noStoreJson(
+    result.data,
+    result.response.status
+  );
+}
+
+function normalizeAotHubControl(body) {
+  if (
+    !body ||
+    typeof body !== "object"
+  ) {
+    return null;
+  }
+  const sessionId = normalizeAotSessionId(
+    body.session_id
+  );
+  const kind = String(
+    body.kind || ""
+  ).trim();
+  if (!sessionId) {
+    return null;
+  }
+  if (
+    ["pause", "resume", "back"].includes(kind)
+  ) {
+    return {
+      session_id: sessionId,
+      kind,
+    };
+  }
+  if (kind === "tap") {
+    const x = Number(body.x_norm);
+    const y = Number(body.y_norm);
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      x < 0 ||
+      x > 1 ||
+      y < 0 ||
+      y > 1
+    ) {
+      return null;
+    }
+    return {
+      session_id: sessionId,
+      kind,
+      x_norm: x,
+      y_norm: y,
+    };
+  }
+  if (kind === "swipe") {
+    const values = [
+      Number(body.x1),
+      Number(body.y1),
+      Number(body.x2),
+      Number(body.y2),
+    ];
+    if (
+      values.some(
+        (value) =>
+          !Number.isFinite(value) ||
+          value < 0 ||
+          value > 1
+      )
+    ) {
+      return null;
+    }
+    return {
+      session_id: sessionId,
+      kind,
+      x1: values[0],
+      y1: values[1],
+      x2: values[2],
+      y2: values[3],
+      duration_ms: Math.min(
+        5000,
+        Math.max(
+          50,
+          Math.round(
+            Number(body.duration_ms) || 300
+          )
+        )
+      ),
+    };
+  }
+  return null;
+}
+
+async function handleAotHubControl(
+  request,
+  env
+) {
+  const auth = await requireAotHubAdmin(
+    request,
+    env
+  );
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const parsed = await readAotJson(request);
+  if (parsed.error) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: parsed.error,
+      },
+      400
+    );
+  }
+  const control = normalizeAotHubControl(
+    parsed.value
+  );
+  if (!control) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_hub_control",
+      },
+      400
+    );
+  }
+  const result = await fleetStateCall(
+    env,
+    "/aot/hub/control",
+    {
+      method: "POST",
+      body: {
+        protocol:
+          AOT_HUB_PROTOCOL_VERSION,
+        ...control,
+      },
+    }
+  );
+  return noStoreJson(
+    result.data,
+    result.response.status
+  );
+}
+
+
+
 
 async function deviceIdsForTarget(target, env) {
   const wantedGroup =
@@ -3716,6 +4504,35 @@ export default {
 
       if (
         request.method === "GET" &&
+        url.pathname === "/aot/hub"
+      ) {
+        return await handleAotHubPage();
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/aot/hub/api/state"
+      ) {
+        return await handleAotHubState(
+          request,
+          env,
+          url
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/aot/hub/api/control"
+      ) {
+        return await handleAotHubControl(
+          request,
+          env
+        );
+      }
+
+
+      if (
+        request.method === "GET" &&
         url.pathname === "/aot/control/health"
       ) {
         return await handleAotControlHealth(
@@ -5375,6 +6192,14 @@ async function showTargets(
           text: "🔔 CẢNH BÁO",
           callback_data:
             "alerts_status",
+        },
+      ],
+      [
+        {
+          text: "🎛 AOT HUB",
+          web_app: {
+            url: aotHubPublicUrl(env),
+          },
         },
       ],
     ],

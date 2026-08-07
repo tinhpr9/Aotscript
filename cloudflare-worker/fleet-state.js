@@ -47,6 +47,7 @@ export class FleetState
   constructor(ctx, env) {
     super(ctx, env);
     this.ctx = ctx;
+    this.aotLive = new Map();
   }
 
   deviceKey(deviceId) {
@@ -562,15 +563,90 @@ export class FleetState
     });
   }
 
-  webSocketMessage(socket, message) {
+  async webSocketMessage(
+    socket,
+    message
+  ) {
     if (message === "ping") {
       try {
         socket.send("pong");
       } catch (error) {
         // Runtime cleans dead sockets.
       }
+      return;
+    }
+
+    if (typeof message !== "string") {
+      return;
+    }
+
+    let body;
+    try {
+      body = JSON.parse(message);
+    } catch (error) {
+      return;
+    }
+
+    if (
+      !body ||
+      typeof body !== "object"
+    ) {
+      return;
+    }
+
+    const identity =
+      this.parseAotSocketIdentity(
+        socket
+      );
+    if (!identity) {
+      return;
+    }
+
+    if (
+      body.type === "aot_status"
+    ) {
+      const live =
+        this.sanitizeAotLiveStatus(
+          identity,
+          body
+        );
+      if (!live) {
+        return;
+      }
+      const key =
+        this.aotLiveKey(
+          identity.sessionId,
+          identity.deviceId
+        );
+      const previous =
+        this.aotLive.get(key);
+      if (
+        !live.preview_b64 &&
+        previous?.preview_b64 &&
+        previous.preview_sha256 ===
+          live.preview_sha256
+      ) {
+        live.preview_b64 =
+          previous.preview_b64;
+      }
+      this.aotLive.set(
+        key,
+        live
+      );
+      return;
+    }
+
+    if (
+      body.type ===
+        "aot_control_result"
+    ) {
+      await this.recordAotControlResult(
+        identity,
+        body
+      );
     }
   }
+
 
   webSocketClose() {}
 
@@ -605,6 +681,728 @@ export class FleetState
     return sent;
   }
 
+
+  aotSessionKey(sessionId) {
+    return `aot_session:${sessionId}`;
+  }
+
+  aotLiveKey(
+    sessionId,
+    deviceId
+  ) {
+    return `${sessionId}:${deviceId}`;
+  }
+
+  async readAotSession(sessionId) {
+    let record =
+      await this.ctx.storage.get(
+        this.aotSessionKey(sessionId)
+      );
+    if (
+      !record ||
+      typeof record !== "object"
+    ) {
+      record = {
+        version: 1,
+        session_id: sessionId,
+        reference_device_id: null,
+        followers: {},
+        paused: false,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        last_control: null,
+      };
+    }
+    if (
+      !record.followers ||
+      typeof record.followers !== "object" ||
+      Array.isArray(record.followers)
+    ) {
+      record.followers = {};
+    }
+    return record;
+  }
+
+  async writeAotSession(
+    sessionId,
+    record
+  ) {
+    record.session_id = sessionId;
+    record.updated_at = Date.now();
+    await this.ctx.storage.put(
+      this.aotSessionKey(sessionId),
+      record
+    );
+  }
+
+  async rememberAotMember(
+    sessionId,
+    role,
+    deviceId
+  ) {
+    const record =
+      await this.readAotSession(
+        sessionId
+      );
+    if (role === "reference") {
+      record.reference_device_id =
+        deviceId;
+    } else {
+      const previous =
+        record.followers[deviceId];
+      record.followers[deviceId] = {
+        ...(previous &&
+        typeof previous === "object"
+          ? previous
+          : {}),
+        device_id: deviceId,
+        joined_at:
+          Number(
+            previous?.joined_at
+          ) || Date.now(),
+      };
+    }
+    await this.writeAotSession(
+      sessionId,
+      record
+    );
+  }
+
+  parseAotSocketIdentity(socket) {
+    let tags;
+    try {
+      tags = this.ctx.getTags(socket);
+    } catch (error) {
+      return null;
+    }
+    const tag = tags.find(
+      (value) =>
+        String(value).startsWith("aot:")
+    );
+    if (!tag) {
+      return null;
+    }
+    const parts = String(tag).split(":");
+    if (parts.length !== 4) {
+      return null;
+    }
+    const role = parts[1];
+    const sessionId = parts[2];
+    const deviceId =
+      validDeviceId(parts[3]);
+    if (
+      !["reference", "follower"].includes(role) ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(
+        sessionId
+      ) ||
+      !deviceId
+    ) {
+      return null;
+    }
+    return {
+      role,
+      sessionId,
+      deviceId,
+    };
+  }
+
+  sanitizeAotLiveStatus(
+    identity,
+    body
+  ) {
+    if (
+      !body ||
+      body.type !== "aot_status" ||
+      body.protocol !== "phase4-1" ||
+      String(body.role || "") !==
+        identity.role ||
+      String(body.session_id || "") !==
+        identity.sessionId ||
+      validDeviceId(body.device_id) !==
+        identity.deviceId
+    ) {
+      return null;
+    }
+    const fingerprint = String(
+      body.fingerprint || ""
+    ).toLowerCase();
+    if (
+      !/^[a-f0-9]{24}$/.test(
+        fingerprint
+      )
+    ) {
+      return null;
+    }
+    const packageName = String(
+      body.package || ""
+    ).trim();
+    if (
+      packageName.length > 160 ||
+      /[\u0000-\u001f\u007f]/.test(
+        packageName
+      )
+    ) {
+      return null;
+    }
+    const width = Number(body.width);
+    const height = Number(body.height);
+    if (
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0 ||
+      width > 10000 ||
+      height > 10000
+    ) {
+      return null;
+    }
+    let preview = null;
+    if (
+      typeof body.preview_b64 ===
+        "string" &&
+      body.preview_b64
+    ) {
+      if (
+        body.preview_b64.length <=
+          256 * 1024 &&
+        /^[A-Za-z0-9+/=]+$/.test(
+          body.preview_b64
+        )
+      ) {
+        preview = body.preview_b64;
+      }
+    }
+    return {
+      device_id: identity.deviceId,
+      role: identity.role,
+      session_id:
+        identity.sessionId,
+      package: packageName,
+      fingerprint,
+      width: Math.round(width),
+      height: Math.round(height),
+      preview_b64: preview,
+      preview_sha256:
+        typeof body.preview_sha256 ===
+          "string" &&
+        /^[a-f0-9]{64}$/.test(
+          body.preview_sha256
+        )
+          ? body.preview_sha256
+          : null,
+      preview_bytes:
+        Number.isFinite(
+          Number(body.preview_bytes)
+        )
+          ? Math.max(
+              0,
+              Math.floor(
+                Number(
+                  body.preview_bytes
+                )
+              )
+            )
+          : 0,
+      updated_at: Date.now(),
+    };
+  }
+
+  async recordAotControlResult(
+    identity,
+    body
+  ) {
+    if (
+      identity.role !== "reference" ||
+      !body ||
+      body.type !==
+        "aot_control_result" ||
+      body.protocol !== "phase4-1" ||
+      String(body.session_id || "") !==
+        identity.sessionId ||
+      validDeviceId(body.device_id) !==
+        identity.deviceId
+    ) {
+      return false;
+    }
+    const controlId = String(
+      body.control_id || ""
+    ).trim();
+    const status = String(
+      body.status || ""
+    ).trim();
+    if (
+      !/^[A-Za-z0-9_-]{1,128}$/.test(
+        controlId
+      ) ||
+      ![
+        "success",
+        "partial",
+        "error",
+      ].includes(status)
+    ) {
+      return false;
+    }
+    const record =
+      await this.readAotSession(
+        identity.sessionId
+      );
+    record.last_control = {
+      control_id: controlId,
+      status,
+      reason:
+        typeof body.reason === "string"
+          ? body.reason.slice(0, 160)
+          : null,
+      action_id:
+        typeof body.action_id === "string"
+          ? body.action_id.slice(0, 128)
+          : null,
+      updated_at: Date.now(),
+    };
+    await this.writeAotSession(
+      identity.sessionId,
+      record
+    );
+    return true;
+  }
+
+  async getAotHubState(url) {
+    const sessionId = String(
+      url.searchParams.get("session") ||
+      ""
+    ).trim();
+    if (
+      !/^[A-Za-z0-9_-]{1,64}$/.test(
+        sessionId
+      )
+    ) {
+      return json(
+        {
+          ok: false,
+          error: "invalid_session_id",
+        },
+        400
+      );
+    }
+    const record =
+      await this.readAotSession(
+        sessionId
+      );
+    const referenceId =
+      validDeviceId(
+        record.reference_device_id
+      );
+    const referenceLive =
+      referenceId
+        ? this.aotLive.get(
+            this.aotLiveKey(
+              sessionId,
+              referenceId
+            )
+          ) || null
+        : null;
+
+    const buildDevice = (
+      role,
+      deviceId,
+      followerRecord = null
+    ) => {
+      if (!deviceId) {
+        return null;
+      }
+      const live =
+        this.aotLive.get(
+          this.aotLiveKey(
+            sessionId,
+            deviceId
+          )
+        ) || null;
+      const online =
+        this.ctx.getWebSockets(
+          this.aotSocketTag(
+            role,
+            sessionId,
+            deviceId
+          )
+        ).length > 0;
+      let status;
+      if (!online) {
+        status = "OFFLINE";
+      } else if (role === "reference") {
+        status = "REFERENCE";
+      } else if (
+        referenceLive &&
+        live &&
+        referenceLive.fingerprint ===
+          live.fingerprint
+      ) {
+        status = "SYNCED";
+      } else if (
+        followerRecord?.last_ack_status ===
+          "out_of_sync"
+      ) {
+        status = "OUT_OF_SYNC";
+      } else {
+        status = "WAITING";
+      }
+      return {
+        device_id: deviceId,
+        role,
+        online,
+        status,
+        package:
+          live?.package || null,
+        fingerprint:
+          live?.fingerprint || null,
+        width:
+          live?.width || null,
+        height:
+          live?.height || null,
+        preview_b64:
+          live?.preview_b64 || null,
+        preview_sha256:
+          live?.preview_sha256 || null,
+        updated_at:
+          live?.updated_at || null,
+        last_ack_status:
+          followerRecord
+            ?.last_ack_status ||
+          null,
+      };
+    };
+
+    const reference =
+      buildDevice(
+        "reference",
+        referenceId
+      );
+    const followers = [];
+    for (
+      const [deviceId, value]
+      of Object.entries(
+        record.followers || {}
+      )
+    ) {
+      const normalized =
+        validDeviceId(deviceId);
+      if (!normalized) continue;
+      followers.push(
+        buildDevice(
+          "follower",
+          normalized,
+          value
+        )
+      );
+    }
+    followers.sort(
+      (left, right) =>
+        String(left.device_id)
+          .localeCompare(
+            String(
+              right.device_id
+            ),
+            undefined,
+            {
+              numeric: true,
+              sensitivity: "base",
+            }
+          )
+    );
+    const devices = [
+      ...(reference
+        ? [reference]
+        : []),
+      ...followers,
+    ];
+    const summary = {
+      online:
+        devices.filter(
+          (item) => item.online
+        ).length,
+      synced:
+        followers.filter(
+          (item) =>
+            item.status === "SYNCED"
+        ).length,
+      out_of_sync:
+        followers.filter(
+          (item) =>
+            item.status ===
+              "OUT_OF_SYNC"
+        ).length,
+      offline:
+        devices.filter(
+          (item) =>
+            item.status === "OFFLINE"
+        ).length,
+    };
+    return json({
+      ok: true,
+      protocol: "phase4-1",
+      session_id: sessionId,
+      paused:
+        record.paused === true,
+      reference,
+      followers,
+      summary,
+      last_control:
+        record.last_control || null,
+      updated_at: Date.now(),
+    });
+  }
+
+  async controlAotHub(request) {
+    const body =
+      await this.readJson(request);
+    const sessionId = String(
+      body?.session_id || ""
+    ).trim();
+    const kind = String(
+      body?.kind || ""
+    ).trim();
+    if (
+      !body ||
+      body.protocol !== "phase4-1" ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(
+        sessionId
+      )
+    ) {
+      return json(
+        {
+          ok: false,
+          error:
+            "invalid_hub_control",
+        },
+        400
+      );
+    }
+    const record =
+      await this.readAotSession(
+        sessionId
+      );
+
+    if (
+      kind === "pause" ||
+      kind === "resume"
+    ) {
+      record.paused =
+        kind === "pause";
+      record.last_control = {
+        control_id:
+          `state-${Date.now()}`,
+        status:
+          record.paused
+            ? "paused"
+            : "resumed",
+        reason: null,
+        updated_at: Date.now(),
+      };
+      await this.writeAotSession(
+        sessionId,
+        record
+      );
+      return json({
+        ok: true,
+        paused: record.paused,
+      });
+    }
+
+    if (record.paused === true) {
+      return json(
+        {
+          ok: false,
+          error: "hub_paused",
+        },
+        409
+      );
+    }
+
+    const referenceId =
+      validDeviceId(
+        record.reference_device_id
+      );
+    if (!referenceId) {
+      return json(
+        {
+          ok: false,
+          error:
+            "reference_not_registered",
+        },
+        409
+      );
+    }
+    const referenceTag =
+      this.aotSocketTag(
+        "reference",
+        sessionId,
+        referenceId
+      );
+    if (
+      this.ctx.getWebSockets(
+        referenceTag
+      ).length === 0
+    ) {
+      return json(
+        {
+          ok: false,
+          error:
+            "reference_offline",
+        },
+        409
+      );
+    }
+
+    let action;
+    if (kind === "back") {
+      action = { kind: "back" };
+    } else if (kind === "tap") {
+      const x = Number(body.x_norm);
+      const y = Number(body.y_norm);
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < 0 ||
+        x > 1 ||
+        y < 0 ||
+        y > 1
+      ) {
+        return json(
+          {
+            ok: false,
+            error:
+              "invalid_tap_coordinates",
+          },
+          400
+        );
+      }
+      action = {
+        kind: "tap",
+        x_norm: x,
+        y_norm: y,
+      };
+    } else if (kind === "swipe") {
+      const values = [
+        Number(body.x1),
+        Number(body.y1),
+        Number(body.x2),
+        Number(body.y2),
+      ];
+      if (
+        values.some(
+          (value) =>
+            !Number.isFinite(value) ||
+            value < 0 ||
+            value > 1
+        )
+      ) {
+        return json(
+          {
+            ok: false,
+            error:
+              "invalid_swipe_coordinates",
+          },
+          400
+        );
+      }
+      action = {
+        kind: "swipe",
+        x1: values[0],
+        y1: values[1],
+        x2: values[2],
+        y2: values[3],
+        duration_ms: Math.min(
+          5000,
+          Math.max(
+            50,
+            Math.round(
+              Number(
+                body.duration_ms
+              ) || 300
+            )
+          )
+        ),
+      };
+    } else {
+      return json(
+        {
+          ok: false,
+          error:
+            "unsupported_hub_control",
+        },
+        400
+      );
+    }
+
+    const targets = [];
+    for (
+      const deviceId
+      of Object.keys(
+        record.followers || {}
+      )
+    ) {
+      const normalized =
+        validDeviceId(deviceId);
+      if (
+        normalized &&
+        this.ctx.getWebSockets(
+          this.aotSocketTag(
+            "follower",
+            sessionId,
+            normalized
+          )
+        ).length > 0
+      ) {
+        targets.push(normalized);
+      }
+    }
+
+    const controlId =
+      `hub-${Date.now()}-${crypto
+        .randomUUID()
+        .replace(/-/g, "")
+        .slice(0, 8)}`;
+    const payload = {
+      type: "aot_hub_action",
+      protocol: "phase4-1",
+      session_id: sessionId,
+      reference_device_id:
+        referenceId,
+      target_device_ids: targets,
+      control_id: controlId,
+      action,
+    };
+    const sent =
+      this.sendAotPayload(
+        referenceTag,
+        payload
+      );
+    if (sent === 0) {
+      return json(
+        {
+          ok: false,
+          error:
+            "reference_offline",
+        },
+        409
+      );
+    }
+    record.last_control = {
+      control_id: controlId,
+      status: "queued",
+      reason: null,
+      updated_at: Date.now(),
+    };
+    await this.writeAotSession(
+      sessionId,
+      record
+    );
+    return json({
+      ok: true,
+      control_id: controlId,
+      target_count:
+        targets.length,
+    });
+  }
   async connectAotWebSocket(
     url,
     request
@@ -644,24 +1442,50 @@ export class FleetState
         426
       );
     }
+
+    const specificTag =
+      this.aotSocketTag(
+        role,
+        sessionId,
+        deviceId
+      );
+    for (
+      const oldSocket
+      of this.ctx.getWebSockets(
+        specificTag
+      )
+    ) {
+      try {
+        oldSocket.close(
+          4001,
+          "replaced"
+        );
+      } catch (error) {
+        // Runtime will clean stale sockets.
+      }
+    }
+
     const pair = new WebSocketPair();
     const [client, server] =
       Object.values(pair);
     this.ctx.acceptWebSocket(
       server,
       [
-        this.aotSocketTag(
-          role,
-          sessionId,
-          deviceId
-        ),
+        specificTag,
+        `aot-session:${sessionId}`,
       ]
+    );
+    await this.rememberAotMember(
+      sessionId,
+      role,
+      deviceId
     );
     return new Response(null, {
       status: 101,
       webSocket: client,
     });
   }
+
 
   async dispatchAotAction(request) {
     const body = await this.readJson(
@@ -820,6 +1644,91 @@ export class FleetState
         400
       );
     }
+
+    const record =
+      await this.readAotSession(
+        sessionId
+      );
+    const previous =
+      record.followers[followerId];
+    record.followers[followerId] = {
+      ...(previous &&
+      typeof previous === "object"
+        ? previous
+        : {}),
+      device_id: followerId,
+      joined_at:
+        Number(
+          previous?.joined_at
+        ) || Date.now(),
+      last_ack_status:
+        String(body.status || "")
+          .slice(0, 40),
+      last_ack_action_id:
+        actionId,
+      last_ack_at: Date.now(),
+    };
+    await this.writeAotSession(
+      sessionId,
+      record
+    );
+
+    if (
+      typeof body.preview_b64 ===
+        "string" &&
+      body.preview_b64 &&
+      body.preview_b64.length <=
+        256 * 1024 &&
+      /^[A-Za-z0-9+/=]+$/.test(
+        body.preview_b64
+      )
+    ) {
+      const key =
+        this.aotLiveKey(
+          sessionId,
+          followerId
+        );
+      const oldLive =
+        this.aotLive.get(key) || {};
+      this.aotLive.set(
+        key,
+        {
+          ...oldLive,
+          device_id: followerId,
+          role: "follower",
+          session_id: sessionId,
+          preview_b64:
+            body.preview_b64,
+          preview_sha256:
+            typeof body
+              .preview_sha256 ===
+                "string"
+              ? body.preview_sha256
+              : oldLive
+                  .preview_sha256 ||
+                null,
+          preview_bytes:
+            Number.isFinite(
+              Number(
+                body.preview_bytes
+              )
+            )
+              ? Math.max(
+                  0,
+                  Math.floor(
+                    Number(
+                      body.preview_bytes
+                    )
+                  )
+                )
+              : oldLive
+                  .preview_bytes ||
+                0,
+          updated_at: Date.now(),
+        }
+      );
+    }
+
     const payload = {
       type: "aot_ack",
       ...body,
@@ -846,6 +1755,7 @@ export class FleetState
       delivered: sent,
     });
   }
+
   async setRevocation(
     request,
     revoked
@@ -896,6 +1806,25 @@ export class FleetState
   async fetch(request) {
     const url =
       new URL(request.url);
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/aot/hub/state"
+    ) {
+      return this.getAotHubState(
+        url
+      );
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/aot/hub/control"
+    ) {
+      return this.controlAotHub(
+        request
+      );
+    }
+
 
     if (
       request.method === "GET" &&

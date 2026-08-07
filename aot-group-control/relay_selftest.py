@@ -70,4 +70,18 @@ try:
 finally:
     module.STATE_PATH = old_state_path
 
+assert module.normalize_target_ids(
+    ["M117", "m117", "m38", "bad"]
+) == ["m117", "m38"]
+
+parser = module.build_parser()
+parsed = parser.parse_args(
+    [
+        "reference",
+        "--session",
+        "m37-m117-p3",
+    ]
+)
+assert parsed.command == "reference"
+
 print("AOT_RELAY_SELFTEST=OK")
