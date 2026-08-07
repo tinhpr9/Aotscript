@@ -21,6 +21,7 @@ GOOGLE_LOGIN_CONFIG="${AOTSCRIPT_GOOGLE_LOGIN_CONFIG:-$HOME/.config/aotscript/go
 GOOGLE_LOGIN_STATUS="${AOTSCRIPT_GOOGLE_LOGIN_STATUS:-$STATE_DIR/google-login-assistant.state}"
 GOOGLE_LOGIN_XML="${AOTSCRIPT_GOOGLE_LOGIN_XML:-$STATE_DIR/google-login-ui.xml}"
 GOOGLE_LOGIN_TIMEOUT="${AOTSCRIPT_GOOGLE_LOGIN_TIMEOUT:-120}"
+GOOGLE_LOGIN_REMOTE="${AOTSCRIPT_GOOGLE_LOGIN_REMOTE:-gdrive:/Aotscript-Private/google_login.json}"
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
@@ -237,7 +238,17 @@ google_config_import() {
     return 0
   fi
 
-  google_status_set CONFIG_MISSING
+  if google_config_fetch_remote; then
+    return 0
+  fi
+
+  case "$(google_status_get)" in
+    REMOTE_UNAVAILABLE|REMOTE_MISSING|REMOTE_INVALID|REMOTE_FETCH_FAILED)
+      ;;
+    *)
+      google_status_set CONFIG_MISSING
+      ;;
+  esac
   return 1
 }
 
@@ -311,6 +322,150 @@ PY_GOOGLE_CONFIG_WRITE
   printf 'DELETE_AFTER_SUCCESS=YES\n'
 }
 
+
+google_remote_name() {
+  case "$GOOGLE_LOGIN_REMOTE" in
+    *:*)
+      printf '%s:\n' "${GOOGLE_LOGIN_REMOTE%%:*}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+google_remote_rclone_ready() {
+  local remote
+  command -v rclone >/dev/null 2>&1 || return 1
+  remote="$(google_remote_name)" || return 1
+  rclone listremotes 2>/dev/null | grep -Fxq "$remote"
+}
+
+google_remote_exists() {
+  google_remote_rclone_ready || return 1
+  rclone lsjson "$GOOGLE_LOGIN_REMOTE" --stat >/dev/null 2>&1
+}
+
+google_config_fetch_remote() {
+  local dir tmp
+
+  if ! google_remote_rclone_ready; then
+    google_status_set REMOTE_UNAVAILABLE
+    return 1
+  fi
+
+  dir="$(dirname "$GOOGLE_LOGIN_CONFIG")"
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  tmp="$GOOGLE_LOGIN_CONFIG.remote.$$"
+  rm -f "$tmp"
+  umask 077
+
+  if ! rclone copyto "$GOOGLE_LOGIN_REMOTE" "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    google_status_set REMOTE_MISSING
+    return 1
+  fi
+
+  chmod 600 "$tmp" 2>/dev/null || true
+
+  if ! google_config_validate "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    google_status_set REMOTE_INVALID
+    return 1
+  fi
+
+  mv -f "$tmp" "$GOOGLE_LOGIN_CONFIG"
+  chmod 600 "$GOOGLE_LOGIN_CONFIG" 2>/dev/null || true
+  google_status_set CONFIG_READY_REMOTE
+
+  printf 'GOOGLE_LOGIN_REMOTE_FETCH=OK\n'
+  printf 'PRIVATE_CONFIG=VALID\n'
+  printf 'EMAIL=SET\n'
+  printf 'PASSWORD=SET\n'
+  return 0
+}
+
+google_config_upload_remote() {
+  local verify local_sha remote_sha
+
+  if ! google_config_validate "$GOOGLE_LOGIN_CONFIG" >/dev/null 2>&1; then
+    google_status_set CONFIG_INVALID
+    printf 'GOOGLE_LOGIN_REMOTE_BACKUP=LOCAL_CONFIG_INVALID\n' >&2
+    return 1
+  fi
+
+  if ! google_remote_rclone_ready; then
+    google_status_set REMOTE_UNAVAILABLE
+    printf 'GOOGLE_LOGIN_REMOTE_BACKUP=RCLONE_UNAVAILABLE\n' >&2
+    return 1
+  fi
+
+  verify="$STATE_DIR/google-login-remote-verify.$$"
+  rm -f "$verify"
+  umask 077
+
+  if ! rclone copyto "$GOOGLE_LOGIN_CONFIG" "$GOOGLE_LOGIN_REMOTE" >/dev/null 2>&1; then
+    google_status_set REMOTE_UPLOAD_FAILED
+    return 1
+  fi
+
+  if ! rclone copyto "$GOOGLE_LOGIN_REMOTE" "$verify" >/dev/null 2>&1; then
+    rm -f "$verify"
+    google_status_set REMOTE_VERIFY_FAILED
+    return 1
+  fi
+
+  chmod 600 "$verify" 2>/dev/null || true
+  if ! google_config_validate "$verify" >/dev/null 2>&1; then
+    rm -f "$verify"
+    google_status_set REMOTE_VERIFY_INVALID
+    return 1
+  fi
+
+  local_sha="$(sha256sum "$GOOGLE_LOGIN_CONFIG" | awk 'NR == 1 {print $1}')"
+  remote_sha="$(sha256sum "$verify" | awk 'NR == 1 {print $1}')"
+  rm -f "$verify"
+
+  if [ "$local_sha" != "$remote_sha" ]; then
+    google_status_set REMOTE_VERIFY_MISMATCH
+    return 1
+  fi
+
+  google_status_set CONFIG_READY_REMOTE
+  printf 'GOOGLE_LOGIN_REMOTE_BACKUP=OK\n'
+  printf 'REMOTE_CONTENT_VERIFIED=YES\n'
+  return 0
+}
+
+google_config_seed_once() {
+  google_configure_interactive || return 1
+
+  if google_config_upload_remote; then
+    printf 'SET_ONCE=READY_FOR_CLONES\n'
+    return 0
+  fi
+
+  printf 'SET_ONCE=LOCAL_ONLY\n' >&2
+  printf 'LOCAL_CONFIG=PRESERVED\n' >&2
+  return 1
+}
+
+google_remote_status() {
+  if ! google_remote_rclone_ready; then
+    printf 'REMOTE_BACKUP=RCLONE_UNAVAILABLE\n'
+    return 1
+  fi
+
+  if google_remote_exists; then
+    printf 'REMOTE_BACKUP=PRESENT\n'
+    return 0
+  fi
+
+  printf 'REMOTE_BACKUP=ABSENT_OR_INACCESSIBLE\n'
+  return 1
+}
+
 google_config_status() {
   local status
   status="$(google_status_get)"
@@ -332,13 +487,29 @@ google_config_status() {
   else
     printf 'PRIVATE_CONFIG=ABSENT\n'
   fi
+
+  if google_remote_rclone_ready; then
+    if google_remote_exists; then
+      printf 'REMOTE_BACKUP=PRESENT
+'
+    else
+      printf 'REMOTE_BACKUP=ABSENT_OR_INACCESSIBLE
+'
+    fi
+  else
+    printf 'REMOTE_BACKUP=RCLONE_UNAVAILABLE
+'
+  fi
 }
 
 google_config_clear() {
   rm -f "$GOOGLE_LOGIN_CONFIG"
   google_drop_remove || true
   google_status_set CLEARED
-  printf 'GOOGLE_LOGIN_CONFIG=CLEARED\n'
+  printf 'GOOGLE_LOGIN_CONFIG=CLEARED
+'
+  printf 'REMOTE_BACKUP=PRESERVED
+'
 }
 
 google_config_scrub_success() {
@@ -618,7 +789,7 @@ google_click_next() {
 
 google_assist_should_run() {
   case "$(google_status_get)" in
-    NOT_CONFIGURED|CONFIG_READY|RUNNING|RETRY) return 0 ;;
+    NOT_CONFIGURED|CONFIG_READY|CONFIG_READY_REMOTE|RUNNING|RETRY) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -903,10 +1074,11 @@ current_message() {
         AUTH_REJECTED)
           printf 'google|Google từ chối thông tin đăng nhập. Cập nhật cấu hình rồi mở lại.|waiting\n'
           ;;
-        MANUAL_UNSUPPORTED_CHARACTERS|UI_*|TIMEOUT|OPEN_FAILED)
-          printf 'google|Tự đăng nhập đã dừng an toàn. Hoàn tất thủ công hoặc cập nhật cấu hình.|waiting\n'
+        MANUAL_UNSUPPORTED_CHARACTERS|UI_*|TIMEOUT|OPEN_FAILED|REMOTE_*)
+          printf 'google|Không lấy/chạy được cấu hình private. Có thể đăng nhập thủ công hoặc kiểm tra rclone.|waiting
+'
           ;;
-        CONFIG_READY)
+        CONFIG_READY|CONFIG_READY_REMOTE)
           printf 'google|Đã có cấu hình đăng nhập riêng. Đang chờ chạy trợ lý.|waiting\n'
           ;;
         SUCCESS)
@@ -1212,7 +1384,7 @@ watch_loop() {
       manual_pre:await_google_login)
         if google_account_present; then
           advance_safe || true
-        elif [ "$(google_status_get)" = CONFIG_READY ]; then
+        elif google_assist_should_run; then
           google_login_assist || true
           if google_account_present; then
             advance_safe || true
@@ -1400,7 +1572,16 @@ main() {
       ;;
     google-config)
       [ "$#" = 1 ] || exit 2
-      google_configure_interactive
+      google_config_seed_once
+      ;;
+    google-config-fetch)
+      [ "$#" = 1 ] || exit 2
+      google_config_fetch_remote
+      google_config_status
+      ;;
+    google-config-remote-status)
+      [ "$#" = 1 ] || exit 2
+      google_remote_status
       ;;
     google-config-import)
       [ "$#" = 1 ] || exit 2
@@ -1428,7 +1609,7 @@ main() {
       self_test
       ;;
     *)
-      printf 'Cách dùng: aotscript-wizard start|done|open|stop|status|google-config|google-config-import|google-config-status|google-config-clear|google-login\n' >&2
+      printf 'Cách dùng: aotscript-wizard start|done|open|stop|status|google-config|google-config-fetch|google-config-remote-status|google-config-import|google-config-status|google-config-clear|google-login\n' >&2
       exit 2
       ;;
   esac

@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase8-google-login-v1"
+VERSION="phase9-google-login-shared-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -1472,7 +1472,7 @@ show_manual_pre() {
 
 ========== THỦ CÔNG 1 ==========
 [ ] Bật root trước khi bắt đầu; mprovision sẽ tự kiểm tra root.
-[ ] Đăng nhập Google trực tiếp trên máy; không lưu thông tin đăng nhập vào script.
+[AUTO/TÙY CHỌN] Google Login Assistant có thể lấy cấu hình từ private gdrive; không lưu vào repository.
 [ ] Kiểm tra Play Protect theo quy trình vận hành.
 [ ] Swift Backup: backup Termux kèm data.
 [ ] Swift Backup: backup các app và data cũ cần giữ.
