@@ -345,34 +345,90 @@ def resolve_normalized_tap(
 ) -> dict[str, Any]:
     if not (0.0 <= x_norm <= 1.0 and 0.0 <= y_norm <= 1.0):
         raise AotControllerError("normalized tap must be in [0,1]")
+
     x = min(width - 1, max(0, round(x_norm * width)))
     y = min(height - 1, max(0, round(y_norm * height)))
+
+    resource_counts: dict[str, int] = {}
+    for node in nodes:
+        if node.resource_id:
+            resource_counts[node.resource_id] = (
+                resource_counts.get(node.resource_id, 0) + 1
+            )
+
+    def semantic_selector_from(node: UiNode) -> tuple[str, int] | None:
+        current = node
+        visited: set[int] = set()
+
+        while True:
+            if (
+                current.enabled
+                and current.bounds.area > 0
+                and current.resource_id
+                and resource_counts.get(current.resource_id) == 1
+            ):
+                probe = current
+                probe_visited: set[int] = set()
+
+                while True:
+                    if (
+                        probe.enabled
+                        and probe.clickable
+                        and probe.bounds.area > 0
+                    ):
+                        return current.resource_id, current.index
+
+                    if (
+                        probe.parent is None
+                        or probe.parent in probe_visited
+                    ):
+                        break
+
+                    probe_visited.add(probe.index)
+                    probe = nodes[probe.parent]
+
+            if (
+                current.parent is None
+                or current.parent in visited
+            ):
+                break
+
+            visited.add(current.index)
+            current = nodes[current.parent]
+
+        return None
+
     candidates = [
         node
         for node in nodes
-        if node.enabled and node.bounds.area > 0 and node.bounds.contains(x, y)
+        if (
+            node.enabled
+            and node.bounds.area > 0
+            and node.bounds.contains(x, y)
+        )
     ]
-    clickable = [node for node in candidates if node.clickable]
-    pool = clickable or candidates
-    pool.sort(
+
+    candidates.sort(
         key=lambda node: (
-            0 if node.resource_id else 1,
             node.bounds.area,
             -node.index,
         )
     )
-    if pool:
-        node = pool[0]
-        if node.resource_id:
-            count = sum(item.resource_id == node.resource_id for item in nodes)
-            if count == 1:
-                return {
-                    "mode": "semantic",
-                    "resource_id": node.resource_id,
-                    "x": x,
-                    "y": y,
-                    "node_index": node.index,
-                }
+
+    for node in candidates:
+        resolved = semantic_selector_from(node)
+        if resolved is None:
+            continue
+
+        resource_id, node_index = resolved
+        return {
+            "mode": "semantic",
+            "resource_id": resource_id,
+            "x": x,
+            "y": y,
+            "node_index": node_index,
+        }
+
     return {
         "mode": "coordinate",
         "x": x,

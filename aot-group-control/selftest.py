@@ -86,6 +86,45 @@ resolved = module.resolve_normalized_tap(nodes, 1000, 2000, 0.25, 0.15)
 assert resolved["mode"] == "semantic"
 assert resolved["resource_id"] == "pkg:id/account"
 
+
+# A tap on a repeated child resource-id must climb to the nearest unique
+# actionable ancestor instead of degrading to unsafe coordinate mode.
+nav_xml = (
+    "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>\n"
+    "<hierarchy rotation='0'>\n"
+    "  <node index='0' class='android.widget.FrameLayout' resource-id='root' "
+    "clickable='false' enabled='true' scrollable='false' password='false' "
+    "bounds='[0,0][1000,2000]'>\n"
+    "    <node index='1' class='android.widget.Button' "
+    "resource-id='pkg:id/nav_home' clickable='true' enabled='true' "
+    "scrollable='false' password='false' bounds='[0,1700][500,2000]'>\n"
+    "      <node index='2' class='android.widget.TextView' "
+    "resource-id='pkg:id/nav_label' clickable='false' enabled='true' "
+    "scrollable='false' password='false' bounds='[50,1800][450,1960]' />\n"
+    "    </node>\n"
+    "    <node index='3' class='android.widget.Button' "
+    "resource-id='pkg:id/nav_account' clickable='true' enabled='true' "
+    "scrollable='false' password='false' bounds='[500,1700][1000,2000]'>\n"
+    "      <node index='4' class='android.widget.TextView' "
+    "resource-id='pkg:id/nav_label' clickable='false' enabled='true' "
+    "scrollable='false' password='false' bounds='[550,1800][950,1960]' />\n"
+    "    </node>\n"
+    "  </node>\n"
+    "</hierarchy>"
+)
+
+nav_nodes = module.parse_ui_xml(nav_xml)
+nav_resolved = module.resolve_normalized_tap(
+    nav_nodes,
+    1000,
+    2000,
+    0.75,
+    0.92,
+)
+
+assert nav_resolved["mode"] == "semantic"
+assert nav_resolved["resource_id"] == "pkg:id/nav_account"
+
 selected = module._unique_resource_id(nodes, "pkg:id/account")
 assert selected.index == 1
 assert module._clickable_target(nodes, selected).index == 1
