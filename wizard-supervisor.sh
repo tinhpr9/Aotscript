@@ -1025,11 +1025,16 @@ allowed_packages = {
 def normalize(value):
     value = (value or "").replace("Đ", "D").replace("đ", "d")
     value = unicodedata.normalize("NFD", value)
-    value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
+    value = "".join(
+        ch for ch in value if unicodedata.category(ch) != "Mn"
+    )
     return re.sub(r"\s+", " ", value).strip().lower()
 
 def bounds(node):
-    match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+    match = re.fullmatch(
+        r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",
+        node.get("bounds", ""),
+    )
     if not match:
         return None
     x1, y1, x2, y2 = map(int, match.groups())
@@ -1059,22 +1064,28 @@ all_text = " ".join(label(node) for node in nodes)
 challenge_words = (
     "captcha",
     "verify its you",
+    "verify it's you",
     "xac minh danh tinh",
     "xac minh do la ban",
     "2 step verification",
+    "2-step verification",
     "xac minh 2 buoc",
     "verification code",
     "ma xac minh",
+    "get a verification code",
     "check your phone",
     "kiem tra dien thoai",
+    "tap yes on your phone",
+    "google prompt",
     "try another way",
     "thu cach khac",
     "recovery email",
     "email khoi phuc",
-    "i agree",
-    "toi dong y",
-    "terms of service",
-    "dieu khoan dich vu",
+    "recovery phone",
+    "so dien thoai khoi phuc",
+    "security key",
+    "khoa bao mat",
+    "passkey",
 )
 error_words = (
     "wrong password",
@@ -1085,9 +1096,45 @@ error_words = (
     "khong tim thay tai khoan",
 )
 
-if mode in {"challenge", "auth_error"}:
-    words = challenge_words if mode == "challenge" else error_words
-    found = any(word in all_text for word in words)
+terms_actions = {"i agree", "toi dong y"}
+terms_markers = (
+    "terms of service",
+    "dieu khoan dich vu",
+)
+terms_screen = (
+    any(marker in all_text for marker in terms_markers)
+    and any(action in all_text for action in terms_actions)
+)
+
+services_actions = {"accept", "chap nhan"}
+services_strong_markers = (
+    "tap accept to confirm",
+    "google services settings",
+    "back up device data",
+    "nhan chap nhan de xac nhan",
+    "dich vu google",
+    "sao luu du lieu thiet bi",
+)
+services_screen = (
+    any(marker in all_text for marker in services_strong_markers)
+    and any(action in all_text for action in services_actions)
+)
+
+if mode in {
+    "challenge",
+    "auth_error",
+    "terms_screen",
+    "services_screen",
+}:
+    if mode == "challenge":
+        found = any(word in all_text for word in challenge_words)
+    elif mode == "auth_error":
+        found = any(word in all_text for word in error_words)
+    elif mode == "terms_screen":
+        found = terms_screen
+    else:
+        found = services_screen
+
     print("PROBE=FOUND" if found else "PROBE=ABSENT")
     raise SystemExit(0)
 
@@ -1098,25 +1145,67 @@ for node in nodes:
     desc = normalize(node.get("content-desc", ""))
     cls = node.get("class", "")
     is_edit = cls.endswith("EditText")
-    is_password = node.get("password", "false") == "true" or "password" in rid
+    is_password = (
+        node.get("password", "false") == "true"
+        or "password" in rid
+    )
+    clickable = (
+        node.get("clickable", "false") == "true"
+        or cls.endswith("Button")
+    )
 
     if mode == "email":
-        match = is_edit and not is_password and any(
-            token in rid for token in ("identifierid", "account_name", "email", "username")
+        match = (
+            is_edit
+            and not is_password
+            and any(
+                token in rid
+                for token in (
+                    "identifierid",
+                    "account_name",
+                    "email",
+                    "username",
+                )
+            )
         )
         if not match and is_edit and not is_password:
-            match = any(token in all_text for token in (
-                "email or phone", "email hoac so dien thoai", "dia chi email"
-            ))
+            match = any(
+                token in all_text
+                for token in (
+                    "email or phone",
+                    "email hoac so dien thoai",
+                    "dia chi email",
+                )
+            )
     elif mode == "password":
         match = is_edit and is_password
     elif mode == "next":
-        exact = {"next", "tiep theo", "continue", "tiep tuc"}
+        exact = {
+            "next",
+            "tiep theo",
+            "continue",
+            "tiep tuc",
+        }
         match = (
             text in exact
             or desc in exact
-            or any(token in rid for token in ("identifiernext", "passwordnext"))
+            or any(
+                token in rid
+                for token in ("identifiernext", "passwordnext")
+            )
             or rid.endswith("/next")
+        )
+    elif mode == "terms_agree":
+        match = (
+            terms_screen
+            and clickable
+            and (text in terms_actions or desc in terms_actions)
+        )
+    elif mode == "services_accept":
+        match = (
+            services_screen
+            and clickable
+            and (text in services_actions or desc in services_actions)
         )
     else:
         raise SystemExit(3)
@@ -1210,6 +1299,16 @@ google_click_next() {
   google_ui_click "$x" "$y"
 }
 
+google_click_safe_action() {
+  local mode="$1" point x y filled
+
+  google_ui_dump || return 1
+  point="$(google_probe_field "$mode")" || return 1
+  read -r x y filled <<< "$point"
+
+  google_ui_click "$x" "$y"
+}
+
 google_assist_should_run() {
   case "$(google_status_get)" in
     NOT_CONFIGURED|CONFIG_READY|CONFIG_READY_REMOTE|CONFIG_READY_BOOTSTRAP|CONFIG_READY_WORKER|RUNNING|RETRY) return 0 ;;
@@ -1218,7 +1317,9 @@ google_assist_should_run() {
 }
 
 google_login_assist() {
-  local enabled email password deadline email_attempts=0 password_attempts=0
+  local enabled email password deadline
+  local email_attempts=0 password_attempts=0
+  local terms_attempts=0 services_attempts=0
 
   if ! google_config_import; then
     open_google || true
@@ -1279,10 +1380,51 @@ google_login_assist() {
       return 7
     fi
 
+    # CAPTCHA / 2FA / recovery / security-key screens are never clicked.
     if google_probe_flag challenge; then
       unset password
       google_status_set MANUAL_REQUIRED
       return 8
+    fi
+
+    # Screen 1: Google Terms. Click only one exact, uniquely matched
+    # "I agree" / "Tôi đồng ý" action on a recognized Terms screen.
+    if google_probe_flag terms_screen; then
+      if [ "$terms_attempts" -ge 2 ]; then
+        unset password
+        google_status_set UI_STUCK_TERMS
+        return 16
+      fi
+
+      if ! google_click_safe_action terms_agree; then
+        unset password
+        google_status_set UI_TERMS_UNSAFE
+        return 17
+      fi
+
+      terms_attempts=$((terms_attempts + 1))
+      sleep 3
+      continue
+    fi
+
+    # Screen 2: Google services. Click only one exact, uniquely matched
+    # "Accept" / "Chấp nhận" action on a recognized services screen.
+    if google_probe_flag services_screen; then
+      if [ "$services_attempts" -ge 2 ]; then
+        unset password
+        google_status_set UI_STUCK_SERVICES
+        return 18
+      fi
+
+      if ! google_click_safe_action services_accept; then
+        unset password
+        google_status_set UI_SERVICES_UNSAFE
+        return 19
+      fi
+
+      services_attempts=$((services_attempts + 1))
+      sleep 3
+      continue
     fi
 
     if google_probe_field password >/dev/null 2>&1; then
@@ -1493,7 +1635,10 @@ current_message() {
           printf 'google|Đang tự đăng nhập Google. Hệ thống sẽ tự chuyển bước.|waiting\n'
           ;;
         MANUAL_REQUIRED)
-          printf 'google|Google yêu cầu xác minh, CAPTCHA hoặc điều khoản. Hãy xử lý trực tiếp.|waiting\n'
+          printf 'google|Google yêu cầu CAPTCHA, 2FA hoặc xác minh. Trợ lý đã dừng an toàn; hãy xử lý trực tiếp.|waiting\n'
+          ;;
+        UI_TERMS_UNSAFE|UI_SERVICES_UNSAFE|UI_STUCK_TERMS|UI_STUCK_SERVICES)
+          printf 'google|Màn hình điều khoản Google không khớp an toàn. Trợ lý không bấm mò; hãy xử lý trực tiếp.|waiting\n'
           ;;
         AUTH_REJECTED)
           printf 'google|Google từ chối thông tin đăng nhập. Cập nhật cấu hình rồi mở lại.|waiting\n'
