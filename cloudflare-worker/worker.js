@@ -2276,6 +2276,42 @@ async function handlePairRequest(
     );
   }
 
+  const purposeRaw = String(
+    parsed.value.purpose || "agent"
+  ).trim();
+  const purpose =
+    purposeRaw === "google_login"
+      ? "google_login"
+      : purposeRaw === "agent"
+        ? "agent"
+        : null;
+
+  if (!purpose) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_pair_purpose",
+      },
+      400
+    );
+  }
+
+  if (
+    purpose === "google_login" &&
+    (
+      !String(env.GOOGLE_LOGIN_EMAIL || "").trim() ||
+      !String(env.GOOGLE_LOGIN_PASSWORD || "")
+    )
+  ) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "google_login_not_configured",
+      },
+      503
+    );
+  }
+
   const deviceId = normalizeDeviceId(
     parsed.value.device_id
   );
@@ -2344,7 +2380,7 @@ async function handlePairRequest(
   ).slice(0, 20);
 
   const rateKey =
-    `${PAIR_RATE_PREFIX}${deviceId}:${ipHash}`;
+    `${PAIR_RATE_PREFIX}${purpose}:${deviceId}:${ipHash}`;
 
   if (await env.DEVICE_STATUS.get(rateKey)) {
     return noStoreJson(
@@ -2411,6 +2447,7 @@ async function handlePairRequest(
     pair_id: pairId,
     device_id: deviceId,
     device_group: deviceGroup,
+    purpose,
     verification_code: verificationCode,
     token_hash: tokenHash,
     status: "pending",
@@ -2463,11 +2500,16 @@ async function handlePairRequest(
       .replace("T", " ")
       .replace("Z", " UTC");
 
+  const requestLabel =
+    purpose === "google_login"
+      ? "đăng nhập Google"
+      : "ghép nối Agent";
+
   try {
     await sendMessage(
       String(env.TELEGRAM_ADMIN_USER_ID),
       env,
-      `🔐 Yêu cầu ghép nối Agent\n` +
+      `🔐 Yêu cầu ${requestLabel}\n` +
         `Thiết bị: ${deviceId}\n` +
         `Nhóm: ${await getGroupLabel(deviceGroup, env)}\n` +
         `Mã xác minh: ${verificationCode}\n` +
@@ -2516,6 +2558,7 @@ async function handlePairRequest(
     {
       ok: true,
       status: "pending",
+      purpose,
       pair_id: pairId,
       pair_token: pairToken,
       verification_code: verificationCode,
@@ -2598,6 +2641,11 @@ async function handlePairStatus(
     );
   }
 
+  const purpose =
+    record.purpose === "google_login"
+      ? "google_login"
+      : "agent";
+
   const pairedDeviceId =
     normalizeDeviceId(
       record.device_id
@@ -2671,6 +2719,7 @@ async function handlePairStatus(
       {
         ok: true,
         status: "pending",
+        purpose,
       },
       202
     );
@@ -2708,6 +2757,61 @@ async function handlePairStatus(
     );
   }
 
+  if (purpose === "google_login") {
+    const email =
+      String(env.GOOGLE_LOGIN_EMAIL || "").trim();
+    const password =
+      String(env.GOOGLE_LOGIN_PASSWORD || "");
+
+    if (
+      !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ||
+      !password ||
+      password.length > 256
+    ) {
+      return noStoreJson(
+        {
+          ok: false,
+          error: "google_login_not_configured",
+        },
+        503
+      );
+    }
+
+    const consumedRecord = {
+      ...record,
+      status: "consumed",
+      consumed_at: now,
+    };
+
+    delete consumedRecord.token_hash;
+
+    await env.DEVICE_STATUS.put(
+      pairRecordKey(pairId),
+      JSON.stringify(consumedRecord),
+      {
+        expirationTtl: 60,
+      }
+    );
+
+    await clearPairDeviceIndex(
+      record,
+      pairId,
+      env
+    );
+
+    return noStoreJson({
+      ok: true,
+      status: "approved",
+      purpose,
+      google_login: {
+        enabled: true,
+        email,
+        password,
+        delete_after_success: true,
+      },
+    });
+  }
+
   const consumedRecord = {
     ...record,
     status: "consumed",
@@ -2733,6 +2837,7 @@ async function handlePairStatus(
   return noStoreJson({
     ok: true,
     status: "approved",
+    purpose,
     worker_report_url:
       `${workerOrigin}/agent/report`,
     agent_report_secret:

@@ -22,6 +22,7 @@ GOOGLE_LOGIN_STATUS="${AOTSCRIPT_GOOGLE_LOGIN_STATUS:-$STATE_DIR/google-login-as
 GOOGLE_LOGIN_XML="${AOTSCRIPT_GOOGLE_LOGIN_XML:-$STATE_DIR/google-login-ui.xml}"
 GOOGLE_LOGIN_TIMEOUT="${AOTSCRIPT_GOOGLE_LOGIN_TIMEOUT:-120}"
 GOOGLE_LOGIN_REMOTE="${AOTSCRIPT_GOOGLE_LOGIN_REMOTE:-gdrive:/Aotscript-Private/google_login.json}"
+GOOGLE_LOGIN_WORKER_ORIGIN="${AOTSCRIPT_GOOGLE_LOGIN_WORKER_ORIGIN:-https://billowing-haze-0cafaotscript-control.tinh1020pr.workers.dev}"
 GOOGLE_LOGIN_BOOTSTRAP_ROOT="${AOTSCRIPT_GOOGLE_LOGIN_BOOTSTRAP_ROOT:-/data/local/aotscript-private/google_login.json}"
 
 mkdir -p "$STATE_DIR"
@@ -347,6 +348,254 @@ google_target_account_present() {
   [ -n "$email" ] || return 1
   google_account_present "$email"
 }
+google_worker_pair_fetch() {
+  local device_id device_group dir rc
+
+  device_id="$(state_get device_id)"
+  device_group="$(state_get device_group)"
+
+  [[ "$device_id" =~ ^m[1-9][0-9]{0,5}$ ]] || {
+    google_status_set PAIR_DEVICE_ID_MISSING
+    return 1
+  }
+
+  case "$device_group" in
+    MARMOT|NOVA) ;;
+    *)
+      google_status_set PAIR_DEVICE_GROUP_MISSING
+      return 1
+      ;;
+  esac
+
+  dir="$(dirname "$GOOGLE_LOGIN_CONFIG")"
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+
+  google_status_set PAIR_REQUESTING
+
+  set +e
+  python - \
+    "$GOOGLE_LOGIN_WORKER_ORIGIN" \
+    "$device_id" \
+    "$device_group" \
+    "$GOOGLE_LOGIN_CONFIG" <<'PY_GOOGLE_WORKER_PAIR'
+import json
+import os
+import pathlib
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+origin = sys.argv[1].rstrip("/")
+device_id = sys.argv[2]
+device_group = sys.argv[3]
+output = pathlib.Path(sys.argv[4])
+
+
+def post_json(url, payload, timeout=20):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Cache-Control": "no-store",
+            "User-Agent": "Aotscript-google-pair/1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            status = response.status
+            raw = response.read(65536)
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        raw = exc.read(65536)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None, {}
+
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return status, data
+
+
+request_url = origin + "/agent/pair/request"
+status_url = origin + "/agent/pair/status"
+request_payload = {
+    "device_id": device_id,
+    "device_group": device_group,
+    "purpose": "google_login",
+}
+
+status, data = post_json(request_url, request_payload)
+if status == 429:
+    try:
+        retry_after = int(data.get("retry_after", 60))
+    except (TypeError, ValueError):
+        retry_after = 60
+    retry_after = min(max(retry_after, 1), 65)
+    print(f"GOOGLE_WORKER_PAIR=RATE_LIMIT_WAIT_{retry_after}S")
+    time.sleep(retry_after)
+    status, data = post_json(request_url, request_payload)
+
+if status is None:
+    print("GOOGLE_WORKER_PAIR=NETWORK_UNAVAILABLE")
+    raise SystemExit(20)
+
+if status not in {200, 201} or not data.get("ok"):
+    error = str(data.get("error", "pair_request_failed"))
+    if error == "google_login_not_configured":
+        print("GOOGLE_WORKER_PAIR=WORKER_SECRETS_MISSING")
+        raise SystemExit(21)
+    print(f"GOOGLE_WORKER_PAIR=REQUEST_FAILED_HTTP_{status}")
+    raise SystemExit(22)
+
+pair_id = data.get("pair_id")
+pair_token = data.get("pair_token")
+verification_code = data.get("verification_code")
+try:
+    expires_in = int(data.get("expires_in", 600))
+    poll_after = int(data.get("poll_after", 3))
+except (TypeError, ValueError):
+    raise SystemExit(23)
+
+if (
+    not isinstance(pair_id, str)
+    or not pair_id
+    or not isinstance(pair_token, str)
+    or len(pair_token) < 40
+    or not isinstance(verification_code, str)
+    or len(verification_code) != 6
+    or not verification_code.isdigit()
+):
+    print("GOOGLE_WORKER_PAIR=INVALID_RESPONSE")
+    raise SystemExit(23)
+
+expires_in = min(max(expires_in, 60), 600)
+poll_after = min(max(poll_after, 2), 10)
+print(f"GOOGLE_PAIR_VERIFICATION_CODE={verification_code}")
+print("GOOGLE_WORKER_PAIR=WAITING_TELEGRAM_APPROVAL")
+print("Đối chiếu đúng mã trên Telegram rồi bấm CHẤP NHẬN.")
+
+deadline = time.monotonic() + expires_in + 10
+while time.monotonic() < deadline:
+    time.sleep(poll_after)
+    status, data = post_json(
+        status_url,
+        {
+            "pair_id": pair_id,
+            "pair_token": pair_token,
+        },
+    )
+
+    if status is None or status == 202:
+        continue
+
+    if status == 200 and data.get("ok") and data.get("status") == "approved":
+        config = data.get("google_login")
+        if not isinstance(config, dict):
+            print("GOOGLE_WORKER_PAIR=APPROVED_WITHOUT_CONFIG")
+            raise SystemExit(24)
+
+        email = config.get("email")
+        password = config.get("password")
+        enabled = config.get("enabled", True)
+        delete_after_success = config.get("delete_after_success", True)
+        import re
+        if (
+            not isinstance(email, str)
+            or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email.strip())
+            or not isinstance(password, str)
+            or not password
+            or len(password) > 256
+            or not isinstance(enabled, bool)
+            or not isinstance(delete_after_success, bool)
+        ):
+            print("GOOGLE_WORKER_PAIR=INVALID_PRIVATE_CONFIG")
+            raise SystemExit(25)
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(
+            prefix=output.name + ".worker-pair.",
+            dir=output.parent,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "enabled": enabled,
+                        "email": email.strip(),
+                        "password": password,
+                        "delete_after_success": delete_after_success,
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(name, 0o600)
+            os.replace(name, output)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
+
+        print("GOOGLE_WORKER_PAIR=CONFIG_RECEIVED")
+        raise SystemExit(0)
+
+    error = str(data.get("error", "pair_status_failed"))
+    if status == 403:
+        print("GOOGLE_WORKER_PAIR=DENIED")
+        raise SystemExit(26)
+    if status == 410:
+        print("GOOGLE_WORKER_PAIR=EXPIRED")
+        raise SystemExit(27)
+    if status in {404, 409}:
+        print(f"GOOGLE_WORKER_PAIR=UNUSABLE_{error.upper()}")
+        raise SystemExit(28)
+    if status >= 500:
+        continue
+    print(f"GOOGLE_WORKER_PAIR=STATUS_FAILED_HTTP_{status}")
+    raise SystemExit(29)
+
+print("GOOGLE_WORKER_PAIR=TIMEOUT")
+raise SystemExit(30)
+PY_GOOGLE_WORKER_PAIR
+  rc=$?
+  set -e
+
+  if [ "$rc" -eq 0 ] &&
+     google_config_validate "$GOOGLE_LOGIN_CONFIG" >/dev/null 2>&1; then
+    chmod 600 "$GOOGLE_LOGIN_CONFIG" 2>/dev/null || true
+    google_status_set CONFIG_READY_WORKER
+    printf 'PRIVATE_CONFIG=VALID\n'
+    printf 'EMAIL=SET\n'
+    printf 'PASSWORD=SET\n'
+    return 0
+  fi
+
+  rm -f "$GOOGLE_LOGIN_CONFIG"
+  case "$rc" in
+    20) google_status_set PAIR_NETWORK_UNAVAILABLE ;;
+    21) google_status_set PAIR_WORKER_SECRETS_MISSING ;;
+    22) google_status_set PAIR_REQUEST_FAILED ;;
+    23|24|25) google_status_set PAIR_INVALID_RESPONSE ;;
+    26) google_status_set PAIR_DENIED ;;
+    27) google_status_set PAIR_EXPIRED ;;
+    28) google_status_set PAIR_UNUSABLE ;;
+    29) google_status_set PAIR_STATUS_FAILED ;;
+    30) google_status_set PAIR_TIMEOUT ;;
+    *) google_status_set PAIR_FAILED ;;
+  esac
+  return 1
+}
+
 google_config_import() {
   local dir tmp
 
@@ -397,6 +646,16 @@ google_config_import() {
     google_bootstrap_import
     return $?
   fi
+
+  if google_worker_pair_fetch; then
+    return 0
+  fi
+
+  case "$(google_status_get)" in
+    PAIR_WORKER_SECRETS_MISSING|PAIR_DENIED|PAIR_EXPIRED|PAIR_INVALID_RESPONSE|PAIR_UNUSABLE)
+      return 1
+      ;;
+  esac
 
   if google_config_fetch_remote; then
     return 0
@@ -953,7 +1212,7 @@ google_click_next() {
 
 google_assist_should_run() {
   case "$(google_status_get)" in
-    NOT_CONFIGURED|CONFIG_READY|CONFIG_READY_REMOTE|CONFIG_READY_BOOTSTRAP|RUNNING|RETRY) return 0 ;;
+    NOT_CONFIGURED|CONFIG_READY|CONFIG_READY_REMOTE|CONFIG_READY_BOOTSTRAP|CONFIG_READY_WORKER|RUNNING|RETRY) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1239,10 +1498,10 @@ current_message() {
         AUTH_REJECTED)
           printf 'google|Google từ chối thông tin đăng nhập. Cập nhật cấu hình rồi mở lại.|waiting\n'
           ;;
-        BOOTSTRAP_*|REMOTE_*|MANUAL_UNSUPPORTED_CHARACTERS|UI_*|TIMEOUT|OPEN_FAILED)
+        BOOTSTRAP_*|REMOTE_*|PAIR_*|MANUAL_UNSUPPORTED_CHARACTERS|UI_*|TIMEOUT|OPEN_FAILED)
           printf 'google|Không lấy/chạy được cấu hình private. Kiểm tra root bootstrap hoặc rclone; không bấm ĐÃ XONG.|waiting\n'
           ;;
-        CONFIG_READY|CONFIG_READY_REMOTE|CONFIG_READY_BOOTSTRAP)
+        CONFIG_READY|CONFIG_READY_REMOTE|CONFIG_READY_BOOTSTRAP|CONFIG_READY_WORKER)
           printf 'google|Đã có cấu hình đăng nhập riêng. Đang chờ chạy trợ lý.|waiting\n'
           ;;
         SUCCESS)
@@ -1595,10 +1854,9 @@ start_action() {
     exit 2
   fi
 
-  start_watcher
   advance_safe
+  start_watcher
 }
-
 self_test() {
   local tmp fake_home fake_prefix fake_state fake_bin output
 
