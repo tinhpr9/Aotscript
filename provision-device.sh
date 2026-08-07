@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase13-freeform-reboot-gate-v1"
+VERSION="phase14-landscape-freeform-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -3048,6 +3048,276 @@ ui_desktop_reboot_gate() {
   return 2
 }
 
+ui_roblox_task_geometry() {
+  local package="$1"
+  local dump_file rc
+
+  dump_file="$(mktemp)"
+  if ! su -c 'dumpsys activity activities; dumpsys activity recents' \
+       >"$dump_file" 2>/dev/null; then
+    rm -f "$dump_file"
+    echo "ROBLOX_TASK_GEOMETRY_DUMP_FAILED=$package"
+    return 1
+  fi
+
+  set +e
+  python - "$package" "$dump_file" <<'__MP_ROBLOX_TASK_GEOMETRY_PY_20260807__'
+import pathlib
+import re
+import sys
+
+package = sys.argv[1]
+text = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+lines = text.splitlines()
+
+header_re = re.compile(r"^\s*(?:\*\s*)?(?:Task|TaskRecord)\{")
+indices = [i for i, line in enumerate(lines) if header_re.search(line)]
+blocks = []
+for pos, start in enumerate(indices):
+    end = indices[pos + 1] if pos + 1 < len(indices) else len(lines)
+    blocks.append("\n".join(lines[start:end]))
+
+if not blocks:
+    for i, line in enumerate(lines):
+        if package not in line:
+            continue
+        start = max(0, i - 30)
+        end = min(len(lines), i + 35)
+        blocks.append("\n".join(lines[start:end]))
+
+freeform_re = re.compile(
+    r"(?:windowingMode|mWindowingMode)=(?:5|freeform)|"
+    r"(?:^|\s)mode=freeform(?:\s|$)|WINDOWING_MODE_FREEFORM",
+    re.IGNORECASE,
+)
+
+task_patterns = (
+    re.compile(r"\btaskId=(\d+)\b"),
+    re.compile(r"(?:Task|TaskRecord)\{[^\n#]*#(\d+)\b"),
+    re.compile(r"\bid=(\d+)\b"),
+)
+
+bounds_patterns = (
+    re.compile(r"(?:mBounds|bounds)=\[(\d+),(\d+)\]\[(\d+),(\d+)\]"),
+    re.compile(r"(?:mBounds|bounds)=Rect\(\s*(\d+)\s*,\s*(\d+)\s*-\s*(\d+)\s*,\s*(\d+)\s*\)"),
+    re.compile(r"(?:mBounds|bounds)=\[?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]?"),
+)
+
+candidates = []
+for block in blocks:
+    if package not in block:
+        continue
+    task_id = None
+    for pattern in task_patterns:
+        match = pattern.search(block)
+        if match:
+            task_id = int(match.group(1))
+            break
+    bounds = None
+    for pattern in bounds_patterns:
+        match = pattern.search(block)
+        if match:
+            bounds = tuple(map(int, match.groups()))
+            break
+    freeform = bool(freeform_re.search(block))
+    score = 0
+    if freeform:
+        score += 100
+    if task_id is not None:
+        score += 40
+    if bounds is not None:
+        score += 40
+    lowered = block.casefold()
+    if "topresumedactivity" in lowered or "mresumedactivity" in lowered:
+        score += 10
+    candidates.append((score, task_id, bounds, freeform))
+
+candidates.sort(key=lambda item: item[0], reverse=True)
+for _, task_id, bounds, freeform in candidates:
+    if task_id is None:
+        continue
+    if bounds is None:
+        print(f"{task_id} {1 if freeform else 0} -1 -1 -1 -1")
+    else:
+        left, top, right, bottom = bounds
+        print(f"{task_id} {1 if freeform else 0} {left} {top} {right} {bottom}")
+    raise SystemExit(0)
+
+raise SystemExit(3)
+__MP_ROBLOX_TASK_GEOMETRY_PY_20260807__
+  rc=$?
+  set -e
+  rm -f "$dump_file"
+  return "$rc"
+}
+
+ui_landscape_target_bounds() {
+  local raw width height target_width target_height left top right bottom
+
+  raw="$(su -c 'dumpsys window displays; wm size' 2>/dev/null || true)"
+
+  read -r width height < <(
+    python - 3<<<"$raw" <<'__MP_LANDSCAPE_BOUNDS_PY_20260807__'
+import os
+import re
+
+text = os.fdopen(3, "r", encoding="utf-8", errors="replace").read()
+current = re.findall(r"\b(?:cur|app)=(\d+)x(\d+)\b", text)
+if current:
+    width, height = map(int, current[-1])
+else:
+    matches = re.findall(r"(?:Override|Physical) size:\s*(\d+)x(\d+)", text)
+    if not matches:
+        matches = re.findall(r"\b(\d{3,5})x(\d{3,5})\b", text)
+    if not matches:
+        raise SystemExit(1)
+    width, height = map(int, matches[-1])
+if width < 400 or height < 300:
+    raise SystemExit(2)
+print(width, height)
+__MP_LANDSCAPE_BOUNDS_PY_20260807__
+  ) || {
+    echo "ROBLOX_LANDSCAPE_SCREEN_SIZE=UNAVAILABLE"
+    return 1
+  }
+
+  target_width=$((width * 74 / 100))
+  target_height=$((height * 68 / 100))
+
+  if [ "$target_width" -le "$target_height" ]; then
+    target_height=$((target_width * 9 / 16))
+  fi
+
+  [ "$target_width" -gt "$target_height" ] || {
+    echo "ROBLOX_LANDSCAPE_TARGET=INVALID"
+    return 1
+  }
+
+  left=$(((width - target_width) / 2))
+  top=$(((height - target_height) / 2))
+  right=$((left + target_width))
+  bottom=$((top + target_height))
+
+  [ "$left" -ge 0 ] &&
+  [ "$top" -ge 0 ] &&
+  [ "$right" -le "$width" ] &&
+  [ "$bottom" -le "$height" ] || {
+    echo "ROBLOX_LANDSCAPE_TARGET=OUT_OF_RANGE"
+    return 1
+  }
+
+  echo "$left $top $right $bottom"
+}
+
+ui_resize_roblox_task_landscape() {
+  local package="$1"
+  local attempt geometry task_id freeform left top right bottom
+  local target_left target_top target_right target_bottom
+  local resize_out width height rc
+
+  read -r target_left target_top target_right target_bottom < <(
+    ui_landscape_target_bounds
+  ) || return 1
+
+  for attempt in 1 2 3 4 5; do
+    if geometry="$(ui_roblox_task_geometry "$package")"; then
+      read -r task_id freeform left top right bottom <<<"$geometry"
+      if [[ "$task_id" =~ ^[0-9]+$ ]]; then
+        break
+      fi
+    fi
+    sleep 1
+  done
+
+  [[ "${task_id:-}" =~ ^[0-9]+$ ]] || {
+    echo "ROBLOX_TASK_ID=NOT_FOUND:$package"
+    return 1
+  }
+
+  set +e
+  resize_out="$(
+    su -c "am task resize '$task_id' \
+      '$target_left' '$target_top' '$target_right' '$target_bottom'" \
+      2>&1
+  )"
+  rc=$?
+  set -e
+
+  if [ "$rc" -ne 0 ] ||
+     printf '%s\n' "$resize_out" |
+       grep -qiE 'Error|Exception|Security|Unknown'; then
+    echo "ROBLOX_LANDSCAPE_RESIZE=FAILED:$package"
+    return 1
+  fi
+
+  sleep 2
+
+  geometry="$(ui_roblox_task_geometry "$package")" || {
+    echo "ROBLOX_LANDSCAPE_VERIFY=NO_TASK:$package"
+    return 1
+  }
+
+  read -r task_id freeform left top right bottom <<<"$geometry"
+
+  [[ "$left" =~ ^[0-9]+$ ]] &&
+  [[ "$top" =~ ^[0-9]+$ ]] &&
+  [[ "$right" =~ ^[0-9]+$ ]] &&
+  [[ "$bottom" =~ ^[0-9]+$ ]] || {
+    echo "ROBLOX_LANDSCAPE_VERIFY=NO_BOUNDS:$package"
+    return 1
+  }
+
+  width=$((right - left))
+  height=$((bottom - top))
+
+  if [ "$freeform" = 1 ] &&
+     [ "$width" -gt "$height" ] &&
+     [ "$width" -ge 500 ] &&
+     [ "$height" -ge 280 ]; then
+    echo "ROBLOX_LANDSCAPE_RESIZE_OK=$package"
+    echo "ROBLOX_LANDSCAPE_TASK_ID=$task_id"
+    echo "ROBLOX_LANDSCAPE_BOUNDS=${left},${top},${right},${bottom}"
+    return 0
+  fi
+
+  echo "ROBLOX_LANDSCAPE_VERIFY=FAILED:$package"
+  echo "ROBLOX_LANDSCAPE_FREEFORM=$freeform"
+  echo "ROBLOX_LANDSCAPE_BOUNDS=${left},${top},${right},${bottom}"
+  return 1
+}
+
+ui_assert_all_roblox_landscape_freeform() {
+  local package geometry task_id freeform left top right bottom width height
+  local installed=("$@")
+  local count=0
+
+  for package in "${installed[@]}"; do
+    if geometry="$(ui_roblox_task_geometry "$package")"; then
+      read -r task_id freeform left top right bottom <<<"$geometry"
+      if [[ "$left" =~ ^[0-9]+$ ]] &&
+         [[ "$top" =~ ^[0-9]+$ ]] &&
+         [[ "$right" =~ ^[0-9]+$ ]] &&
+         [[ "$bottom" =~ ^[0-9]+$ ]]; then
+        width=$((right - left))
+        height=$((bottom - top))
+        if [ "$freeform" = 1 ] &&
+           [ "$width" -gt "$height" ] &&
+           [ "$width" -ge 500 ] &&
+           [ "$height" -ge 280 ]; then
+          echo "ROBLOX_LANDSCAPE_FREEFORM_OK=$package"
+          count=$((count + 1))
+          continue
+        fi
+      fi
+    fi
+    echo "ROBLOX_LANDSCAPE_FREEFORM_MISSING=$package"
+  done
+
+  echo "ROBLOX_LANDSCAPE_FREEFORM_COUNT=$count"
+  echo "ROBLOX_EXPECTED_COUNT=${#installed[@]}"
+  [ "$count" = "${#installed[@]}" ]
+}
+
 ui_launch_roblox_freeform() {
   local package="$1"
   local component freeform_out roblox_out
@@ -3096,6 +3366,13 @@ ui_launch_roblox_freeform() {
   fi
 
   echo "ROBLOX_FREEFORM_LAUNCH_STARTED=$package"
+  sleep 2
+
+  ui_resize_roblox_task_landscape "$package" || {
+    echo "ROBLOX_FREEFORM_LANDSCAPE_FAILED=$package"
+    return 1
+  }
+
   return 0
 }
 
@@ -3132,20 +3409,20 @@ ui_open_all_roblox() {
 
   for package in "${installed[@]}"; do
     ui_launch_roblox_freeform "$package" || {
-      echo "ROBLOX_OPEN_ALL=LAUNCH_FAILED"
+      echo "ROBLOX_OPEN_ALL=LAUNCH_OR_RESIZE_FAILED"
       return 1
     }
     sleep 2
   done
 
-  sleep 5
+  sleep 4
 
-  if ui_assert_all_roblox_freeform "${installed[@]}"; then
-    echo "ROBLOX_OPEN_ALL=OK_FREEFORM_PROVEN"
+  if ui_assert_all_roblox_landscape_freeform "${installed[@]}"; then
+    echo "ROBLOX_OPEN_ALL=OK_LANDSCAPE_FREEFORM_PROVEN"
     return 0
   fi
 
-  echo "ROBLOX_OPEN_ALL=NEEDS_ATTENTION_FREEFORM_NOT_PROVEN"
+  echo "ROBLOX_OPEN_ALL=NEEDS_ATTENTION_LANDSCAPE_FREEFORM_NOT_PROVEN"
   return 1
 }
 
@@ -3216,7 +3493,7 @@ ui_post_prepare() {
   local failures=0 gate_rc=0
 
   echo "UI_POST_AUTOMATION=START"
-  echo "UI_POST_AUTOMATION_VERSION=5"
+  echo "UI_POST_AUTOMATION_VERSION=6"
 
   if ! root_ok; then
     echo "UI_ROOT=NEEDS_ATTENTION"
