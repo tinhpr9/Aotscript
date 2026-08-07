@@ -7,3 +7,8 @@ IDLE
 # telegram_expires_at=1786108184446
 # telegram_command_id=1786107884446-ac20f738
 IDLE
+
+# telegram_target_ids=m37
+# telegram_expires_at=1786108315495
+# telegram_command_id=1786108015495-581c7ab2
+REBOOT
