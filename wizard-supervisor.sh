@@ -22,6 +22,7 @@ GOOGLE_LOGIN_STATUS="${AOTSCRIPT_GOOGLE_LOGIN_STATUS:-$STATE_DIR/google-login-as
 GOOGLE_LOGIN_XML="${AOTSCRIPT_GOOGLE_LOGIN_XML:-$STATE_DIR/google-login-ui.xml}"
 GOOGLE_LOGIN_TIMEOUT="${AOTSCRIPT_GOOGLE_LOGIN_TIMEOUT:-120}"
 GOOGLE_LOGIN_REMOTE="${AOTSCRIPT_GOOGLE_LOGIN_REMOTE:-gdrive:/Aotscript-Private/google_login.json}"
+GOOGLE_LOGIN_BOOTSTRAP_ROOT="${AOTSCRIPT_GOOGLE_LOGIN_BOOTSTRAP_ROOT:-/data/local/aotscript-private/google_login.json}"
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
@@ -92,17 +93,33 @@ package_exists() {
 }
 
 google_account_present() {
-  root_ok || return 1
+  local expected="${1:-}" dump
 
-  su -c 'dumpsys account' 2>/dev/null |
-    python -c '
+  root_ok || return 1
+  dump="$(su -c 'dumpsys account' 2>/dev/null || true)"
+
+  python - "$expected" 3<<<"$dump" <<'PY_GOOGLE_ACCOUNT_PRESENT'
+import os
 import re
 import sys
-text = sys.stdin.read()
-raise SystemExit(
-    0 if re.search(r"type=com[.]google(?:[},\\s]|$)", text) else 1
-)
-'
+
+expected = sys.argv[1].strip().casefold()
+text = os.fdopen(3, "r", encoding="utf-8", errors="replace").read()
+accounts = [
+    match.group(1).strip()
+    for match in re.finditer(
+        r"Account\s*\{name=([^,}]+),\s*type=com[.]google\}",
+        text,
+    )
+]
+
+if expected:
+    raise SystemExit(
+        0 if any(account.casefold() == expected for account in accounts) else 1
+    )
+
+raise SystemExit(0 if accounts else 1)
+PY_GOOGLE_ACCOUNT_PRESENT
 }
 
 google_status_set() {
@@ -192,6 +209,144 @@ google_drop_remove() {
   rm -f "$GOOGLE_LOGIN_DROP" 2>/dev/null || return 1
 }
 
+google_bootstrap_root_exists() {
+  root_ok || return 1
+  su -c "test -s '$GOOGLE_LOGIN_BOOTSTRAP_ROOT'" >/dev/null 2>&1
+}
+
+google_bootstrap_import() {
+  local dir tmp
+
+  google_bootstrap_root_exists || return 1
+
+  dir="$(dirname "$GOOGLE_LOGIN_CONFIG")"
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  tmp="$GOOGLE_LOGIN_CONFIG.bootstrap.$$"
+  rm -f "$tmp"
+  umask 077
+
+  if ! su -c "cat '$GOOGLE_LOGIN_BOOTSTRAP_ROOT'" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    google_status_set BOOTSTRAP_READ_FAILED
+    return 1
+  fi
+
+  chmod 600 "$tmp" 2>/dev/null || true
+  if ! google_config_validate "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    google_status_set BOOTSTRAP_INVALID
+    return 1
+  fi
+
+  mv -f "$tmp" "$GOOGLE_LOGIN_CONFIG"
+  chmod 600 "$GOOGLE_LOGIN_CONFIG" 2>/dev/null || true
+
+  if ! su -c "rm -f '$GOOGLE_LOGIN_BOOTSTRAP_ROOT' && test ! -e '$GOOGLE_LOGIN_BOOTSTRAP_ROOT'" \
+       >/dev/null 2>&1; then
+    rm -f "$GOOGLE_LOGIN_CONFIG"
+    google_status_set BOOTSTRAP_DELETE_FAILED
+    return 1
+  fi
+
+  google_status_set CONFIG_READY_BOOTSTRAP
+  printf 'GOOGLE_LOGIN_BOOTSTRAP_IMPORT=OK\n'
+  printf 'PRIVATE_CONFIG=VALID\n'
+  printf 'EMAIL=SET\n'
+  printf 'PASSWORD=SET\n'
+  return 0
+}
+
+google_bootstrap_seed() {
+  local root_dir root_tmp verify fetched=0
+
+  root_ok || {
+    printf 'GOOGLE_LOGIN_BOOTSTRAP=ROOT_REQUIRED\n' >&2
+    return 1
+  }
+
+  if ! google_config_validate "$GOOGLE_LOGIN_CONFIG" >/dev/null 2>&1; then
+    if ! google_config_fetch_remote; then
+      printf 'GOOGLE_LOGIN_BOOTSTRAP=NO_PRIVATE_CONFIG\n' >&2
+      return 1
+    fi
+    fetched=1
+  fi
+
+  root_dir="$(dirname "$GOOGLE_LOGIN_BOOTSTRAP_ROOT")"
+  root_tmp="$GOOGLE_LOGIN_BOOTSTRAP_ROOT.tmp.$$"
+  verify="$STATE_DIR/google-bootstrap-verify.$$"
+  rm -f "$verify"
+  umask 077
+
+  if ! su -c "umask 077; mkdir -p '$root_dir'; chmod 700 '$root_dir'; cat > '$root_tmp'; chmod 600 '$root_tmp'; mv -f '$root_tmp' '$GOOGLE_LOGIN_BOOTSTRAP_ROOT'" \
+       < "$GOOGLE_LOGIN_CONFIG"; then
+    [ "$fetched" = 0 ] || rm -f "$GOOGLE_LOGIN_CONFIG"
+    printf 'GOOGLE_LOGIN_BOOTSTRAP=WRITE_FAILED\n' >&2
+    return 1
+  fi
+
+  if ! su -c "cat '$GOOGLE_LOGIN_BOOTSTRAP_ROOT'" > "$verify" 2>/dev/null; then
+    rm -f "$verify"
+    [ "$fetched" = 0 ] || rm -f "$GOOGLE_LOGIN_CONFIG"
+    printf 'GOOGLE_LOGIN_BOOTSTRAP=VERIFY_READ_FAILED\n' >&2
+    return 1
+  fi
+
+  chmod 600 "$verify" 2>/dev/null || true
+  if ! google_config_validate "$verify" >/dev/null 2>&1 ||
+     ! cmp -s "$verify" "$GOOGLE_LOGIN_CONFIG"; then
+    rm -f "$verify"
+    [ "$fetched" = 0 ] || rm -f "$GOOGLE_LOGIN_CONFIG"
+    printf 'GOOGLE_LOGIN_BOOTSTRAP=VERIFY_FAILED\n' >&2
+    return 1
+  fi
+  rm -f "$verify"
+
+  if [ "$fetched" = 1 ]; then
+    rm -f "$GOOGLE_LOGIN_CONFIG"
+    google_status_set BOOTSTRAP_SEEDED
+  fi
+
+  printf 'GOOGLE_LOGIN_BOOTSTRAP=READY\n'
+  printf 'BOOTSTRAP_LOCATION=ROOT_PRIVATE\n'
+  printf 'BOOTSTRAP_CONTENT_VERIFIED=YES\n'
+  return 0
+}
+
+google_bootstrap_status() {
+  if ! root_ok; then
+    printf 'ROOT_BOOTSTRAP=ROOT_REQUIRED\n'
+    return 0
+  fi
+
+  if google_bootstrap_root_exists; then
+    printf 'ROOT_BOOTSTRAP=PRESENT\n'
+  else
+    printf 'ROOT_BOOTSTRAP=ABSENT\n'
+  fi
+  return 0
+}
+
+google_bootstrap_clear() {
+  root_ok || {
+    printf 'ROOT_BOOTSTRAP=ROOT_REQUIRED\n' >&2
+    return 1
+  }
+
+  su -c "rm -f '$GOOGLE_LOGIN_BOOTSTRAP_ROOT' && test ! -e '$GOOGLE_LOGIN_BOOTSTRAP_ROOT'" \
+    >/dev/null 2>&1 || return 1
+  printf 'ROOT_BOOTSTRAP=CLEARED\n'
+}
+
+google_target_account_present() {
+  local email
+
+  google_config_validate "$GOOGLE_LOGIN_CONFIG" >/dev/null 2>&1 || return 1
+  email="$(google_config_read email)"
+  [ -n "$email" ] || return 1
+  google_account_present "$email"
+}
 google_config_import() {
   local dir tmp
 
@@ -236,6 +391,11 @@ google_config_import() {
       *) google_status_set CONFIG_READY ;;
     esac
     return 0
+  fi
+
+  if google_bootstrap_root_exists; then
+    google_bootstrap_import
+    return $?
   fi
 
   if google_config_fetch_remote; then
@@ -441,14 +601,20 @@ google_config_upload_remote() {
 google_config_seed_once() {
   google_configure_interactive || return 1
 
-  if google_config_upload_remote; then
-    printf 'SET_ONCE=READY_FOR_CLONES\n'
-    return 0
+  if ! google_config_upload_remote; then
+    printf 'SET_ONCE=LOCAL_ONLY\n' >&2
+    printf 'LOCAL_CONFIG=PRESERVED\n' >&2
+    return 1
   fi
 
-  printf 'SET_ONCE=LOCAL_ONLY\n' >&2
-  printf 'LOCAL_CONFIG=PRESERVED\n' >&2
-  return 1
+  if ! google_bootstrap_seed; then
+    printf 'SET_ONCE=REMOTE_READY_BOOTSTRAP_FAILED\n' >&2
+    printf 'LOCAL_CONFIG=PRESERVED\n' >&2
+    return 1
+  fi
+
+  printf 'SET_ONCE=READY_FOR_CLONES\n'
+  return 0
 }
 
 google_remote_status() {
@@ -478,6 +644,8 @@ google_config_status() {
     printf 'DROP_FILE=ABSENT\n'
   fi
 
+  google_bootstrap_status || true
+
   if google_config_validate "$GOOGLE_LOGIN_CONFIG" >/dev/null 2>&1; then
     printf 'PRIVATE_CONFIG=VALID\n'
     printf 'EMAIL=SET\n'
@@ -490,15 +658,12 @@ google_config_status() {
 
   if google_remote_rclone_ready; then
     if google_remote_exists; then
-      printf 'REMOTE_BACKUP=PRESENT
-'
+      printf 'REMOTE_BACKUP=PRESENT\n'
     else
-      printf 'REMOTE_BACKUP=ABSENT_OR_INACCESSIBLE
-'
+      printf 'REMOTE_BACKUP=ABSENT_OR_INACCESSIBLE\n'
     fi
   else
-    printf 'REMOTE_BACKUP=RCLONE_UNAVAILABLE
-'
+    printf 'REMOTE_BACKUP=RCLONE_UNAVAILABLE\n'
   fi
 }
 
@@ -506,10 +671,9 @@ google_config_clear() {
   rm -f "$GOOGLE_LOGIN_CONFIG"
   google_drop_remove || true
   google_status_set CLEARED
-  printf 'GOOGLE_LOGIN_CONFIG=CLEARED
-'
-  printf 'REMOTE_BACKUP=PRESERVED
-'
+  printf 'GOOGLE_LOGIN_CONFIG=CLEARED\n'
+  printf 'REMOTE_BACKUP=PRESERVED\n'
+  printf 'ROOT_BOOTSTRAP=PRESERVED\n'
 }
 
 google_config_scrub_success() {
@@ -789,19 +953,13 @@ google_click_next() {
 
 google_assist_should_run() {
   case "$(google_status_get)" in
-    NOT_CONFIGURED|CONFIG_READY|CONFIG_READY_REMOTE|RUNNING|RETRY) return 0 ;;
+    NOT_CONFIGURED|CONFIG_READY|CONFIG_READY_REMOTE|CONFIG_READY_BOOTSTRAP|RUNNING|RETRY) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 google_login_assist() {
   local enabled email password deadline email_attempts=0 password_attempts=0
-
-  if google_account_present; then
-    google_config_scrub_success
-    google_status_set SUCCESS
-    return 0
-  fi
 
   if ! google_config_import; then
     open_google || true
@@ -811,6 +969,13 @@ google_login_assist() {
   enabled="$(google_config_read enabled)"
   email="$(google_config_read email)"
   password="$(google_config_read password)"
+
+  if google_account_present "$email"; then
+    unset password
+    google_config_scrub_success
+    google_status_set SUCCESS
+    return 0
+  fi
 
   if [ "$enabled" != true ]; then
     unset password
@@ -837,7 +1002,7 @@ google_login_assist() {
   deadline=$((SECONDS + GOOGLE_LOGIN_TIMEOUT))
 
   while [ "$SECONDS" -lt "$deadline" ]; do
-    if google_account_present; then
+    if google_account_present "$email"; then
       unset password
       google_config_scrub_success
       google_status_set SUCCESS
@@ -1074,18 +1239,17 @@ current_message() {
         AUTH_REJECTED)
           printf 'google|Google từ chối thông tin đăng nhập. Cập nhật cấu hình rồi mở lại.|waiting\n'
           ;;
-        MANUAL_UNSUPPORTED_CHARACTERS|UI_*|TIMEOUT|OPEN_FAILED|REMOTE_*)
-          printf 'google|Không lấy/chạy được cấu hình private. Có thể đăng nhập thủ công hoặc kiểm tra rclone.|waiting
-'
+        BOOTSTRAP_*|REMOTE_*|MANUAL_UNSUPPORTED_CHARACTERS|UI_*|TIMEOUT|OPEN_FAILED)
+          printf 'google|Không lấy/chạy được cấu hình private. Kiểm tra root bootstrap hoặc rclone; không bấm ĐÃ XONG.|waiting\n'
           ;;
-        CONFIG_READY|CONFIG_READY_REMOTE)
+        CONFIG_READY|CONFIG_READY_REMOTE|CONFIG_READY_BOOTSTRAP)
           printf 'google|Đã có cấu hình đăng nhập riêng. Đang chờ chạy trợ lý.|waiting\n'
           ;;
         SUCCESS)
-          printf 'google|Đã phát hiện tài khoản Google. Đang chuyển sang Swift Backup.|waiting\n'
+          printf 'google|Đã phát hiện đúng tài khoản Google. Đang chuyển sang Swift Backup.|waiting\n'
           ;;
         *)
-          printf 'google|Đăng nhập Google thủ công hoặc chạy aotscript-wizard google-config.|waiting\n'
+          printf 'google|Đang chuẩn bị cấu hình Google private. Không bấm ĐÃ XONG.|waiting\n'
           ;;
       esac
       ;;
@@ -1234,13 +1398,12 @@ advance_safe() {
       show_current
       ;;
     manual_pre:await_google_login)
-      if google_account_present; then
+      if google_target_account_present; then
         google_config_scrub_success
         google_status_set SUCCESS
         run_mprovision wizard
       elif google_assist_should_run; then
-        google_login_assist || true
-        if google_account_present; then
+        if google_login_assist; then
           run_mprovision wizard
         fi
       else
@@ -1382,11 +1545,10 @@ watch_loop() {
         fi
         ;;
       manual_pre:await_google_login)
-        if google_account_present; then
+        if google_target_account_present; then
           advance_safe || true
         elif google_assist_should_run; then
-          google_login_assist || true
-          if google_account_present; then
+          if google_login_assist; then
             advance_safe || true
           else
             show_current || true
@@ -1596,10 +1758,26 @@ main() {
       [ "$#" = 1 ] || exit 2
       google_config_clear
       ;;
+    google-bootstrap-seed)
+      [ "$#" = 1 ] || exit 2
+      google_bootstrap_seed
+      google_bootstrap_status
+      ;;
+    google-bootstrap-status)
+      [ "$#" = 1 ] || exit 2
+      google_bootstrap_status
+      ;;
+    google-bootstrap-clear)
+      [ "$#" = 1 ] || exit 2
+      google_bootstrap_clear
+      ;;
     google-login)
       [ "$#" = 1 ] || exit 2
-      google_login_assist || true
-      if google_account_present; then
+      if google_login_assist; then
+        run_mprovision wizard || true
+      elif google_target_account_present; then
+        google_config_scrub_success
+        google_status_set SUCCESS
         run_mprovision wizard || true
       fi
       show_current
@@ -1609,7 +1787,7 @@ main() {
       self_test
       ;;
     *)
-      printf 'Cách dùng: aotscript-wizard start|done|open|stop|status|google-config|google-config-fetch|google-config-remote-status|google-config-import|google-config-status|google-config-clear|google-login\n' >&2
+      printf 'Cách dùng: aotscript-wizard start|done|open|stop|status|google-config|google-config-fetch|google-config-remote-status|google-config-import|google-config-status|google-config-clear|google-bootstrap-seed|google-bootstrap-status|google-bootstrap-clear|google-login\n' >&2
       exit 2
       ;;
   esac

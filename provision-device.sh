@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase9-google-login-shared-v1"
+VERSION="phase10-google-bootstrap-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -184,6 +184,29 @@ rclone_ok() {
     rclone lsd gdrive: >/dev/null 2>&1
 }
 
+ensure_termux_prereqs() {
+  local cmd missing=0
+
+  for cmd in python zip unzip; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing=1
+    fi
+  done
+
+  if [ "$missing" = 1 ]; then
+    echo "[*] Đang cài dependency Termux bắt buộc: python zip unzip"
+    pkg install -y python zip unzip ||
+      die "Cài dependency Termux thất bại"
+    hash -r
+  fi
+
+  for cmd in python zip unzip; do
+    command -v "$cmd" >/dev/null 2>&1 ||
+      die "Thiếu lệnh bắt buộc sau cài đặt: $cmd"
+  done
+
+  ok "Termux prerequisites sẵn sàng"
+}
 apk_ok() {
   [ -s "$1" ] || return 1
 
@@ -1164,11 +1187,12 @@ wizard_package_exists() {
 }
 
 install_wizard_supervisor() {
-  local tmp stamp
+  local tmp stamp command_link
 
   mkdir -p "$HOME/bin"
   tmp="$WIZARD_SUPERVISOR.tmp.$$"
   stamp="$(date +%Y%m%d-%H%M%S)"
+  command_link="${PREFIX:-/data/data/com.termux/files/usr}/bin/aotscript-wizard"
 
   rm -f "$tmp"
 
@@ -1208,6 +1232,16 @@ install_wizard_supervisor() {
     }
 
     chmod 700 "$WIZARD_SUPERVISOR"
+  fi
+
+  if [ -L "$command_link" ]; then
+    if [ "$(readlink "$command_link")" != "$WIZARD_SUPERVISOR" ]; then
+      warn "Giữ nguyên symlink aotscript-wizard khác nội dung: $command_link"
+    fi
+  elif [ -e "$command_link" ]; then
+    warn "Giữ nguyên file aotscript-wizard hiện có: $command_link"
+  else
+    ln -s "$WIZARD_SUPERVISOR" "$command_link"
   fi
 }
 
@@ -1274,17 +1308,24 @@ install_wizard_shortcut() {
 }
 
 google_account_present() {
+  local dump
+
   root_ok || return 1
+  dump="$(su -c 'dumpsys account' 2>/dev/null || true)"
 
-  su -c 'dumpsys account' 2>/dev/null |
-    python -c '
+  python - 3<<<"$dump" <<'__MP_GOOGLE_ACCOUNT_PRESENT_PY__'
+import os
 import re
-import sys
 
-text = sys.stdin.read()
-pattern = r"type=com[.]google(?:[},\s]|$)"
-raise SystemExit(0 if re.search(pattern, text) else 1)
-'
+text = os.fdopen(3, "r", encoding="utf-8", errors="replace").read()
+accounts = list(
+    re.finditer(
+        r"Account\s*\{name=([^,}]+),\s*type=com[.]google\}",
+        text,
+    )
+)
+raise SystemExit(0 if accounts else 1)
+__MP_GOOGLE_ACCOUNT_PRESENT_PY__
 }
 
 wizard_open_google_login() {
@@ -1472,7 +1513,7 @@ show_manual_pre() {
 
 ========== THỦ CÔNG 1 ==========
 [ ] Bật root trước khi bắt đầu; mprovision sẽ tự kiểm tra root.
-[AUTO/TÙY CHỌN] Google Login Assistant có thể lấy cấu hình từ private gdrive; không lưu vào repository.
+[AUTO] Google Login Assistant ưu tiên root bootstrap private; rclone chỉ là fallback sau khi Termux đã có cấu hình.
 [ ] Kiểm tra Play Protect theo quy trình vận hành.
 [ ] Swift Backup: backup Termux kèm data.
 [ ] Swift Backup: backup các app và data cũ cần giữ.
@@ -3297,6 +3338,7 @@ main() {
       run="$(date +%Y%m%d-%H%M%S)"
 
       install_wrapper
+      ensure_termux_prereqs
       mkdir -p "$STATE_DIR"
 
       [ ! -s "$STATE" ] ||
