@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-VERSION="phase12-taskbar-task-launch-v1"
+VERSION="phase13-freeform-reboot-gate-v1"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/main"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"
@@ -2837,8 +2837,270 @@ ui_assert_all_roblox_freeform() {
   [ "$count" = "${#installed[@]}" ]
 }
 
+ui_dev_settings_apply() {
+  local key before after
+  local changed=0 failures=0
+  local keys=(
+    force_allow_on_external
+    force_resizable_activities
+    enable_freeform_support
+    force_desktop_mode_on_external_displays
+  )
+
+  UI_DEV_SETTINGS_CHANGED=0
+
+  for key in "${keys[@]}"; do
+    before="$(
+      su -c "settings get global '$key'" 2>/dev/null |
+        tr -d '\r\n ' ||
+        true
+    )"
+
+    if [ "$before" != 1 ]; then
+      if su -c "settings put global '$key' 1" >/dev/null 2>&1; then
+        changed=$((changed + 1))
+      else
+        echo "DEV_SETTING_${key}=WRITE_FAILED"
+        failures=$((failures + 1))
+        continue
+      fi
+    fi
+
+    after="$(
+      su -c "settings get global '$key'" 2>/dev/null |
+        tr -d '\r\n ' ||
+        true
+    )"
+
+    if [ "$after" = 1 ]; then
+      echo "DEV_SETTING_${key}=ON"
+    else
+      echo "DEV_SETTING_${key}=VERIFY_FAILED"
+      failures=$((failures + 1))
+    fi
+  done
+
+  UI_DEV_SETTINGS_CHANGED="$changed"
+  echo "DEV_SETTINGS_CHANGED=$changed"
+  echo "DEV_SETTINGS_FAILURES=$failures"
+
+  [ "$failures" = 0 ]
+}
+
+ui_current_boot_id() {
+  local value
+
+  value="$(
+    cat /proc/sys/kernel/random/boot_id 2>/dev/null ||
+      su -c 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null ||
+      true
+  )"
+
+  value="$(
+    printf '%s' "$value" |
+      tr -d '\r\n '
+  )"
+
+  [[ "$value" =~ ^[0-9A-Fa-f-]{16,64}$ ]] ||
+    return 1
+
+  printf '%s\n' "$value"
+}
+
+ui_freeform_runtime_probe() {
+  local package component freeform_out roblox_out
+  local installed=()
+
+  mapfile -t installed < <(
+    ui_installed_roblox_packages
+  )
+
+  if [ "${#installed[@]}" = 0 ]; then
+    echo "UI_FREEFORM_RUNTIME=NO_ROBLOX_FOR_PROBE"
+    return 1
+  fi
+
+  package="${installed[0]}"
+  component="$(ui_launcher_component "$package")"
+
+  case "$component" in
+    "$package"/*)
+      ;;
+    *)
+      echo "UI_FREEFORM_RUNTIME=LAUNCHER_NOT_FOUND"
+      return 1
+      ;;
+  esac
+
+  ui_start_taskbar || {
+    echo "UI_FREEFORM_RUNTIME=TASKBAR_NOT_READY"
+    return 1
+  }
+
+  su -c "am force-stop '$package'" >/dev/null 2>&1 ||
+    true
+
+  if ! freeform_out="$(
+    su -c "am start --windowingMode 5 \
+      -n com.farmerbb.taskbar/.activity.InvisibleActivityFreeform" \
+      2>&1
+  )"; then
+    echo "UI_FREEFORM_RUNTIME=TASKBAR_ACTIVITY_FAILED"
+    return 1
+  fi
+
+  if printf '%s\n' "$freeform_out" |
+     grep -qiE 'Error|Exception|Security'; then
+    echo "UI_FREEFORM_RUNTIME=TASKBAR_ACTIVITY_REJECTED"
+    return 1
+  fi
+
+  sleep 1
+
+  if ! roblox_out="$(
+    su -c "am start --windowingMode 5 -n '$component'" 2>&1
+  )"; then
+    su -c "am force-stop '$package'" >/dev/null 2>&1 ||
+      true
+    echo "UI_FREEFORM_RUNTIME=ROBLOX_LAUNCH_FAILED"
+    return 1
+  fi
+
+  if printf '%s\n' "$roblox_out" |
+     grep -qiE 'Error|Exception|Security'; then
+    su -c "am force-stop '$package'" >/dev/null 2>&1 ||
+      true
+    echo "UI_FREEFORM_RUNTIME=ROBLOX_LAUNCH_REJECTED"
+    return 1
+  fi
+
+  sleep 4
+
+  if ui_roblox_freeform_packages |
+     grep -Fxq "$package"; then
+    su -c "am force-stop '$package'" >/dev/null 2>&1 ||
+      true
+    echo "UI_FREEFORM_RUNTIME=READY"
+    return 0
+  fi
+
+  su -c "am force-stop '$package'" >/dev/null 2>&1 ||
+    true
+  echo "UI_FREEFORM_RUNTIME=NOT_READY"
+  return 1
+}
+
+ui_desktop_reboot_gate() {
+  local current recorded verified
+
+  ui_dev_settings_apply || {
+    echo "UI_DESKTOP_SETTINGS=NEEDS_ATTENTION"
+    return 1
+  }
+
+  current="$(ui_current_boot_id)" || {
+    echo "UI_DESKTOP_BOOT_ID=UNAVAILABLE"
+    return 1
+  }
+
+  recorded="$(state_get ui_desktop_reboot_from_boot_id)"
+  verified="$(state_get ui_desktop_reboot_verified_boot_id)"
+
+  if [ -n "$recorded" ]; then
+    if [ "$recorded" = "$current" ]; then
+      echo "UI_DESKTOP_REBOOT=REQUIRED"
+      echo "UI_DESKTOP_NEXT=REBOOT_ONCE_THEN_MPROVISION_UI_POST"
+      return 2
+    fi
+
+    state_set \
+      "ui_desktop_reboot_from_boot_id=" \
+      "ui_desktop_reboot_verified_boot_id=$current" \
+      "ui_desktop_reboot_status=VERIFIED_AFTER_BOOT_CHANGE"
+
+    echo "UI_DESKTOP_REBOOT=VERIFIED_AFTER_BOOT_CHANGE"
+    return 0
+  fi
+
+  if [ "$UI_DEV_SETTINGS_CHANGED" = 0 ] &&
+     [ "$verified" = "$current" ]; then
+    echo "UI_DESKTOP_REBOOT=VERIFIED_CURRENT_BOOT"
+    return 0
+  fi
+
+  if ui_freeform_runtime_probe; then
+    state_set \
+      "ui_desktop_reboot_from_boot_id=" \
+      "ui_desktop_reboot_verified_boot_id=$current" \
+      "ui_desktop_reboot_status=ALREADY_EFFECTIVE"
+
+    echo "UI_DESKTOP_REBOOT=ALREADY_EFFECTIVE"
+    return 0
+  fi
+
+  state_set \
+    "ui_desktop_reboot_from_boot_id=$current" \
+    "ui_desktop_reboot_verified_boot_id=" \
+    "ui_desktop_reboot_status=REQUIRED"
+
+  echo "UI_DESKTOP_REBOOT=REQUIRED"
+  echo "UI_DESKTOP_NEXT=REBOOT_ONCE_THEN_MPROVISION_UI_POST"
+  return 2
+}
+
+ui_launch_roblox_freeform() {
+  local package="$1"
+  local component freeform_out roblox_out
+
+  component="$(ui_launcher_component "$package")"
+
+  case "$component" in
+    "$package"/*)
+      echo "ROBLOX_LAUNCHER_FOUND=$package"
+      ;;
+    *)
+      echo "ROBLOX_LAUNCHER_NOT_FOUND=$package"
+      return 1
+      ;;
+  esac
+
+  if ! freeform_out="$(
+    su -c "am start --windowingMode 5 \
+      -n com.farmerbb.taskbar/.activity.InvisibleActivityFreeform" \
+      2>&1
+  )"; then
+    echo "TASKBAR_FREEFORM_ACTIVITY_FAILED=$package"
+    return 1
+  fi
+
+  if printf '%s\n' "$freeform_out" |
+     grep -qiE 'Error|Exception|Security'; then
+    echo "TASKBAR_FREEFORM_ACTIVITY_REJECTED=$package"
+    return 1
+  fi
+
+  echo "TASKBAR_FREEFORM_ACTIVITY_STARTED=$package"
+  sleep 1
+
+  if ! roblox_out="$(
+    su -c "am start --windowingMode 5 -n '$component'" 2>&1
+  )"; then
+    echo "ROBLOX_FREEFORM_LAUNCH_FAILED=$package"
+    return 1
+  fi
+
+  if printf '%s\n' "$roblox_out" |
+     grep -qiE 'Error|Exception|Security'; then
+    echo "ROBLOX_FREEFORM_LAUNCH_REJECTED=$package"
+    return 1
+  fi
+
+  echo "ROBLOX_FREEFORM_LAUNCH_STARTED=$package"
+  return 0
+}
+
 ui_open_all_roblox() {
-  local package index
+  local package
   local installed=()
 
   mapfile -t installed < <(
@@ -2868,23 +3130,12 @@ ui_open_all_roblox() {
     return 1
   }
 
-  for ((index = 0; index < ${#installed[@]}; index++)); do
-    ui_taskbar_open_start_menu || {
-      echo "ROBLOX_TASKBAR_MENU_FAILED_INDEX=$index"
+  for package in "${installed[@]}"; do
+    ui_launch_roblox_freeform "$package" || {
+      echo "ROBLOX_OPEN_ALL=LAUNCH_FAILED"
       return 1
     }
-
-    if ! ui_taskbar_point \
-      taskbar_roblox \
-      "${#installed[@]}" \
-      "$index" \
-      "TASKBAR_ROBLOX_$index"; then
-      echo "ROBLOX_TASKBAR_CLICK_FAILED_INDEX=$index"
-      return 1
-    fi
-
-    echo "ROBLOX_TASKBAR_CLICKED_INDEX=$index"
-    sleep 3
+    sleep 2
   done
 
   sleep 5
@@ -2962,14 +3213,30 @@ ui_post_prepare() {
   local boot_package="com.termux.boot"
   local control_package="ahapps.controlthescreenorientation"
   local control_service="${control_package}/.Control_service"
-  local failures=0
+  local failures=0 gate_rc=0
 
   echo "UI_POST_AUTOMATION=START"
-  echo "UI_POST_AUTOMATION_VERSION=4"
+  echo "UI_POST_AUTOMATION_VERSION=5"
 
   if ! root_ok; then
     echo "UI_ROOT=NEEDS_ATTENTION"
     state_set "ui_post_status=NEEDS_ATTENTION"
+    return 1
+  fi
+
+  ui_desktop_reboot_gate || gate_rc=$?
+
+  if [ "$gate_rc" = 2 ]; then
+    state_set "ui_post_status=REBOOT_REQUIRED"
+    echo "UI_POST_AUTOMATION=REBOOT_REQUIRED"
+    echo "UI_POST_AUTOMATION_FAILURES=0"
+    return 1
+  fi
+
+  if [ "$gate_rc" -ne 0 ]; then
+    state_set "ui_post_status=NEEDS_ATTENTION"
+    echo "UI_POST_AUTOMATION=NEEDS_ATTENTION"
+    echo "UI_POST_AUTOMATION_FAILURES=1"
     return 1
   fi
 
@@ -2999,9 +3266,6 @@ ui_post_prepare() {
     echo "CONTROL_PACKAGE=MISSING"
     failures=$((failures + 1))
   fi
-
-  ui_start_taskbar ||
-    failures=$((failures + 1))
 
   ui_open_all_roblox ||
     failures=$((failures + 1))
