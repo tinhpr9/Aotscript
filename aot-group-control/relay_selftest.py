@@ -74,6 +74,45 @@ assert module.normalize_target_ids(
     ["M117", "m117", "m38", "bad"]
 ) == ["m117", "m38"]
 
+launch_commands = []
+old_root_run = module.controller._root_run
+old_sleep = module.time.sleep
+
+
+def fake_root_run(command: str, **_kwargs):
+    launch_commands.append(command)
+    if command.startswith(
+        "/system/bin/cmd package resolve-activity"
+    ):
+        return "org.swiftapps.swiftbackup/.MainActivity\n"
+    return ""
+
+
+try:
+    module.controller._root_run = fake_root_run
+    module.time.sleep = lambda _seconds: None
+    module._launch_package(
+        "org.swiftapps.swiftbackup"
+    )
+finally:
+    module.controller._root_run = old_root_run
+    module.time.sleep = old_sleep
+
+assert launch_commands == [
+    (
+        "/system/bin/cmd package resolve-activity --brief --user 0 "
+        "-a android.intent.action.MAIN "
+        "-c android.intent.category.LAUNCHER "
+        "org.swiftapps.swiftbackup"
+    ),
+    (
+        "/system/bin/am start -W --user 0 --display 0 "
+        "-a android.intent.action.MAIN "
+        "-c android.intent.category.LAUNCHER "
+        "-n org.swiftapps.swiftbackup/.MainActivity >/dev/null"
+    ),
+]
+
 parser = module.build_parser()
 parsed = parser.parse_args(
     [

@@ -424,7 +424,7 @@ def _launch_package(package: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9._]+", package):
         raise AotRelayError("invalid_package")
     cmd = (
-        "/system/bin/cmd package resolve-activity --brief "
+        "/system/bin/cmd package resolve-activity --brief --user 0 "
         "-a android.intent.action.MAIN "
         "-c android.intent.category.LAUNCHER "
         + package
@@ -434,7 +434,7 @@ def _launch_package(package: str) -> None:
     if not activity.startswith(package + "/"):
         raise AotRelayError("package_activity_not_resolved")
     controller._root_run(
-        "/system/bin/am start -W --display 0 "
+        "/system/bin/am start -W --user 0 --display 0 "
         "-a android.intent.action.MAIN "
         "-c android.intent.category.LAUNCHER "
         "-n "
