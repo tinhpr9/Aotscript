@@ -187,10 +187,63 @@ def _cmdline(pid: int) -> list[str]:
     ]
 
 
+def _relay_identity_matches(
+    args: list[str],
+    config: dict[str, Any],
+) -> bool:
+    relay_indexes = [
+        index
+        for index, value in enumerate(args)
+        if pathlib.Path(value).name == "relay.py"
+    ]
+    if len(relay_indexes) != 1:
+        return False
+    relay_index = relay_indexes[0]
+    relay_path = pathlib.Path(args[relay_index])
+    if not relay_path.is_absolute():
+        return False
+    is_current = relay_path == RELAY_PATH.resolve()
+    is_legacy = (
+        relay_path.parent.parent == ROOT.parent
+        and re.fullmatch(
+            r"\.aot-group-control-phase[0-9A-Za-z._-]+",
+            relay_path.parent.name,
+        )
+        is not None
+    )
+    if not (is_current or is_legacy):
+        return False
+
+    relay_args = args[relay_index + 1:]
+    if not relay_args or relay_args[0] != config["role"]:
+        return False
+
+    def option_value(name: str) -> str | None:
+        indexes = [
+            index
+            for index, value in enumerate(relay_args)
+            if value == name
+        ]
+        if len(indexes) != 1:
+            return None
+        index = indexes[0]
+        return (
+            relay_args[index + 1]
+            if index + 1 < len(relay_args)
+            else None
+        )
+
+    if option_value("--session") != config["session_id"]:
+        return False
+    if config["role"] == "follower":
+        return (
+            option_value("--reference-device")
+            == config.get("reference_device_id")
+        )
+    return option_value("--reference-device") is None
+
+
 def matching_relay_pids(config: dict[str, Any]) -> list[int]:
-    relay = str(RELAY_PATH.resolve())
-    role = config["role"]
-    session_id = config["session_id"]
     result = []
     for entry in pathlib.Path("/proc").iterdir():
         if not entry.name.isdigit():
@@ -199,17 +252,8 @@ def matching_relay_pids(config: dict[str, Any]) -> list[int]:
         args = _cmdline(pid)
         if not args:
             continue
-        if relay not in args:
-            continue
-        if role not in args:
-            continue
-        if session_id not in args:
-            continue
-        if role == "follower":
-            reference = config.get("reference_device_id")
-            if reference and reference not in args:
-                continue
-        result.append(pid)
+        if _relay_identity_matches(args, config):
+            result.append(pid)
     return sorted(set(result))
 
 

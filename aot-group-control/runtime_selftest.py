@@ -51,6 +51,40 @@ follower = module.validate_config_data(
 )
 assert follower["reference_device_id"] == "m37"
 
+current_relay = str(module.RELAY_PATH.resolve())
+legacy_relay = str(
+    module.ROOT.parent
+    / ".aot-group-control-phase4"
+    / "relay.py"
+)
+follower_args = [
+    "/data/data/com.termux/files/usr/bin/python3",
+    "-u",
+    current_relay,
+    "follower",
+    "--session",
+    "m37-m117-p3",
+    "--reference-device",
+    "m37",
+]
+assert module._relay_identity_matches(follower_args, follower)
+assert module._relay_identity_matches(
+    [*follower_args[:2], legacy_relay, *follower_args[3:]],
+    follower,
+)
+assert not module._relay_identity_matches(
+    [
+        *follower_args[:2],
+        str(module.ROOT.parent / "unrelated" / "relay.py"),
+        *follower_args[3:],
+    ],
+    follower,
+)
+assert not module._relay_identity_matches(
+    [*follower_args[:-1], "m38"],
+    follower,
+)
+
 try:
     module.validate_config_data(
         {
