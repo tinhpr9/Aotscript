@@ -237,6 +237,36 @@ activity_content = module._unique_resource_id(
     "android:id/content",
 )
 assert activity_content.resource_id == "android:id/content"
+
+# `dumpsys activity top` may contain several task hierarchies. The parser
+# must select the foreground package instead of silently using the first one.
+multi_activity_dump = """
+  ACTIVITY com.google.android.keep/.activities.BrowseActivity
+    View Hierarchy:
+      DecorView@keep[BrowseActivity]
+        android.widget.Button{aaa V.E...C.. ........ 0,0-100,100 #7f010001 app:id/menu_button}
+    Looper (main, tid 1)
+  ACTIVITY org.swiftapps.swiftbackup/.home.HomeActivity
+    View Hierarchy:
+      DecorView@swift[HomeActivity]
+        android.widget.Button{bbb V.E...C.. ........ 0,100-100,200 #7f010002 app:id/nav_account}
+    Looper (main, tid 1)
+"""
+multi_activity_xml = module.activity_top_to_ui_xml(
+    multi_activity_dump,
+    "org.swiftapps.swiftbackup",
+)
+multi_activity_nodes = module.parse_ui_xml(
+    multi_activity_xml
+)
+assert module._unique_resource_id(
+    multi_activity_nodes,
+    "org.swiftapps.swiftbackup:id/nav_account",
+).clickable is True
+assert not any(
+    node.resource_id == "com.google.android.keep:id/menu_button"
+    for node in multi_activity_nodes
+)
 negative = module.parse_bounds("[-10,-20][110,220]")
 assert negative.as_list() == [-10, -20, 110, 220]
 

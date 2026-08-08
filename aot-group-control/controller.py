@@ -220,11 +220,40 @@ def ui_coordinate_size(
     return max_right, max_bottom
 
 
-def activity_top_to_ui_xml(text: str) -> str:
+def activity_top_to_ui_xml(
+    text: str,
+    foreground_package_name: str = "",
+) -> str:
     lines = text.splitlines()
+    activity_re = re.compile(
+        r"^\s*ACTIVITY\s+([A-Za-z0-9._]+)/"
+    )
+    activity_index = None
+    activity_package = ""
+    for index, raw in enumerate(lines):
+        activity_match = activity_re.match(raw)
+        if activity_match is None:
+            continue
+        candidate_package = activity_match.group(1)
+        if (
+            foreground_package_name
+            and candidate_package != foreground_package_name
+        ):
+            continue
+        activity_index = index
+        activity_package = candidate_package
+        break
+    if activity_index is None:
+        raise AotControllerError(
+            "dumpsys activity top has no matching activity"
+        )
+
     marker_index = None
     marker_indent = 0
-    for index, raw in enumerate(lines):
+    for index in range(activity_index + 1, len(lines)):
+        raw = lines[index]
+        if activity_re.match(raw):
+            break
         if raw.strip() == "View Hierarchy:":
             marker_index = index
             marker_indent = len(raw) - len(raw.lstrip(" "))
@@ -233,17 +262,6 @@ def activity_top_to_ui_xml(text: str) -> str:
         raise AotControllerError(
             "dumpsys activity top has no View Hierarchy"
         )
-
-    activity_match = re.search(
-        r"^\s*ACTIVITY\s+([A-Za-z0-9._]+)/",
-        text,
-        re.MULTILINE,
-    )
-    activity_package = (
-        activity_match.group(1)
-        if activity_match is not None
-        else ""
-    )
 
     view_re = re.compile(
         r"^(?P<class>[A-Za-z0-9_.$]+)\{(?P<body>.*)\}$"
@@ -372,7 +390,10 @@ def dump_ui_xml() -> str:
             f"{shlex.quote(DUMPSYS)} activity top",
             timeout=15,
         )
-        return activity_top_to_ui_xml(activity_dump)
+        return activity_top_to_ui_xml(
+            activity_dump,
+            foreground_package(),
+        )
     except AotControllerError:
         pass
 
