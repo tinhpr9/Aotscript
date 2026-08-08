@@ -177,6 +177,49 @@ def display_size() -> tuple[int, int]:
     return int(width), int(height)
 
 
+def ui_coordinate_size(
+    nodes: list[UiNode],
+    fallback_width: int,
+    fallback_height: int,
+) -> tuple[int, int]:
+    if fallback_width <= 0 or fallback_height <= 0:
+        raise AotControllerError(
+            "invalid fallback display size"
+        )
+
+    visible = [
+        node
+        for node in nodes
+        if node.bounds.area > 0
+    ]
+
+    if not visible:
+        return fallback_width, fallback_height
+
+    max_right = max(
+        node.bounds.right
+        for node in visible
+    )
+    max_bottom = max(
+        node.bounds.bottom
+        for node in visible
+    )
+
+    candidates = (
+        (fallback_width, fallback_height),
+        (fallback_height, fallback_width),
+    )
+
+    for width, height in candidates:
+        if (
+            max_right <= width
+            and max_bottom <= height
+        ):
+            return width, height
+
+    return max_right, max_bottom
+
+
 def dump_ui_xml() -> str:
     remote = f"/data/local/tmp/aot-group-ui-{os.getpid()}.xml"
     command = (
@@ -294,21 +337,41 @@ def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
-def snapshot(*, include_nodes: bool = True) -> dict[str, Any]:
-    package = foreground_package()
-    width, height = display_size()
+def snapshot(
+    *,
+    include_nodes: bool = True,
+) -> dict[str, Any]:
+    fallback_width, fallback_height = display_size()
     nodes = parse_ui_xml(dump_ui_xml())
+    width, height = ui_coordinate_size(
+        nodes,
+        fallback_width,
+        fallback_height,
+    )
+    package = foreground_package()
     data: dict[str, Any] = {
         "package": package,
-        "fingerprint": ui_fingerprint(package, nodes),
+        "fingerprint": ui_fingerprint(
+            package,
+            nodes,
+        ),
         "width": width,
         "height": height,
         "node_count": len(nodes),
-        "resource_id_count": sum(bool(node.resource_id) for node in nodes),
-        "clickable_count": sum(node.clickable for node in nodes),
+        "resource_id_count": sum(
+            bool(node.resource_id)
+            for node in nodes
+        ),
+        "clickable_count": sum(
+            node.clickable
+            for node in nodes
+        ),
     }
     if include_nodes:
-        data["nodes"] = [node.public() for node in nodes]
+        data["nodes"] = [
+            node.public()
+            for node in nodes
+        ]
     return data
 
 

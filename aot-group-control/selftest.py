@@ -140,4 +140,76 @@ public = nodes[1].public()
 assert "text" not in public
 assert "content_desc" not in public
 
+
+# UIAutomator bounds may use the rotated/logical input space while
+# `wm size` reports the opposite orientation. The controller must keep
+# normalized input in the same coordinate space as UI bounds.
+landscape_xml = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation='1'>
+  <node index='0' class='android.widget.FrameLayout' resource-id='root'
+        clickable='false' enabled='true' scrollable='false' password='false'
+        bounds='[0,0][1280,720]'>
+    <node index='1' class='android.widget.Button'
+          resource-id='pkg:id/nav_account'
+          clickable='true' enabled='true'
+          scrollable='false' password='false'
+          bounds='[900,500][1200,700]' />
+  </node>
+</hierarchy>"""
+
+landscape_nodes = module.parse_ui_xml(
+    landscape_xml
+)
+
+ui_width, ui_height = module.ui_coordinate_size(
+    landscape_nodes,
+    720,
+    1280,
+)
+
+assert (ui_width, ui_height) == (1280, 720)
+
+account = landscape_nodes[1]
+cx, cy = account.bounds.center
+
+x_norm = cx / ui_width
+y_norm = cy / ui_height
+
+assert 0.0 <= x_norm <= 1.0
+assert 0.0 <= y_norm <= 1.0
+
+landscape_resolved = module.resolve_normalized_tap(
+    landscape_nodes,
+    ui_width,
+    ui_height,
+    x_norm,
+    y_norm,
+)
+
+assert landscape_resolved["mode"] == "semantic"
+assert (
+    landscape_resolved["resource_id"]
+    == "pkg:id/nav_account"
+)
+
+# Also support logical/physical scale mismatches where swapping the
+# fallback dimensions is insufficient.
+scaled_xml = landscape_xml.replace(
+    "[0,0][1280,720]",
+    "[0,0][1600,900]",
+).replace(
+    "[900,500][1200,700]",
+    "[1200,650][1500,850]",
+)
+
+scaled_nodes = module.parse_ui_xml(
+    scaled_xml
+)
+
+assert module.ui_coordinate_size(
+    scaled_nodes,
+    720,
+    1280,
+) == (1600, 900)
+
 print("AOT_CONTROLLER_SELFTEST=OK")
