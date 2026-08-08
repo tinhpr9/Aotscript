@@ -18,6 +18,12 @@ assert module._root_shell_command("id") == (
     "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id"
 )
 
+assert module._root_command_argv("id") == [
+    "/data/data/com.termux/files/usr/bin/su",
+    "-c",
+    "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id",
+]
+
 xml = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation='0'>
   <node index='0' class='android.widget.FrameLayout' resource-id='root'
