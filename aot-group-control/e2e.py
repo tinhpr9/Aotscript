@@ -81,47 +81,135 @@ def recv_acks(
     return received
 
 
-def selector_center(resource_id: str) -> tuple[str, str, float, float]:
-    snap = controller.snapshot(include_nodes=True)
-    if snap.get("package") != SWIFT:
-        raise E2EError("swift_not_foreground")
-    matches = [
-        node
-        for node in snap.get("nodes", [])
-        if node.get("resource_id") == resource_id
-    ]
-    if len(matches) != 1:
-        raise E2EError(
-            f"selector_match_count:{resource_id}:{len(matches)}"
+def selector_center(
+    resource_id: str,
+    *,
+    timeout_seconds: float = 12.0,
+    poll_seconds: float = 0.25,
+) -> tuple[str, str, float, float]:
+    deadline = (
+        time.monotonic()
+        + max(0.1, float(timeout_seconds))
+    )
+    last_package = ""
+    last_count = 0
+
+    while True:
+        snap = controller.snapshot(
+            include_nodes=True
         )
+        last_package = str(
+            snap.get("package") or ""
+        )
+
+        matches = []
+        if last_package == SWIFT:
+            matches = [
+                node
+                for node in snap.get(
+                    "nodes",
+                    [],
+                )
+                if node.get("resource_id")
+                == resource_id
+            ]
+            last_count = len(matches)
+
+            if last_count == 1:
+                break
+
+            if last_count > 1:
+                raise E2EError(
+                    "selector_match_count:"
+                    f"{resource_id}:{last_count}"
+                )
+
+        if time.monotonic() >= deadline:
+            if last_package != SWIFT:
+                raise E2EError(
+                    "swift_not_foreground"
+                )
+            raise E2EError(
+                "selector_match_count:"
+                f"{resource_id}:{last_count}"
+            )
+
+        time.sleep(
+            max(0.05, float(poll_seconds))
+        )
+
     bounds = matches[0].get("bounds")
     if not (
         isinstance(bounds, list)
         and len(bounds) == 4
-        and all(isinstance(value, int) for value in bounds)
+        and all(
+            isinstance(value, int)
+            for value in bounds
+        )
     ):
-        raise E2EError("selector_bounds_invalid")
+        raise E2EError(
+            "selector_bounds_invalid"
+        )
+
     left, top, right, bottom = bounds
     width = int(snap.get("width") or 0)
     height = int(snap.get("height") or 0)
-    if width <= 0 or height <= 0 or right <= left or bottom <= top:
-        raise E2EError("display_or_bounds_invalid")
-    x_norm = ((left + right) / 2.0) / width
-    y_norm = ((top + bottom) / 2.0) / height
-    nodes = controller.parse_ui_xml(controller.dump_ui_xml())
-    resolved = controller.resolve_normalized_tap(
-        nodes,
-        width,
-        height,
+
+    if (
+        width <= 0
+        or height <= 0
+        or right <= left
+        or bottom <= top
+    ):
+        raise E2EError(
+            "display_or_bounds_invalid"
+        )
+
+    x_norm = (
+        ((left + right) / 2.0)
+        / width
+    )
+    y_norm = (
+        ((top + bottom) / 2.0)
+        / height
+    )
+
+    nodes = controller.parse_ui_xml(
+        controller.dump_ui_xml()
+    )
+    resolved = (
+        controller.resolve_normalized_tap(
+            nodes,
+            width,
+            height,
+            x_norm,
+            y_norm,
+        )
+    )
+
+    if resolved.get("mode") != "semantic":
+        raise E2EError(
+            "preview_semantic_resolution_failed"
+        )
+
+    semantic_id = str(
+        resolved.get("resource_id") or ""
+    ).strip()
+
+    if not semantic_id:
+        raise E2EError(
+            "preview_semantic_id_missing"
+        )
+
+    return (
+        str(
+            snap.get("fingerprint")
+            or ""
+        ),
+        semantic_id,
         x_norm,
         y_norm,
     )
-    if resolved.get("mode") != "semantic":
-        raise E2EError("preview_semantic_resolution_failed")
-    semantic_id = str(resolved.get("resource_id") or "").strip()
-    if not semantic_id:
-        raise E2EError("preview_semantic_id_missing")
-    return str(snap.get("fingerprint") or ""), semantic_id, x_norm, y_norm
 
 
 def validate_success_acks(
