@@ -277,6 +277,111 @@ assert not any(
     node.resource_id == "com.google.android.keep:id/menu_button"
     for node in multi_activity_nodes
 )
+resumed_swift = """
+  topResumedActivity=null
+  mResumedActivity = org.swiftapps.swiftbackup/.home.HomeActivity
+"""
+stale_launcher_window = (
+    "mCurrentFocus=Window{123 u0 "
+    "ginlemon.flowerfree/ginlemon.flower.HomeScreen}\n"
+    "mFocusedApp=ActivityRecord{456 u0 "
+    "ginlemon.flowerfree/ginlemon.flower.HomeScreen}"
+)
+
+original_root_run = module._root_run
+
+
+def foreground_probe_root_run(command, **_kwargs):
+    if command == f"{module.DUMPSYS} activity activities":
+        return resumed_swift
+    if command == f"{module.DUMPSYS} window windows":
+        return stale_launcher_window
+    raise AssertionError(f"unexpected root command: {command}")
+
+
+module._root_run = foreground_probe_root_run
+try:
+    assert (
+        module.foreground_package()
+        == "org.swiftapps.swiftbackup"
+    )
+finally:
+    module._root_run = original_root_run
+
+
+def no_focus_root_run(command, **_kwargs):
+    if command == f"{module.DUMPSYS} activity activities":
+        return resumed_swift
+    if command == f"{module.DUMPSYS} window windows":
+        return ""
+    raise AssertionError(f"unexpected root command: {command}")
+
+
+module._root_run = no_focus_root_run
+try:
+    assert (
+        module.foreground_package()
+        == "org.swiftapps.swiftbackup"
+    )
+finally:
+    module._root_run = original_root_run
+
+
+def fallback_root_run(command, **_kwargs):
+    if command == f"{module.DUMPSYS} activity activities":
+        return "mResumedActivity=null"
+    if command == f"{module.DUMPSYS} window windows":
+        return stale_launcher_window
+    raise AssertionError(f"unexpected root command: {command}")
+
+
+module._root_run = fallback_root_run
+try:
+    assert module.foreground_package() == "ginlemon.flowerfree"
+finally:
+    module._root_run = original_root_run
+
+
+ambiguous_resumed = """
+  mResumedActivity=org.example.first/.MainActivity
+  mResumedActivity=org.example.second/.MainActivity
+"""
+try:
+    module._activity_resumed_package(ambiguous_resumed)
+except module.AotControllerError:
+    pass
+else:
+    raise AssertionError("ambiguous resumed packages were accepted")
+
+
+def hierarchy_root_run(command, **_kwargs):
+    if command == f"{module.DUMPSYS} activity top":
+        return multi_activity_dump
+    if command == f"{module.DUMPSYS} activity activities":
+        return resumed_swift
+    if command == f"{module.DUMPSYS} window windows":
+        return stale_launcher_window
+    raise AssertionError(f"unexpected root command: {command}")
+
+
+module._root_run = hierarchy_root_run
+try:
+    resolved_activity_xml = module.dump_ui_xml()
+finally:
+    module._root_run = original_root_run
+
+resolved_activity_nodes = module.parse_ui_xml(
+    resolved_activity_xml
+)
+assert module._unique_resource_id(
+    resolved_activity_nodes,
+    "org.swiftapps.swiftbackup:id/nav_account",
+).clickable is True
+assert not any(
+    node.resource_id == "com.google.android.keep:id/menu_button"
+    for node in resolved_activity_nodes
+)
+
 negative = module.parse_bounds("[-10,-20][110,220]")
 assert negative.as_list() == [-10, -20, 110, 220]
 

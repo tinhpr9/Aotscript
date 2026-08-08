@@ -170,7 +170,60 @@ def device_identity() -> dict[str, str]:
     }
 
 
+def _activity_resumed_package(text: str) -> str | None:
+    field_re = re.compile(
+        r"^\s*"
+        r"(topResumedActivity|mResumedActivity)"
+        r"\s*[:=]\s*(.*?)\s*$"
+    )
+    component_re = re.compile(
+        r"(?<![A-Za-z0-9._])"
+        r"([A-Za-z][A-Za-z0-9._]*)/"
+        r"[A-Za-z0-9._$]+"
+    )
+    candidates: dict[str, list[str]] = {
+        "topResumedActivity": [],
+        "mResumedActivity": [],
+    }
+
+    for raw in text.splitlines():
+        field_match = field_re.fullmatch(raw)
+        if field_match is None:
+            continue
+        field, value = field_match.groups()
+        if not value or value.lower() in {"null", "none"}:
+            continue
+        packages = component_re.findall(value)
+        if len(packages) != 1:
+            raise AotControllerError(
+                "resumed activity component is ambiguous"
+            )
+        candidates[field].append(packages[0])
+
+    for field in ("topResumedActivity", "mResumedActivity"):
+        packages = set(candidates[field])
+        if len(packages) == 1:
+            return next(iter(packages))
+        if len(packages) > 1:
+            raise AotControllerError(
+                "resumed activity package is ambiguous"
+            )
+    return None
+
 def foreground_package() -> str:
+    try:
+        activity_output = _root_run(
+            f"{shlex.quote(DUMPSYS)} activity activities"
+        )
+    except AotControllerError:
+        activity_output = ""
+    if activity_output:
+        resumed_package = _activity_resumed_package(
+            activity_output
+        )
+        if resumed_package:
+            return resumed_package
+
     output = _root_run(f"{shlex.quote(DUMPSYS)} window windows")
     patterns = (
         r"mCurrentFocus=.*?\s([A-Za-z0-9._]+)/(?:[A-Za-z0-9._$]+)",
