@@ -212,4 +212,32 @@ assert module.ui_coordinate_size(
     1280,
 ) == (1600, 900)
 
+# Fallback parser for devices where `uiautomator dump` is killed.
+activity_dump = """
+TASK org.swiftapps.swiftbackup
+  ACTIVITY org.swiftapps.swiftbackup/.MainActivity
+    View Hierarchy:
+      DecorView@abc[MainActivity]
+        android.widget.FrameLayout{aaa V.E...... ........ 10,20-710,1260 #1020002 android:id/content}
+          android.widget.Button{bbb V.E...C.. ........ 100,1000-300,1200 #7f010001 app:id/nav_account}
+          android.widget.Button{ccc V.E...C.. ........ 300,1000-500,1200 #7f010002 app:id/nav_home}
+    Looper (main, tid 1)
+"""
+activity_xml = module.activity_top_to_ui_xml(activity_dump)
+activity_nodes = module.parse_ui_xml(activity_xml)
+activity_account = module._unique_resource_id(
+    activity_nodes,
+    "org.swiftapps.swiftbackup:id/nav_account",
+)
+assert activity_account.bounds.as_list() == [110, 1020, 310, 1220]
+assert activity_account.clickable is True
+assert activity_account.enabled is True
+activity_content = module._unique_resource_id(
+    activity_nodes,
+    "android:id/content",
+)
+assert activity_content.resource_id == "android:id/content"
+negative = module.parse_bounds("[-10,-20][110,220]")
+assert negative.as_list() == [-10, -20, 110, 220]
+
 print("AOT_CONTROLLER_SELFTEST=OK")

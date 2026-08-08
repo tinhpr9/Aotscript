@@ -97,7 +97,7 @@ def _bool_attr(value: str | None) -> bool:
 
 def parse_bounds(value: str) -> Bounds:
     match = re.fullmatch(
-        r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",
+        r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]",
         value.strip(),
     )
     if not match:
@@ -220,7 +220,162 @@ def ui_coordinate_size(
     return max_right, max_bottom
 
 
+def activity_top_to_ui_xml(text: str) -> str:
+    lines = text.splitlines()
+    marker_index = None
+    marker_indent = 0
+    for index, raw in enumerate(lines):
+        if raw.strip() == "View Hierarchy:":
+            marker_index = index
+            marker_indent = len(raw) - len(raw.lstrip(" "))
+            break
+    if marker_index is None:
+        raise AotControllerError(
+            "dumpsys activity top has no View Hierarchy"
+        )
+
+    activity_match = re.search(
+        r"^\s*ACTIVITY\s+([A-Za-z0-9._]+)/",
+        text,
+        re.MULTILINE,
+    )
+    activity_package = (
+        activity_match.group(1)
+        if activity_match is not None
+        else ""
+    )
+
+    view_re = re.compile(
+        r"^(?P<class>[A-Za-z0-9_.$]+)\{(?P<body>.*)\}$"
+    )
+    coord_re = re.compile(
+        r"(?<!\S)(-?\d+),(-?\d+)-(-?\d+),(-?\d+)(?=\s|$)"
+    )
+    resource_re = re.compile(
+        r"(?:^|\s)([A-Za-z0-9_.]+:id/[A-Za-z0-9_.$]+)(?=\s|$)"
+    )
+
+    root = ET.Element(
+        "hierarchy",
+        {
+            "rotation": "0",
+            "source": "dumpsys_activity_top",
+        },
+    )
+    stack: list[tuple[int, ET.Element, int, int]] = []
+    parsed = 0
+
+    for raw in lines[marker_index + 1 :]:
+        if not raw.strip():
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if parsed and indent <= marker_indent:
+            break
+        stripped = raw.strip()
+        match = view_re.fullmatch(stripped)
+        if not match:
+            continue
+        body = match.group("body")
+        coord = coord_re.search(body)
+        if coord is None:
+            continue
+
+        local_left, local_top, local_right, local_bottom = map(
+            int,
+            coord.groups(),
+        )
+        if local_right < local_left or local_bottom < local_top:
+            continue
+
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        if stack:
+            parent_element = stack[-1][1]
+            parent_left = stack[-1][2]
+            parent_top = stack[-1][3]
+        else:
+            parent_element = root
+            parent_left = 0
+            parent_top = 0
+
+        abs_left = parent_left + local_left
+        abs_top = parent_top + local_top
+        abs_right = abs_left + (local_right - local_left)
+        abs_bottom = abs_top + (local_bottom - local_top)
+
+        parts = body.split()
+        flags = parts[1] if len(parts) > 1 else ""
+        visible = len(flags) >= 1 and flags[0] == "V"
+        enabled = visible and len(flags) >= 3 and flags[2] == "E"
+        clickable = len(flags) >= 7 and flags[6] == "C"
+        class_name = match.group("class")
+        scrollable = (
+            (len(flags) >= 6 and flags[4] == "H")
+            or (len(flags) >= 6 and flags[5] == "V")
+            or class_name.endswith(
+                (
+                    "ScrollView",
+                    "RecyclerView",
+                    "ListView",
+                    "ViewPager",
+                    "ViewPager2",
+                )
+            )
+        )
+        resource_match = resource_re.search(body)
+        resource_id = (
+            resource_match.group(1)
+            if resource_match is not None
+            else ""
+        )
+        if resource_id.startswith("app:id/"):
+            if not activity_package:
+                raise AotControllerError(
+                    "dumpsys activity top app resource without package"
+                )
+            resource_id = (
+                activity_package
+                + resource_id[len("app") :]
+            )
+        if not visible:
+            abs_left = abs_top = abs_right = abs_bottom = 0
+
+        element = ET.SubElement(
+            parent_element,
+            "node",
+            {
+                "class": class_name,
+                "resource-id": resource_id,
+                "clickable": "true" if clickable else "false",
+                "enabled": "true" if enabled else "false",
+                "scrollable": "true" if scrollable else "false",
+                "password": "false",
+                "bounds": (
+                    f"[{abs_left},{abs_top}]"
+                    f"[{abs_right},{abs_bottom}]"
+                ),
+            },
+        )
+        stack.append((indent, element, abs_left, abs_top))
+        parsed += 1
+
+    if parsed == 0:
+        raise AotControllerError(
+            "dumpsys activity top produced no parseable views"
+        )
+    return ET.tostring(root, encoding="unicode")
+
+
 def dump_ui_xml() -> str:
+    try:
+        activity_dump = _root_run(
+            f"{shlex.quote(DUMPSYS)} activity top",
+            timeout=15,
+        )
+        return activity_top_to_ui_xml(activity_dump)
+    except AotControllerError:
+        pass
+
     remote = f"/data/local/tmp/aot-group-ui-{os.getpid()}.xml"
     command = (
         f"{shlex.quote(UIAUTOMATOR)} dump --compressed {shlex.quote(remote)} "
