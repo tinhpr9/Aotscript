@@ -13,6 +13,10 @@ CONFIG_FILE="/sdcard/Download/Shouko/agent_config.json"
 STATE_FILE="${AOTSCRIPT_STATE_FILE:-$HOME/.local/state/aotscript/mprovision.json}"
 MPROVISION="/data/data/com.termux/files/usr/bin/mprovision"
 LOCK_DIR="$HOME/.cache/aotscript-agent-start.lock"
+AOT_CONFIG_FILE="/sdcard/Download/Shouko/aot_group_config.json"
+AOT_RUNTIME_DIR="$HOME/.aot-group-control"
+AOT_LOG="/sdcard/Download/AOT_Group_Control.log"
+AOT_REF="${AOTSCRIPT_AOT_REF:-main}"
 
 mkdir -p "/sdcard/Download/Shouko" "$HOME/.cache"
 
@@ -97,6 +101,124 @@ raise SystemExit(0 if phase and phase != "complete" else 1)
 PY_AOTSCRIPT_BOOT_INCOMPLETE
 }
 
+start_aot_group_control() {
+  local stage
+  local name
+
+  [ -s "$AOT_CONFIG_FILE" ] || return 0
+
+  if ! "$PYTHON" - "$AOT_CONFIG_FILE" <<'PY_AOT_BOOT_CONFIG'
+import json
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+if not isinstance(data, dict) or data.get("enabled") is not True:
+    raise SystemExit(1)
+
+role = str(data.get("role") or "").strip().lower()
+session = str(data.get("session_id") or "").strip()
+reference = str(data.get("reference_device_id") or "").strip().lower()
+package = data.get("open_package")
+
+if role not in {"reference", "follower"}:
+    raise SystemExit(1)
+
+if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session):
+    raise SystemExit(1)
+
+if role == "follower" and not re.fullmatch(r"m[1-9]\d{0,5}", reference):
+    raise SystemExit(1)
+
+if package not in (None, ""):
+    if not isinstance(package, str) or not re.fullmatch(
+        r"[A-Za-z0-9._]{1,160}",
+        package,
+    ):
+        raise SystemExit(1)
+PY_AOT_BOOT_CONFIG
+  then
+    echo "[SKIP] AOT Group Control config chưa bật hoặc không hợp lệ."
+    return 0
+  fi
+
+  mkdir -p "$AOT_RUNTIME_DIR" "$HOME/.cache"
+  stage="$(mktemp -d "$HOME/.cache/aot-runtime.XXXXXX")" || {
+    echo "[LỖI] Không tạo được thư mục tạm AOT runtime."
+    return 1
+  }
+
+  for name in controller.py relay.py runtime.py e2e.py; do
+    if ! "$CURL" -fsSL \
+      --retry 3 \
+      --connect-timeout 15 \
+      "https://raw.githubusercontent.com/tinhpr9/Aotscript/$AOT_REF/aot-group-control/$name?t=$(date +%s)" \
+      -o "$stage/$name"
+    then
+      echo "[LỖI] Không tải được AOT runtime: $name"
+      rm -rf "$stage"
+      return 1
+    fi
+  done
+
+  if ! "$PYTHON" - "$stage" <<'PY_AOT_BOOT_COMPILE'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for name in ("controller.py", "relay.py", "runtime.py", "e2e.py"):
+    path = root / name
+    source = path.read_text(encoding="utf-8")
+    compile(source, str(path), "exec")
+PY_AOT_BOOT_COMPILE
+  then
+    echo "[LỖI] AOT runtime tải về sai cú pháp."
+    rm -rf "$stage"
+    return 1
+  fi
+
+  if ! "$PYTHON" - "$stage" "$AOT_RUNTIME_DIR" <<'PY_AOT_BOOT_REPLACE'
+import os
+import pathlib
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+
+for name in ("controller.py", "relay.py", "runtime.py", "e2e.py"):
+    source = src / name
+    temp = dst / ("." + name + ".boot.tmp")
+    temp.write_bytes(source.read_bytes())
+    compile(temp.read_text(encoding="utf-8"), str(temp), "exec")
+    os.replace(temp, dst / name)
+PY_AOT_BOOT_REPLACE
+  then
+    echo "[LỖI] Không cài được AOT runtime."
+    rm -rf "$stage"
+    return 1
+  fi
+
+  rm -rf "$stage"
+  chmod 700 \
+    "$AOT_RUNTIME_DIR/controller.py" \
+    "$AOT_RUNTIME_DIR/relay.py" \
+    "$AOT_RUNTIME_DIR/runtime.py" \
+    "$AOT_RUNTIME_DIR/e2e.py"
+
+  if "$PYTHON" "$AOT_RUNTIME_DIR/runtime.py" auto-start >> "$AOT_LOG" 2>&1; then
+    echo "[OK] AOT Group Control auto-start đã xử lý."
+  else
+    echo "[WARN] AOT Group Control auto-start thất bại; xem $AOT_LOG"
+  fi
+}
+
 PROVISION_REF="$(resolve_provision_ref)"
 
 resume_provision() {
@@ -121,6 +243,8 @@ resume_provision() {
   termux-wake-lock 2>/dev/null || true
   sleep 15
 
+
+  start_aot_group_control
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     LOCK_PID="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
     if [ -n "$LOCK_PID" ] &&

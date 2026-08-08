@@ -1,23 +1,59 @@
-# AOT Group Control MVP
+# AOT Group Control
 
-Phase 1 isolates the local Android controller from the existing Telegram Agent/Worker path.
+Current implementation includes:
+- root Android controller with sanitized UI hierarchy;
+- stable structural fingerprint and semantic selector resolution;
+- preview-coordinate to semantic-node resolution through unique UI ancestors;
+- realtime reference/follower WebSocket relay;
+- follower ACK, dedupe and out-of-sync guard;
+- AOT Hub live reference/follower status and previews;
+- multi-follower targeting inside one session;
+- persistent runtime configuration and exact-process start/stop management;
+- Termux:Boot auto-start when `aot_group_config.json` is enabled;
+- one multi-action E2E batch covering semantic taps, Back, swipe, preview metadata,
+  dedupe and out-of-sync protection.
 
-Implemented in this phase:
-- root capability probe;
-- sanitized UI hierarchy collection (no UI text/content-description output);
-- stable UI fingerprint based on package/resource-id/class/structure;
-- semantic resource-id resolution;
-- normalized tap resolution;
-- selector tap with screen precondition;
-- normalized swipe and Back with screen precondition;
-- root PNG screencap validation;
-- local unit self-test.
+Runtime config path:
+`/storage/emulated/0/Download/Shouko/aot_group_config.json`
 
-Not implemented yet:
-- fleet relay / Cloudflare realtime session;
-- AOT Hub UI;
-- follower ACK/dedupe protocol;
-- multi-device preview;
-- provisioning recipe integration.
+The config contains no Worker secret. Worker credentials continue to be read only from
+`/storage/emulated/0/Download/Shouko/agent_config.json` by the relay at runtime.
 
-Security rule: this controller does not print password values, cookies, Shouko keys, tokens, or private config values.
+Example reference configuration:
+
+```bash
+python3 ~/.aot-group-control/runtime.py configure \
+  --role reference \
+  --session m37-m117-p3
+```
+
+Example follower configuration:
+
+```bash
+python3 ~/.aot-group-control/runtime.py configure \
+  --role follower \
+  --session m37-m117-p3 \
+  --reference-device m37
+```
+
+Start/status:
+
+```bash
+python3 ~/.aot-group-control/runtime.py start
+python3 ~/.aot-group-control/runtime.py status
+```
+
+Reference batch test:
+
+```bash
+python3 ~/.aot-group-control/runtime.py e2e \
+  --follower m117 \
+  --package org.swiftapps.swiftbackup
+```
+
+Security properties:
+- no password, cookie, Shouko key, token or private config value is printed;
+- stale UI actions are rejected by fingerprint preconditions;
+- an unresolved preview tap is not converted to a blind coordinate tap;
+- runtime process matching is exact to relay path, role and session;
+- reboot auto-start is opt-in through the explicit runtime config.
