@@ -14,6 +14,10 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
+assert module._root_shell_command("id") == (
+    "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id"
+)
+
 xml = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation='0'>
   <node index='0' class='android.widget.FrameLayout' resource-id='root'

@@ -20,6 +20,7 @@ SCREENCAP = "/system/bin/screencap"
 INPUT = "/system/bin/input"
 DUMPSYS = "/system/bin/dumpsys"
 WM = "/system/bin/wm"
+ANDROID_ROOT_PATH = "/system/bin:/system/xbin:/vendor/bin"
 DEVICE_ID_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/device_id.txt"
 )
@@ -108,10 +109,17 @@ def parse_bounds(value: str) -> Bounds:
     return Bounds(left, top, right, bottom)
 
 
+def _root_shell_command(command: str) -> str:
+    return (
+        f"PATH={shlex.quote(ANDROID_ROOT_PATH)}; export PATH; {command}"
+    )
+
+
 def _root_run(command: str, *, binary: bool = False, timeout: int = 12):
+    root_command = _root_shell_command(command)
     try:
         proc = subprocess.run(
-            ["su", "-c", command],
+            ["su", "-c", root_command],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
