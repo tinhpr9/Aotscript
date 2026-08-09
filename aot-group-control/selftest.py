@@ -134,6 +134,37 @@ assert (
     == module.ui_fingerprint("pkg", dynamic_nodes_b)
 )
 
+# Fully clipped ViewPager pages must not affect the current-screen
+# fingerprint merely because their un-clipped bounds have positive area.
+clipped_page_xml = (
+    "<hierarchy rotation='0'>"
+    "<node class='Root' resource-id='pkg:id/root' clickable='false' "
+    "enabled='true' scrollable='false' selected='false' password='false' "
+    "bounds='[0,0][100,100]'>"
+    "<node class='Pager' resource-id='pkg:id/pager' clickable='false' "
+    "enabled='true' scrollable='false' selected='false' password='false' "
+    "bounds='[0,0][100,100]'>"
+    "<node class='Button' resource-id='pkg:id/current' clickable='true' "
+    "enabled='true' scrollable='false' selected='true' password='false' "
+    "bounds='[0,0][50,50]' />"
+    "<node class='Button' resource-id='pkg:id/offscreen_a' clickable='true' "
+    "enabled='true' scrollable='false' selected='false' password='false' "
+    "bounds='[100,0][200,100]' />"
+    "</node></node></hierarchy>"
+)
+clipped_page_nodes_a = module.parse_ui_xml(clipped_page_xml)
+clipped_page_nodes_b = module.parse_ui_xml(
+    clipped_page_xml.replace("offscreen_a", "offscreen_b")
+)
+assert [
+    node.resource_id
+    for node in module._stable_ui_candidates(clipped_page_nodes_a)
+] == ["pkg:id/root", "pkg:id/pager", "pkg:id/current"]
+assert (
+    module.ui_fingerprint("pkg", clipped_page_nodes_a)
+    == module.ui_fingerprint("pkg", clipped_page_nodes_b)
+)
+
 resolved = module.resolve_normalized_tap(nodes, 1000, 2000, 0.25, 0.15)
 assert resolved["mode"] == "semantic"
 assert resolved["resource_id"] == "pkg:id/account"

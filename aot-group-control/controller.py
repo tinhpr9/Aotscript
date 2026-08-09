@@ -541,12 +541,34 @@ def _stable_ui_candidates(nodes: list[UiNode]) -> list[UiNode]:
             parent = ancestor.parent
         return False
 
+    def has_positive_ancestor_clip(node: UiNode) -> bool:
+        left = node.bounds.left
+        top = node.bounds.top
+        right = node.bounds.right
+        bottom = node.bounds.bottom
+        parent = node.parent
+        visited: set[int] = set()
+        while parent is not None and parent not in visited:
+            visited.add(parent)
+            ancestor = by_index.get(parent)
+            if ancestor is None:
+                return True
+            left = max(left, ancestor.bounds.left)
+            top = max(top, ancestor.bounds.top)
+            right = min(right, ancestor.bounds.right)
+            bottom = min(bottom, ancestor.bounds.bottom)
+            if right <= left or bottom <= top:
+                return False
+            parent = ancestor.parent
+        return True
+
     return [
         node
         for node in nodes
         if (
             node.resource_id
             and node.bounds.area > 0
+            and has_positive_ancestor_clip(node)
             and not has_scrollable_ancestor(node)
         )
     ]
