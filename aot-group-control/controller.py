@@ -21,6 +21,7 @@ INPUT = "/system/bin/input"
 DUMPSYS = "/system/bin/dumpsys"
 WM = "/system/bin/wm"
 ANDROID_ROOT_PATH = "/system/bin:/system/xbin:/vendor/bin"
+ANDROID_SH = "/system/bin/sh"
 TERMUX_SU = "/data/data/com.termux/files/usr/bin/su"
 DEVICE_ID_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/device_id.txt"
@@ -119,10 +120,17 @@ def _root_shell_command(command: str) -> str:
 
 
 def _root_command_argv(command: str) -> list[str]:
+    root_command = _root_shell_command(command)
+    if os.geteuid() == 0:
+        return [
+            ANDROID_SH,
+            "-c",
+            root_command,
+        ]
     return [
         TERMUX_SU,
         "-c",
-        _root_shell_command(command),
+        root_command,
     ]
 
 

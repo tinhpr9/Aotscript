@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent
 CONTROLLER = ROOT / "controller.py"
@@ -18,11 +19,19 @@ assert module._root_shell_command("id") == (
     "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id"
 )
 
-assert module._root_command_argv("id") == [
-    "/data/data/com.termux/files/usr/bin/su",
-    "-c",
-    "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id",
-]
+with mock.patch.object(module.os, "geteuid", return_value=0):
+    assert module._root_command_argv("id") == [
+        "/system/bin/sh",
+        "-c",
+        "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id",
+    ]
+
+with mock.patch.object(module.os, "geteuid", return_value=2000):
+    assert module._root_command_argv("id") == [
+        "/data/data/com.termux/files/usr/bin/su",
+        "-c",
+        "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id",
+    ]
 
 xml = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation='0'>
