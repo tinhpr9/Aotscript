@@ -12,6 +12,217 @@ PROVISION_REF="${AOTSCRIPT_PROVISION_REF:-main}"
   die "Provision ref không hợp lệ"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
 
+aot_launcher_structure_check() {
+  local candidate="$1"
+
+  python - "$candidate" <<'__AOTSCRIPT_AOT_STRUCTURE_CHECK_PY__'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+
+try:
+    payload = path.read_bytes()
+    text = payload.decode("utf-8")
+except (OSError, UnicodeError):
+    raise SystemExit(70)
+
+if not payload or len(payload) > 1024 * 1024 or b"\0" in payload:
+    raise SystemExit(1)
+
+lines = text.splitlines()
+if not lines or lines[0] != "#!/usr/bin/env bash":
+    raise SystemExit(1)
+
+required = (
+    'readonly EXPECTED_ORIGIN="https://github.com/tinhpr9/Aotscript.git"',
+    'readonly CONTEXT_BRANCH="aotscript-context"',
+    'verify_manifest_shape()',
+    'materialize_context()',
+    'verify_codex_interface()',
+    'exec "$codex_bin" -C "$repo_root" --add-dir "$context_dir" "$initial_instruction"',
+)
+
+if any(text.count(fragment) != 1 for fragment in required):
+    raise SystemExit(1)
+__AOTSCRIPT_AOT_STRUCTURE_CHECK_PY__
+}
+
+install_aot_launcher() {
+  local install_dir="$HOME/bin"
+  local target="$HOME/bin/aot"
+  local stage=""
+  local backup=""
+  local rollback_stage=""
+  local stamp=""
+  local checker_rc=0
+  local expected_sha=""
+  local actual_sha=""
+  local command_name=""
+
+  for command_name in awk bash chmod cmp cp curl date mkdir mktemp mv python rm sha256sum; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+      echo "AOT_INSTALL=FAIL"
+      echo "ERROR_TYPE=MISSING_COMMAND"
+      return 1
+    }
+  done
+
+  mkdir -p "$install_dir" || {
+    echo "AOT_INSTALL=FAIL"
+    echo "ERROR_TYPE=INSTALL_DIR_FAILED"
+    return 1
+  }
+
+  stage="$(mktemp "$install_dir/.aot.download.XXXXXX")" || {
+    echo "AOT_INSTALL=FAIL"
+    echo "ERROR_TYPE=TEMP_CREATE_FAILED"
+    return 1
+  }
+
+  if ! curl -fsSL \
+       --retry 3 \
+       --connect-timeout 15 \
+       "$RAW/aot?t=$(date +%s)" \
+       -o "$stage"; then
+    rm -f "$stage"
+    echo "AOT_INSTALL=FAIL"
+    echo "ERROR_TYPE=DOWNLOAD_FAILED"
+    return 1
+  fi
+
+  if [ ! -s "$stage" ]; then
+    rm -f "$stage"
+    echo "AOT_INSTALL=FAIL"
+    echo "ERROR_TYPE=EMPTY_DOWNLOAD"
+    return 1
+  fi
+
+  if ! bash -n "$stage"; then
+    rm -f "$stage"
+    echo "AOT_INSTALL=FAIL"
+    echo "ERROR_TYPE=SYNTAX_INVALID"
+    return 1
+  fi
+
+  aot_launcher_structure_check "$stage" || checker_rc=$?
+  case "$checker_rc" in
+    0)
+      ;;
+    1)
+      rm -f "$stage"
+      echo "AOT_INSTALL=FAIL"
+      echo "ERROR_TYPE=STRUCTURE_INVALID"
+      return 1
+      ;;
+    *)
+      rm -f "$stage"
+      echo "AOT_INSTALL=FAIL"
+      echo "ERROR_TYPE=CHECKER_ERROR"
+      return 1
+      ;;
+  esac
+
+  chmod 700 "$stage" || {
+    rm -f "$stage"
+    echo "AOT_INSTALL=FAIL"
+    echo "ERROR_TYPE=MODE_FAILED"
+    return 1
+  }
+
+  expected_sha="$(sha256sum "$stage" | awk 'NR == 1 {print $1}')" || {
+    rm -f "$stage"
+    echo "AOT_INSTALL=FAIL"
+    echo "ERROR_TYPE=CHECKER_ERROR"
+    return 1
+  }
+
+  if [ -f "$target" ] &&
+     [ ! -L "$target" ] &&
+     cmp -s "$stage" "$target"; then
+    rm -f "$stage"
+    [ -x "$target" ] || chmod 700 "$target" || {
+      echo "AOT_INSTALL=FAIL"
+      echo "ERROR_TYPE=MODE_FAILED"
+      return 1
+    }
+    aot_launcher_structure_check "$target" || checker_rc=$?
+    [ "$checker_rc" = 0 ] || {
+      echo "AOT_INSTALL=FAIL"
+      [ "$checker_rc" = 1 ] &&
+        echo "ERROR_TYPE=POSTCONDITION_FAILED" ||
+        echo "ERROR_TYPE=CHECKER_ERROR"
+      return 1
+    }
+    echo "AOT_INSTALL=UNCHANGED"
+    return 0
+  fi
+
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    if [ ! -f "$target" ] || [ -L "$target" ]; then
+      rm -f "$stage"
+      echo "AOT_INSTALL=FAIL"
+      echo "ERROR_TYPE=TARGET_CONFLICT"
+      return 1
+    fi
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup="${target}.bak-${stamp}-$$"
+    cp -p "$target" "$backup" || {
+      rm -f "$stage"
+      echo "AOT_INSTALL=FAIL"
+      echo "ERROR_TYPE=BACKUP_FAILED"
+      return 1
+    }
+  fi
+
+  if ! mv -f "$stage" "$target"; then
+    rm -f "$stage"
+    echo "AOT_INSTALL=FAIL"
+    echo "ERROR_TYPE=ATOMIC_REPLACE_FAILED"
+    return 1
+  fi
+  stage=""
+
+  checker_rc=0
+  aot_launcher_structure_check "$target" || checker_rc=$?
+  actual_sha="$(sha256sum "$target" 2>/dev/null | awk 'NR == 1 {print $1}')"
+
+  if [ "$checker_rc" != 0 ] ||
+     [ "$actual_sha" != "$expected_sha" ] ||
+     [ ! -x "$target" ]; then
+    if [ -n "$backup" ] && [ -f "$backup" ]; then
+      rollback_stage="$(mktemp "$install_dir/.aot.rollback.XXXXXX")" || {
+        echo "AOT_INSTALL=FAIL"
+        echo "ERROR_TYPE=ROLLBACK_FAILED"
+        return 1
+      }
+      cp -p "$backup" "$rollback_stage" &&
+        mv -f "$rollback_stage" "$target" || {
+          rm -f "$rollback_stage"
+          echo "AOT_INSTALL=FAIL"
+          echo "ERROR_TYPE=ROLLBACK_FAILED"
+          return 1
+        }
+    else
+      rm -f "$target"
+    fi
+    echo "AOT_INSTALL=FAIL"
+    [ "$checker_rc" = 0 ] &&
+      echo "ERROR_TYPE=POSTCONDITION_FAILED" ||
+      echo "ERROR_TYPE=CHECKER_ERROR"
+    return 1
+  fi
+
+  echo "AOT_INSTALL=INSTALLED"
+  echo "AOT_INSTALL_TARGET=$target"
+}
+
+if [ "${AOTSCRIPT_INSTALL_AOT_ONLY:-0}" = 1 ]; then
+  install_aot_launcher ||
+    die "Không cài được launcher aot"
+  exit 0
+fi
+
 usage() {
   echo "Cách dùng:"
   echo "  msetup 62 1"
@@ -190,6 +401,13 @@ case ":$PATH:" in
     export PATH="$HOME/bin:$PATH"
     ;;
 esac
+
+install_aot_launcher ||
+  die "Không cài được launcher aot"
+hash -r
+command -v aot >/dev/null 2>&1 ||
+  die "Đã cài nhưng terminal không tìm thấy aot"
+ok "Có thể dùng ngay bằng lệnh: aot"
 
 MSETUP_CMD="$HOME/bin/msetup"
 MSETUP_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/msetup.$$"
