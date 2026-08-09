@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly EXPECTED_ORIGIN="https://github.com/tinhpr9/Aotscript.git"
+readonly CONTEXT_BRANCH="aotscript-context"
+readonly -a CONTEXT_SOURCES=(
+  "AOTSCRIPT_RULES_CORE.txt"
+  "AOTSCRIPT_HANDOFF_CURRENT.txt"
+  "AOTSCRIPT_WORKFLOW_MASTER.txt"
+)
+readonly -a CONTEXT_FILES=(
+  "${CONTEXT_SOURCES[@]}"
+  "MANIFEST.sha256"
+)
+
+fail() {
+  local error_type="$1"
+  local message="$2"
+  printf "AOT_LAUNCHER=FAIL\n" >&2
+  printf "CODEX_START=NO\n" >&2
+  printf "ERROR_TYPE=%s\n" "$error_type" >&2
+  printf "[AOT] %s\n" "$message" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 ||
+    fail "MISSING_COMMAND" "Thiếu command bắt buộc: $1"
+}
+
+origin_is_expected() {
+  case "$1" in
+    https://github.com/tinhpr9/Aotscript.git|https://github.com/tinhpr9/Aotscript|git@github.com:tinhpr9/Aotscript.git|ssh://git@github.com/tinhpr9/Aotscript.git)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+canonical_dir() {
+  (cd "$1" 2>/dev/null && pwd -P)
+}
+
+repo_origin_literal() {
+  git -C "$1" config --get remote.origin.url 2>/dev/null
+}
+
+is_product_repo() {
+  local candidate="$1"
+  local candidate_real=""
+  local top=""
+  local top_real=""
+  local origin=""
+
+  [ -d "$candidate" ] || return 1
+  candidate_real="$(canonical_dir "$candidate")" || return 1
+  top="$(git -C "$candidate_real" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  top_real="$(canonical_dir "$top")" || return 1
+  [ "$candidate_real" = "$top_real" ] || return 1
+  [ -f "$top_real/provision-device.sh" ] || return 1
+  [ -d "$top_real/aot-group-control" ] || return 1
+  origin="$(repo_origin_literal "$top_real")" || return 1
+  origin_is_expected "$origin"
+}
+
+find_repo_root() {
+  local self_path=""
+  local source_dir=""
+  local cwd_top=""
+  local dotgit=""
+  local candidate=""
+  local candidate_real=""
+  local existing=""
+  local -a matches=()
+
+  if [ -n "${AOTSCRIPT_REPO_ROOT:-}" ]; then
+    is_product_repo "$AOTSCRIPT_REPO_ROOT" ||
+      fail "REPO_INVALID" "AOTSCRIPT_REPO_ROOT không trỏ tới đúng tinhpr9/Aotscript"
+    canonical_dir "$AOTSCRIPT_REPO_ROOT"
+    return 0
+  fi
+
+  self_path="$(readlink -f -- "$0" 2>/dev/null || true)"
+  if [ -n "$self_path" ]; then
+    source_dir="$(dirname "$self_path")"
+    if is_product_repo "$source_dir"; then
+      canonical_dir "$source_dir"
+      return 0
+    fi
+  fi
+
+  cwd_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$cwd_top" ] && is_product_repo "$cwd_top"; then
+    canonical_dir "$cwd_top"
+    return 0
+  fi
+
+  while IFS= read -r -d "" dotgit; do
+    candidate="$(dirname "$dotgit")"
+    is_product_repo "$candidate" || continue
+    candidate_real="$(canonical_dir "$candidate")"
+    for existing in "${matches[@]}"; do
+      [ "$existing" != "$candidate_real" ] || continue 2
+    done
+    matches+=("$candidate_real")
+  done < <(find "$HOME" -maxdepth 4 -name .git -print0 2>/dev/null)
+
+  [ "${#matches[@]}" -gt 0 ] ||
+    fail "REPO_NOT_FOUND" "Không tìm được đúng product repo tinhpr9/Aotscript"
+  [ "${#matches[@]}" -eq 1 ] ||
+    fail "REPO_AMBIGUOUS" "Tìm thấy nhiều product repo; cần AOTSCRIPT_REPO_ROOT rõ ràng"
+  printf "%s\n" "${matches[0]}"
+}
+
+verify_manifest_shape() {
+  local manifest="$1/MANIFEST.sha256"
+  local line=""
+  local hash=""
+  local separator=""
+  local name=""
+  local count=0
+  local seen_core=0
+  local seen_handoff=0
+  local seen_workflow=0
+
+  [ -f "$manifest" ] && [ ! -L "$manifest" ] && [ -s "$manifest" ] || return 1
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ "${#line}" -gt 66 ] || return 1
+    hash="${line:0:64}"
+    separator="${line:64:2}"
+    name="${line:66}"
+    [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [ "$separator" = "  " ] || return 1
+    case "$name" in
+      AOTSCRIPT_RULES_CORE.txt)
+        [ "$seen_core" -eq 0 ] || return 1
+        seen_core=1
+        ;;
+      AOTSCRIPT_HANDOFF_CURRENT.txt)
+        [ "$seen_handoff" -eq 0 ] || return 1
+        seen_handoff=1
+        ;;
+      AOTSCRIPT_WORKFLOW_MASTER.txt)
+        [ "$seen_workflow" -eq 0 ] || return 1
+        seen_workflow=1
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+    count=$((count + 1))
+  done < "$manifest"
+
+  [ "$count" -eq 3 ] &&
+    [ "$seen_core" -eq 1 ] &&
+    [ "$seen_handoff" -eq 1 ] &&
+    [ "$seen_workflow" -eq 1 ]
+}
+
+verify_context_dir() {
+  local context_dir="$1"
+  local file=""
+  local checksum_rc=0
+
+  [ -d "$context_dir" ] && [ ! -L "$context_dir" ] || return 1
+  for file in "${CONTEXT_FILES[@]}"; do
+    [ -f "$context_dir/$file" ] &&
+      [ ! -L "$context_dir/$file" ] &&
+      [ -s "$context_dir/$file" ] || return 1
+  done
+  verify_manifest_shape "$context_dir" || return 1
+
+  (cd "$context_dir" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1) ||
+    checksum_rc=$?
+  case "$checksum_rc" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 70 ;;
+  esac
+}
+
+require_valid_context() {
+  local context_dir="$1"
+  local verify_rc=0
+
+  verify_context_dir "$context_dir" || verify_rc=$?
+  case "$verify_rc" in
+    0) return 0 ;;
+    1) fail "MANIFEST_INVALID" "Context thiếu, rỗng hoặc checksum/manifest không hợp lệ" ;;
+    *) fail "CHECKER_ERROR" "Checker context gặp lỗi nội bộ" ;;
+  esac
+}
+
+materialize_context() {
+  local repo_root="$1"
+  local context_commit="$2"
+  local stage="$3"
+  local file=""
+  local metadata=""
+  local mode=""
+  local object_type=""
+  local object_id=""
+  local object_path=""
+
+  for file in "${CONTEXT_FILES[@]}"; do
+    metadata="$(git -C "$repo_root" ls-tree "$context_commit" -- "$file")" || return 1
+    [ -n "$metadata" ] || return 1
+    read -r mode object_type object_id object_path <<< "$metadata"
+    case "$mode" in 100644|100755) ;; *) return 1 ;; esac
+    [ "$object_type" = "blob" ] || return 1
+    [ "$object_path" = "$file" ] || return 1
+    git -C "$repo_root" show "$context_commit:$file" > "$stage/$file" || return 1
+    [ -s "$stage/$file" ] || return 1
+  done
+  chmod 600 "$stage"/*
+}
+
+verify_codex_interface() {
+  local codex_bin="$1"
+  local help_output=""
+
+  help_output="$("$codex_bin" --help 2>&1)" || return 1
+  grep -Fq "Usage: codex [OPTIONS] [PROMPT]" <<< "$help_output" || return 1
+  grep -Fq -- "-C, --cd <DIR>" <<< "$help_output" || return 1
+  grep -Fq -- "--add-dir <DIR>" <<< "$help_output" || return 1
+}
+
+main() {
+  local repo_root=""
+  local origin=""
+  local context_ref="refs/remotes/origin/$CONTEXT_BRANCH"
+  local context_commit=""
+  local cache_root=""
+  local context_dir=""
+  local stage=""
+  local cache_state=""
+  local worktree_before=""
+  local worktree_after=""
+  local head_before=""
+  local codex_bin=""
+  local current_request=""
+  local initial_instruction=""
+
+  require_command git
+  require_command find
+  require_command readlink
+  require_command sha256sum
+  require_command mv
+  require_command codex
+
+  repo_root="$(find_repo_root)"
+  origin="$(repo_origin_literal "$repo_root")" ||
+    fail "ORIGIN_MISSING" "Product repo không có origin"
+  origin_is_expected "$origin" ||
+    fail "ORIGIN_INVALID" "Origin product repo không đúng tinhpr9/Aotscript"
+
+  head_before="$(git -C "$repo_root" rev-parse HEAD)" ||
+    fail "REPO_HEAD_INVALID" "Không xác định được product HEAD"
+  worktree_before="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ||
+    fail "REPO_STATUS_ERROR" "Không đọc được product working tree"
+
+  if ! git -C "$repo_root" fetch --quiet --no-tags origin \
+    "refs/heads/$CONTEXT_BRANCH:$context_ref" >/dev/null 2>&1; then
+    fail "CONTEXT_FETCH_FAILED" "Không fetch được origin/$CONTEXT_BRANCH; không dùng cache stale"
+  fi
+
+  context_commit="$(git -C "$repo_root" rev-parse --verify "$context_ref^{commit}" 2>/dev/null)" ||
+    fail "CONTEXT_COMMIT_INVALID" "Không xác định được context commit"
+  [[ "$context_commit" =~ ^[0-9a-f]{40}$ ]] ||
+    fail "CONTEXT_COMMIT_INVALID" "Context commit không phải SHA-1 đầy đủ"
+
+  cache_root="$HOME/.cache/aotscript-context"
+  context_dir="$cache_root/$context_commit"
+  mkdir -p "$cache_root" ||
+    fail "CACHE_PUBLISH_FAILED" "Không tạo được context cache root"
+
+  if [ -e "$context_dir" ]; then
+    require_valid_context "$context_dir"
+    cache_state="EXISTING"
+  else
+    stage="$(mktemp -d "$cache_root/.${context_commit}.tmp.XXXXXX")" ||
+      fail "CACHE_PUBLISH_FAILED" "Không tạo được context temp cùng filesystem"
+    trap '[ -z "${stage:-}" ] || rm -rf -- "$stage"' EXIT INT TERM
+    chmod 700 "$stage"
+
+    materialize_context "$repo_root" "$context_commit" "$stage" ||
+      fail "CONTEXT_MATERIALIZE_FAILED" "Không materialize được snapshot context"
+    require_valid_context "$stage"
+
+    if mv -T -- "$stage" "$context_dir" 2>/dev/null; then
+      stage=""
+      cache_state="CREATED"
+    elif [ -d "$context_dir" ] && [ ! -L "$context_dir" ]; then
+      require_valid_context "$context_dir"
+      cache_state="EXISTING_RACE"
+    else
+      fail "CACHE_PUBLISH_FAILED" "Atomic publish context cache thất bại"
+    fi
+    require_valid_context "$context_dir"
+  fi
+
+  [ "$(git -C "$repo_root" rev-parse HEAD)" = "$head_before" ] ||
+    fail "PRODUCT_WORKTREE_CHANGED" "Product HEAD thay đổi trước khi Codex mở"
+  worktree_after="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ||
+    fail "REPO_STATUS_ERROR" "Không đọc lại được product working tree"
+  [ "$worktree_after" = "$worktree_before" ] ||
+    fail "PRODUCT_WORKTREE_CHANGED" "Product working tree thay đổi trước khi Codex mở"
+
+  codex_bin="$(command -v codex)" ||
+    fail "CODEX_NOT_FOUND" "Không tìm thấy Codex executable"
+  verify_codex_interface "$codex_bin" ||
+    fail "CODEX_INTERFACE_INVALID" "Codex CLI hiện tại thiếu PROMPT, -C hoặc --add-dir"
+
+  if [ "$#" -eq 0 ]; then
+    current_request="RESUME checkpoint gần nhất theo HANDOFF/WORKFLOW; không lặp phase đã PASS."
+  else
+    current_request="$*"
+    [ -n "$current_request" ] ||
+      fail "TASK_INVALID" "Task argument không được rỗng"
+  fi
+
+  initial_instruction="$(cat <<AOT_CODEX_INSTRUCTION
+Bạn đang làm Project Aotscript trong môi trường TERMUX_ONLY.
+
+CONTEXT_DIR=$context_dir
+CONTEXT_COMMIT=$context_commit
+CURRENT_REQUEST=$current_request
+
+BẮT BUỘC trước mọi phân tích kỹ thuật, write, patch, test kỹ thuật hoặc quyết định kỹ thuật:
+1. Đọc ĐẦY ĐỦ \$CONTEXT_DIR/AOTSCRIPT_RULES_CORE.txt.
+2. Đọc ĐẦY ĐỦ \$CONTEXT_DIR/AOTSCRIPT_HANDOFF_CURRENT.txt.
+3. Đọc ĐẦY ĐỦ \$CONTEXT_DIR/AOTSCRIPT_WORKFLOW_MASTER.txt.
+4. Nếu repo có AGENTS.md, đọc ĐẦY ĐỦ file đó.
+5. Xác định PRODUCT_GOAL và CURRENT_BLOCKER từ nguồn đã đọc; launcher/Codex chỉ là hạ tầng hỗ trợ.
+6. Kiểm trạng thái repo/runtime THẬT theo CORE; không dùng HANDOFF/WORKFLOW làm HEAD/runtime truth.
+7. Chỉ sau các gate trên mới tiếp tục CURRENT_REQUEST. Không dùng Codespaces và không in secret.
+AOT_CODEX_INSTRUCTION
+)"
+
+  printf "REPO_ROOT=%s\n" "$repo_root"
+  printf "ORIGIN=%s\n" "$EXPECTED_ORIGIN"
+  printf "CONTEXT_BRANCH=%s\n" "$CONTEXT_BRANCH"
+  printf "CONTEXT_COMMIT=%s\n" "$context_commit"
+  printf "CONTEXT_FETCH=PASS\n"
+  printf "CONTEXT_CACHE=%s\n" "$cache_state"
+  printf "CORE_READY=YES\nHANDOFF_READY=YES\nWORKFLOW_READY=YES\n"
+  printf "MANIFEST_VALID=YES\n"
+  printf "PRODUCT_WORKTREE_UNCHANGED_BEFORE_CODEX=YES\n"
+  printf "AOT_LAUNCHER=READY\nCODEX_START=YES\n"
+
+  cd "$repo_root"
+  exec "$codex_bin" -C "$repo_root" --add-dir "$context_dir" "$initial_instruction"
+}
+
+main "$@"
