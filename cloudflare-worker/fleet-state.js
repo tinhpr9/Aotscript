@@ -42,6 +42,8 @@ function validDeviceId(value) {
     : null;
 }
 
+const AOT_LIVE_FRESH_MS = 12 * 1000;
+
 export class FleetState
   extends DurableObject {
   constructor(ctx, env) {
@@ -833,6 +835,24 @@ export class FleetState
     ) {
       return null;
     }
+    const rawLayoutSignature = String(
+      body.layout_signature || ""
+    ).toLowerCase();
+    const layoutSignature =
+      /^[a-f0-9]{24}$/.test(
+        rawLayoutSignature
+      )
+        ? rawLayoutSignature
+        : null;
+    const coordinateReady =
+      body.coordinate_ready === true &&
+      layoutSignature !== null;
+    const imeVisible =
+      body.ime_visible === true
+        ? true
+        : body.ime_visible === false
+          ? false
+          : null;
     const packageName = String(
       body.package || ""
     ).trim();
@@ -879,6 +899,12 @@ export class FleetState
         identity.sessionId,
       package: packageName,
       fingerprint,
+      layout_signature:
+        layoutSignature,
+      coordinate_ready:
+        coordinateReady,
+      ime_visible:
+        imeVisible,
       width: Math.round(width),
       height: Math.round(height),
       preview_b64: preview,
@@ -1002,6 +1028,17 @@ export class FleetState
           ) || null
         : null;
 
+    const now = Date.now();
+    const isFresh = (live) =>
+      Boolean(
+        live &&
+        Number(live.updated_at) > 0 &&
+        now - Number(live.updated_at) <=
+          AOT_LIVE_FRESH_MS
+      );
+    const referenceFresh =
+      isFresh(referenceLive);
+
     const buildDevice = (
       role,
       deviceId,
@@ -1025,18 +1062,47 @@ export class FleetState
             deviceId
           )
         ).length > 0;
+      const fresh =
+        isFresh(live);
+      const fingerprintMatch =
+        Boolean(
+          referenceLive &&
+          live &&
+          referenceLive.fingerprint ===
+            live.fingerprint
+        );
+      const layoutCompatible =
+        Boolean(
+          referenceFresh &&
+          fresh &&
+          referenceLive
+            ?.coordinate_ready === true &&
+          live?.coordinate_ready === true &&
+          referenceLive
+            ?.layout_signature &&
+          referenceLive
+            .layout_signature ===
+              live?.layout_signature
+        );
       let status;
       if (!online) {
         status = "OFFLINE";
       } else if (role === "reference") {
         status = "REFERENCE";
       } else if (
-        referenceLive &&
-        live &&
-        referenceLive.fingerprint ===
-          live.fingerprint
+        referenceFresh &&
+        fresh &&
+        fingerprintMatch &&
+        layoutCompatible
       ) {
         status = "SYNCED";
+      } else if (
+        referenceFresh &&
+        fresh &&
+        referenceLive &&
+        live
+      ) {
+        status = "OUT_OF_SYNC";
       } else if (
         followerRecord?.last_ack_status ===
           "out_of_sync"
@@ -1049,11 +1115,25 @@ export class FleetState
         device_id: deviceId,
         role,
         online,
+        fresh,
         status,
         package:
           live?.package || null,
         fingerprint:
           live?.fingerprint || null,
+        layout_signature:
+          live?.layout_signature || null,
+        coordinate_ready:
+          live?.coordinate_ready === true,
+        ime_visible:
+          typeof live?.ime_visible ===
+          "boolean"
+            ? live.ime_visible
+            : null,
+        layout_compatible:
+          role === "reference"
+            ? null
+            : layoutCompatible,
         width:
           live?.width || null,
         height:

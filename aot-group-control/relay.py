@@ -546,6 +546,9 @@ def _live_status_payload(
         "device_id": device_id,
         "package": snap.get("package"),
         "fingerprint": snap.get("fingerprint"),
+        "layout_signature": snap.get("layout_signature"),
+        "coordinate_ready": snap.get("coordinate_ready") is True,
+        "ime_visible": snap.get("ime_visible"),
         "width": snap.get("width"),
         "height": snap.get("height"),
         "updated_at": int(time.time() * 1000),
@@ -634,9 +637,14 @@ def _resolve_reference_tap(
     y_norm: float,
 ) -> tuple[str, str]:
     package = controller.foreground_package()
-    width, height = controller.display_size()
+    fallback_width, fallback_height = controller.display_size()
     nodes = controller.parse_ui_xml(
         controller.dump_ui_xml()
+    )
+    width, height = controller.ui_coordinate_size(
+        nodes,
+        fallback_width,
+        fallback_height,
     )
     fingerprint = controller.ui_fingerprint(
         package,
@@ -649,6 +657,22 @@ def _resolve_reference_tap(
         x_norm,
         y_norm,
     )
+    if resolved.get("mode") != "semantic":
+        full_nodes = controller.parse_ui_xml(
+            controller.dump_full_ui_xml()
+        )
+        full_width, full_height = controller.ui_coordinate_size(
+            full_nodes,
+            fallback_width,
+            fallback_height,
+        )
+        resolved = controller.resolve_normalized_tap(
+            full_nodes,
+            full_width,
+            full_height,
+            x_norm,
+            y_norm,
+        )
     if resolved.get("mode") != "semantic":
         raise AotRelayError(
             "semantic_target_not_found"

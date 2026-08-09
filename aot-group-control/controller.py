@@ -453,6 +453,18 @@ def activity_top_to_ui_xml(
     return ET.tostring(root, encoding="unicode")
 
 
+def dump_full_ui_xml() -> str:
+    remote = f"/data/local/tmp/aot-group-ui-{os.getpid()}.xml"
+    command = (
+        f"{shlex.quote(UIAUTOMATOR)} dump --compressed {shlex.quote(remote)} "
+        f">/dev/null 2>&1 && cat {shlex.quote(remote)}; "
+        f"rc=$?; rm -f {shlex.quote(remote)}; exit $rc"
+    )
+    output = _root_run(command, timeout=15)
+    if "<hierarchy" not in output:
+        raise AotControllerError("uiautomator produced no hierarchy")
+    return output
+
 def dump_ui_xml() -> str:
     try:
         activity_dump = _root_run(
@@ -464,18 +476,7 @@ def dump_ui_xml() -> str:
             foreground_package(),
         )
     except AotControllerError:
-        pass
-
-    remote = f"/data/local/tmp/aot-group-ui-{os.getpid()}.xml"
-    command = (
-        f"{shlex.quote(UIAUTOMATOR)} dump --compressed {shlex.quote(remote)} "
-        f">/dev/null 2>&1 && cat {shlex.quote(remote)}; "
-        f"rc=$?; rm -f {shlex.quote(remote)}; exit $rc"
-    )
-    output = _root_run(command, timeout=15)
-    if "<hierarchy" not in output:
-        raise AotControllerError("uiautomator produced no hierarchy")
-    return output
+        return dump_full_ui_xml()
 
 
 def parse_ui_xml(xml_text: str) -> list[UiNode]:
@@ -582,6 +583,126 @@ def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
+def interaction_layout_signature(
+    package: str,
+    nodes: list[UiNode],
+    width: int,
+    height: int,
+    *,
+    ime_visible: bool | None,
+) -> str:
+    if width <= 0 or height <= 0:
+        raise AotControllerError("invalid interaction layout size")
+
+    resource_counts: dict[str, int] = {}
+    for node in nodes:
+        if node.resource_id:
+            resource_counts[node.resource_id] = (
+                resource_counts.get(node.resource_id, 0) + 1
+            )
+
+    def normalized(value: int, extent: int) -> int:
+        return min(
+            1000,
+            max(0, round(value * 1000 / extent)),
+        )
+
+    stable: list[str] = []
+    fallback: list[str] = []
+    for node in nodes:
+        if (
+            not node.enabled
+            or node.bounds.area <= 0
+            or not (node.clickable or node.scrollable)
+        ):
+            continue
+        geometry = ",".join(
+            str(value)
+            for value in (
+                normalized(node.bounds.left, width),
+                normalized(node.bounds.top, height),
+                normalized(node.bounds.right, width),
+                normalized(node.bounds.bottom, height),
+            )
+        )
+        entry = "|".join(
+            (
+                node.resource_id,
+                node.class_name,
+                "1" if node.clickable else "0",
+                "1" if node.scrollable else "0",
+                geometry,
+            )
+        )
+        fallback.append(entry)
+        if (
+            node.resource_id
+            and resource_counts.get(node.resource_id) == 1
+        ):
+            stable.append(entry)
+
+    pool = stable or fallback or ["EMPTY"]
+    orientation = "landscape" if width >= height else "portrait"
+    if ime_visible is True:
+        ime_state = "visible"
+    elif ime_visible is False:
+        ime_state = "hidden"
+    else:
+        ime_state = "unknown"
+    payload = "\n".join(
+        (
+            package,
+            orientation,
+            ime_state,
+            *sorted(pool),
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def _ime_layout_state() -> tuple[bool, bool | None]:
+    try:
+        output = _root_run(
+            f"{shlex.quote(DUMPSYS)} input_method",
+            timeout=12,
+        )
+    except AotControllerError:
+        return False, None
+
+    values = re.findall(
+        r"(?:mInputShown|mIsInputViewShown|inputShown)"
+        r"\s*=\s*(true|false)",
+        output,
+        flags=re.IGNORECASE,
+    )
+    if not values:
+        return False, None
+    visible = any(value.lower() == "true" for value in values)
+    return True, visible
+
+
+def interaction_layout_state(
+    package: str,
+    nodes: list[UiNode],
+    width: int,
+    height: int,
+) -> dict[str, Any]:
+    visibility_ready, ime_visible = _ime_layout_state()
+    return {
+        "layout_signature": interaction_layout_signature(
+            package,
+            nodes,
+            width,
+            height,
+            ime_visible=ime_visible,
+        ),
+        "coordinate_ready": (
+            visibility_ready
+            and ime_visible is False
+        ),
+        "ime_visible": ime_visible,
+    }
+
 def snapshot(
     *,
     include_nodes: bool = True,
@@ -594,12 +715,21 @@ def snapshot(
         fallback_height,
     )
     package = foreground_package()
+    layout = interaction_layout_state(
+        package,
+        nodes,
+        width,
+        height,
+    )
     data: dict[str, Any] = {
         "package": package,
         "fingerprint": ui_fingerprint(
             package,
             nodes,
         ),
+        "layout_signature": layout["layout_signature"],
+        "coordinate_ready": layout["coordinate_ready"],
+        "ime_visible": layout["ime_visible"],
         "width": width,
         "height": height,
         "node_count": len(nodes),
@@ -757,11 +887,33 @@ def _tap_xy(x: int, y: int) -> None:
     _root_run(f"{shlex.quote(INPUT)} tap {int(x)} {int(y)}")
 
 
-def tap_selector(resource_id: str, expected_fingerprint: str | None = None) -> dict[str, Any]:
+def tap_selector(
+    resource_id: str,
+    expected_fingerprint: str | None = None,
+) -> dict[str, Any]:
     before = snapshot(include_nodes=False)
     _verify_precondition(before["fingerprint"], expected_fingerprint)
     nodes = parse_ui_xml(dump_ui_xml())
-    node = _clickable_target(nodes, _unique_resource_id(nodes, resource_id))
+    matches = [
+        node
+        for node in nodes
+        if node.resource_id == resource_id
+    ]
+    hierarchy_source = "primary"
+    if len(matches) > 1:
+        _unique_resource_id(nodes, resource_id)
+    try:
+        node = _clickable_target(
+            nodes,
+            _unique_resource_id(nodes, resource_id),
+        )
+    except AotControllerError:
+        nodes = parse_ui_xml(dump_full_ui_xml())
+        node = _clickable_target(
+            nodes,
+            _unique_resource_id(nodes, resource_id),
+        )
+        hierarchy_source = "full_window"
     x, y = node.bounds.center
     _tap_xy(x, y)
     time.sleep(0.25)
@@ -769,6 +921,7 @@ def tap_selector(resource_id: str, expected_fingerprint: str | None = None) -> d
     return {
         "action": "tap",
         "mode": "semantic",
+        "hierarchy_source": hierarchy_source,
         "resource_id": resource_id,
         "before_fingerprint": before["fingerprint"],
         "after_fingerprint": after["fingerprint"],

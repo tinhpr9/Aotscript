@@ -96,6 +96,27 @@ resolved = module.resolve_normalized_tap(nodes, 1000, 2000, 0.25, 0.15)
 assert resolved["mode"] == "semantic"
 assert resolved["resource_id"] == "pkg:id/account"
 
+for invalid_x, invalid_y in (
+    (-0.01, 0.5),
+    (1.01, 0.5),
+    (0.5, -0.01),
+    (0.5, 1.01),
+):
+    try:
+        module.resolve_normalized_tap(
+            nodes,
+            1000,
+            2000,
+            invalid_x,
+            invalid_y,
+        )
+    except module.AotControllerError:
+        pass
+    else:
+        raise AssertionError(
+            "out-of-range normalized tap was accepted"
+        )
+
 
 # A tap on a repeated child resource-id must climb to the nearest unique
 # actionable ancestor instead of degrading to unsafe coordinate mode.
@@ -384,5 +405,158 @@ assert not any(
 
 negative = module.parse_bounds("[-10,-20][110,220]")
 assert negative.as_list() == [-10, -20, 110, 220]
+
+# Interaction layout signatures normalize geometry across resolutions and
+# fail coordinate readiness closed while an IME is visible or unknown.
+def scaled_copy(source_nodes, factor):
+    return [
+        module.UiNode(
+            index=node.index,
+            parent=node.parent,
+            class_name=node.class_name,
+            resource_id=node.resource_id,
+            bounds=module.Bounds(
+                node.bounds.left * factor,
+                node.bounds.top * factor,
+                node.bounds.right * factor,
+                node.bounds.bottom * factor,
+            ),
+            clickable=node.clickable,
+            enabled=node.enabled,
+            scrollable=node.scrollable,
+            password=node.password,
+        )
+        for node in source_nodes
+    ]
+
+layout_a = module.interaction_layout_signature(
+    "pkg",
+    nav_nodes,
+    1000,
+    2000,
+    ime_visible=False,
+)
+layout_scaled = module.interaction_layout_signature(
+    "pkg",
+    scaled_copy(nav_nodes, 2),
+    2000,
+    4000,
+    ime_visible=False,
+)
+assert layout_a == layout_scaled
+
+layout_changed_nodes = scaled_copy(nav_nodes, 1)
+layout_changed_nodes[3].bounds = module.Bounds(
+    400,
+    1600,
+    1000,
+    2000,
+)
+layout_changed = module.interaction_layout_signature(
+    "pkg",
+    layout_changed_nodes,
+    1000,
+    2000,
+    ime_visible=False,
+)
+assert layout_changed != layout_a
+
+
+def ime_state_root_run(command, **_kwargs):
+    if command == f"{module.DUMPSYS} input_method":
+        return "mInputShown=false\nmIsInputViewShown=false\n"
+    raise AssertionError(f"unexpected root command: {command}")
+
+
+module._root_run = ime_state_root_run
+try:
+    hidden_layout = module.interaction_layout_state(
+        "pkg",
+        nav_nodes,
+        1000,
+        2000,
+    )
+finally:
+    module._root_run = original_root_run
+assert hidden_layout["coordinate_ready"] is True
+assert hidden_layout["ime_visible"] is False
+
+
+def visible_ime_root_run(command, **_kwargs):
+    if command == f"{module.DUMPSYS} input_method":
+        return "mInputShown=true\nmIsInputViewShown=true\n"
+    raise AssertionError(f"unexpected root command: {command}")
+
+
+module._root_run = visible_ime_root_run
+try:
+    visible_layout = module.interaction_layout_state(
+        "pkg",
+        nav_nodes,
+        1000,
+        2000,
+    )
+finally:
+    module._root_run = original_root_run
+assert visible_layout["coordinate_ready"] is False
+assert visible_layout["ime_visible"] is True
+
+
+def unknown_ime_root_run(command, **_kwargs):
+    if command == f"{module.DUMPSYS} input_method":
+        return "no visibility fields"
+    raise AssertionError(f"unexpected root command: {command}")
+
+
+module._root_run = unknown_ime_root_run
+try:
+    unknown_layout = module.interaction_layout_state(
+        "pkg",
+        nav_nodes,
+        1000,
+        2000,
+    )
+finally:
+    module._root_run = original_root_run
+assert unknown_layout["coordinate_ready"] is False
+assert unknown_layout["ime_visible"] is None
+
+# A selector absent from the primary hierarchy must retry the full-window
+# hierarchy, while remaining semantic and precondition guarded.
+primary_without_target = xml.replace(
+    "pkg:id/account",
+    "pkg:id/other",
+)
+snapshot_values = iter(
+    (
+        {"fingerprint": "before"},
+        {"fingerprint": "after"},
+    )
+)
+tapped = []
+old_snapshot = module.snapshot
+old_dump_ui_xml = module.dump_ui_xml
+old_dump_full_ui_xml = module.dump_full_ui_xml
+old_tap_xy = module._tap_xy
+old_sleep = module.time.sleep
+try:
+    module.snapshot = lambda **_kwargs: next(snapshot_values)
+    module.dump_ui_xml = lambda: primary_without_target
+    module.dump_full_ui_xml = lambda: xml
+    module._tap_xy = lambda x, y: tapped.append((x, y))
+    module.time.sleep = lambda _seconds: None
+    full_tap = module.tap_selector(
+        "pkg:id/account",
+        "before",
+    )
+finally:
+    module.snapshot = old_snapshot
+    module.dump_ui_xml = old_dump_ui_xml
+    module.dump_full_ui_xml = old_dump_full_ui_xml
+    module._tap_xy = old_tap_xy
+    module.time.sleep = old_sleep
+assert full_tap["hierarchy_source"] == "full_window"
+assert full_tap["mode"] == "semantic"
+assert tapped == [nodes[1].bounds.center]
 
 print("AOT_CONTROLLER_SELFTEST=OK")
