@@ -1398,6 +1398,7 @@ function aotHubHtml() {
     var currentState = null;
     var timer = null;
     var sessionInput = document.getElementById("session");
+    var sessionStorageKey = "aot-hub-session-id";
     var errorEl = document.getElementById("error");
     var referenceEl = document.getElementById("reference");
     var followersEl = document.getElementById("followers");
@@ -1419,6 +1420,36 @@ function aotHubHtml() {
 
     function sessionId() {
       return String(sessionInput.value || "").trim();
+    }
+
+    function isValidSessionId(value) {
+      return /^[A-Za-z0-9_-]{1,64}$/.test(
+        String(value || "").trim()
+      );
+    }
+
+    function restoreSession() {
+      try {
+        var stored = window.localStorage.getItem(
+          sessionStorageKey
+        );
+        if (isValidSessionId(stored)) {
+          sessionInput.value = String(stored).trim();
+        }
+      } catch (error) {}
+    }
+
+    function applySession() {
+      var session = sessionId();
+      if (isValidSessionId(session)) {
+        try {
+          window.localStorage.setItem(
+            sessionStorageKey,
+            session
+          );
+        } catch (error) {}
+      }
+      startPolling();
     }
 
     async function api(path, options) {
@@ -1557,8 +1588,9 @@ function aotHubHtml() {
       timer = window.setInterval(loadState, 1500);
     }
 
+    restoreSession();
     document.getElementById("refresh").onclick = loadState;
-    document.getElementById("apply").onclick = startPolling;
+    document.getElementById("apply").onclick = applySession;
     document.getElementById("pause").onclick = function () {
       sendControl("pause");
     };
