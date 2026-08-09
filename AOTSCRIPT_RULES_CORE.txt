@@ -1,0 +1,354 @@
+AOTSCRIPT_RULES_CORE.txt
+QUY TẮC ĐANG ÁP DỤNG — TERMUX ONLY
+
+0. MÔI TRƯỜNG — ƯU TIÊN CAO NHẤT
+- EXECUTION_ENV=TERMUX_ONLY.
+- Codespaces KHÔNG sử dụng cho tới khi người dùng chủ động xác nhận hoạt động lại.
+- Repo: tinhpr9/Aotscript; branch: main.
+- GitHub connector/API chỉ READ-ONLY; không sửa/commit/push bằng connector/API.
+- Mọi thay đổi repository chỉ được thực hiện trong Termux, bởi người dùng hoặc Codex đang làm trực tiếp trong workspace đã xác minh; không ghi repo qua GitHub connector/API.
+- Codex được phép sửa file, chạy test/gate, commit và push trực tiếp trong Termux khi đúng phạm vi và tuân CORE + AGENTS; không yêu cầu người dùng thao tác tay nếu Codex có thể tự làm an toàn.
+- Không đoán REPO_ROOT trên Termux; nếu chưa biết, dùng lệnh READ-ONLY để xác định.
+- Trước trả lời về code/Agent/Worker/setup/script: đọc HEAD và file liên quan hiện tại.
+- Không dùng HEAD/code cũ làm nguồn sự thật. Không đọc được repo hiện tại thì không tạo patch.
+
+1. CHẤT LƯỢNG
+- Ưu tiên: ĐÚNG → AN TOÀN → KỸ → GỌN → NHANH.
+- “Làm nhanh” = làm thật kỹ và đúng, nhưng ít bước, ít rủi ro, tiện nhất.
+- Không bỏ gate/xác minh/kiểm tra để tiết kiệm thời gian.
+- Loại bước thừa, không loại bước cần thiết.
+- Không để người dùng là người đầu tiên phát hiện lỗi có thể tự test trước.
+
+1A. TỰ CHỦ CÓ ROLLBACK / GIẢM INTERRUPT
+- Tự thực hiện đến cùng mọi thao tác thuộc đúng nhiệm vụ hiện tại nếu thay đổi đó có thể rollback an toàn, phạm vi được xác định rõ và có thể kiểm chứng trạng thái trước/sau.
+- Nếu thử nghiệm, checker hoặc patch thất bại: tự rollback chỉ thay đổi do chính lượt làm việc tạo ra, phân tích nguyên nhân và tự sửa tiếp bằng phương pháp an toàn hơn; không bắt người dùng xử lý lỗi mà Codex có thể tự phục hồi.
+- Không được phá trạng thái đã xác nhận tốt, không ghi đè/xóa/stage/rollback thay đổi ngoài phạm vi, không dùng git reset/force để tiện sửa.
+- Không dừng chỉ để hỏi cho các bước đọc, chẩn đoán, gate, test, tạo temp hoặc thao tác reversible thông thường khi công cụ/sandbox đã cho phép tự chạy. Gom các kiểm tra READ-ONLY thành ít lượt nhất có thể.
+- Chỉ ngắt để hỏi khi sandbox thực sự bắt buộc approval hoặc khi hành động có hậu quả khó rollback, đụng ngoài scope, liên quan secret, remote thay đổi/xung đột, runtime destructive, hoặc reasoning hiện tại chưa đủ để tiếp tục an toàn.
+- Nguyên tắc "sai thì tự sửa tiếp" chỉ áp dụng trong phạm vi có rollback chắc chắn; không được dùng nó làm lý do bỏ preflight, backup, gate, postcondition, secret scan hoặc xác minh trạng thái thật.
+- Có thể dùng/recommend approval dạng "don't ask again" CHỈ cho command/helper hẹp, đã kiểm chứng là READ-ONLY hoặc rollback-safe và bị giới hạn đúng phạm vi. Cấm persistent approval cho shell/interpreter hoặc prefix rộng như bash/sh/python/sed/git/curl/rm/su/pkill, cho commit/push, thao tác runtime destructive, secret, đường dẫn ngoài workspace đã xác minh hoặc Full Access.
+
+1B. MỤC TIÊU SẢN PHẨM / TẬP TRUNG CHUYÊN MÔN
+- Trước mọi phân tích kỹ thuật, phải xác định PRODUCT_GOAL và CURRENT_BLOCKER từ HANDOFF hiện tại; nếu HANDOFF đã nêu rõ thì không được biến một lỗi cục bộ, lỗi tool, lỗi sandbox hoặc lỗi setup thành mục tiêu chính.
+- Mọi chẩn đoán/patch/test phải trả lời trực tiếp câu hỏi: thay đổi này giúp tiến gần mục tiêu sản phẩm hiện tại như thế nào.
+- Khi task hiện tại là AOT Group Control, ưu tiên chuyên môn đúng miền: Android Activity/Task/foreground/resumed state; dumpsys activity/window/View Hierarchy; UI hierarchy/selector/coordinate mapping; timing/race; reference-follower action replication; relay/WebSocket/ACK/status; E2E và runtime lifecycle.
+- Không lan sang tối ưu Codex, hook, setup, auth, Telegram, Worker hoặc hạ tầng khác trừ khi chúng thật sự chặn CURRENT_BLOCKER. Nếu phải xử lý blocker hạ tầng, sau khi blocker PASS phải quay lại ngay PRODUCT_GOAL đang dở.
+- Không được kết luận từ triệu chứng. Phải dựng causal chain: observed symptom -> source state/event -> responsible component -> smallest validated fix.
+- Khi có nhiều giả thuyết, ưu tiên phép đo có khả năng phân biệt chúng; tránh đọc/log/test rộng không làm tăng bằng chứng.
+- Nếu HANDOFF thiếu PRODUCT_GOAL nhưng yêu cầu hiện tại của người dùng nêu rõ mục tiêu, dùng đúng mục tiêu đó và báo PRODUCT_GOAL_SOURCE=USER_REQUEST; không tự bịa mục tiêu khác. Nếu cả HANDOFF và yêu cầu hiện tại đều không đủ rõ để xác định sản phẩm/blocker thì DỪNG trước patch.
+
+2. PHÂN BIỆT TRẠNG THÁI
+Luôn tách riêng:
+PATCH=
+COMMIT=
+PUSH=
+BUILD_DEPLOY=
+FUNCTION_TEST=
+Không dùng trạng thái này suy ra trạng thái khác; không báo thành công khi chưa có output/bằng chứng.
+
+3. TRƯỚC PATCH TRÊN TERMUX
+Phải xác định:
+- REPO_ROOT thật;
+- git remote get-url origin;
+- git branch --show-current;
+- git rev-parse HEAD;
+- git fetch origin main;
+- git rev-parse origin/main;
+- git diff --name-only;
+- git diff --cached --name-only;
+- git ls-files --others --exclude-standard;
+- git status --short --untracked-files=all.
+Khi trạng thái cho phép:
+- git pull --ff-only
+- BASE_COMMIT="$(git rev-parse HEAD)"
+Phải biết tracked/staged/untracked/deleted/renamed và đúng file mục tiêu.
+Không dùng riêng git diff --name-only để kết luận sạch.
+Nếu có thay đổi có sẵn ngoài phạm vi: dừng hoặc dùng workspace sạch riêng.
+Cấm: ghi đè/stage/xóa/rollback thay đổi ngoài nhiệm vụ; git reset; force push; git add .
+
+4. PATCH PHẢI DỰA TRÊN HEAD MỚI
+- Tạo lại patch từ HEAD sau pull.
+- Không tái dùng line number/whitespace/marker/str.replace/code cũ/giả định cấu trúc cũ.
+- Có thể tái dùng phương pháp, nhưng phải nhận diện lại trên code hiện tại.
+- Code khác dự kiến: dừng, đọc lại, tạo patch mới; không cố tìm marker gần giống.
+
+5. XÁC ĐỊNH CẤU TRÚC
+Python:
+- Ưu tiên AST: FunctionDef/AsyncFunctionDef/Call và phạm vi class/method.
+- Phân biệt definition/call/string/comment/docstring.
+JavaScript:
+- Xác định class/function/object/array thật.
+- Lấy scope bằng parser hoặc cân bằng {}, [], ().
+- Chỉ kiểm tra trong đúng scope.
+Cấm text.count/source.count/global regex để xác nhận cấu trúc code.
+MATCH_COUNT=1 chỉ được dùng khi trả lời được:
+1) cấu trúc nào; 2) scope nào; 3) vì sao chính xác phải bằng 1.
+
+6. CHECKER/POSTCONDITION CŨNG PHẢI TEST
+- Không coi checker mặc nhiên đúng.
+- Chạy thật logic scope/match/sinh nội dung/postcondition/rollback với input đại diện.
+- Compile checker chưa đủ nếu có logic runtime.
+- Checker crash => LỖI_BỘ_KIỂM_TRA; không quy lỗi repo; không chạy lại block lỗi.
+Ưu tiên:
+AST/parser/brace-balanced scope
+> regex giới hạn scope
+> exact text trong scope
+> tuyệt đối không global text count.
+
+7. PATCH TRÊN FILE TẠM
+1) đọc file chính vào bộ nhớ;
+2) tạo nội dung mới;
+3) đúng một newline EOF;
+4) ghi temp cùng filesystem;
+5) syntax-check temp;
+6) structure-check temp;
+7) chạy chính postcondition trên temp;
+8) PASS hết mới atomic replace/os.replace;
+9) chạy lại gate trên file thật.
+Temp fail => không thay file chính, không commit/push, báo lỗi đúng vị trí.
+
+8. PYTHON SYNTAX
+Không xuống dòng trực tiếp sau toán tử nếu biểu thức không nằm trong ngoặc hợp lệ.
+Sai:
+if len(text) >
+    LIMIT:
+Đúng:
+if len(text) > LIMIT:
+hoặc:
+if (
+    len(text)
+    > LIMIT
+):
+SyntaxError phải báo file/line/column/source khi lấy được.
+Không mặc định dòng 1. Không lấy được vị trí thì ghi:
+Không xác định được vị trí lỗi để hiển thị ngữ cảnh.
+
+9. SHELL / HEREDOC / MOBILE
+- Không set -e hoặc set -Eeuo pipefail trực tiếp trong shell Termux hiện tại.
+- Block dài chạy trong shell con; strict mode chỉ bật bên trong.
+- Marker đóng heredoc: một dòng riêng, cột đầu, không ký tự thừa, khớp marker mở.
+- Terminal chỉ hiện ">" => shell đang chờ hoàn tất/heredoc; script chưa chạy.
+- Khi đó xác định marker cần đóng; không yêu cầu nhập secret/Device ID/URL.
+- Không phụ thuộc Ctrl/Esc/Tab/mũi tên/history; lệnh phải dễ copy nguyên khối trên Android.
+- Tránh heredoc lồng phức tạp.
+- Command substitution có thể fail phải thu riêng output và exit status.
+
+10. BACKUP / ROLLBACK
+Trước sửa ghi:
+BASE_COMMIT, local HEAD, origin/main, tracked/staged/untracked/deleted ban đầu, file mục tiêu.
+Chỉ backup file mục tiêu.
+Khi fail:
+- chỉ khôi phục file do block hiện tại đổi;
+- chỉ bỏ staging file của block hiện tại;
+- không đụng thay đổi có sẵn/untracked có sẵn;
+- không git reset; không commit; không push.
+Chỉ báo rollback thành công sau khi đối chiếu trạng thái thực tế với ban đầu.
+
+11. PHÂN LOẠI LỖI
+Phân loại đúng: repository / patch / temp script / checker / syntax / heredoc-terminal / input / permission / environment / config / remote change / commit / push / build-deploy / function test.
+Không quy lỗi cho repo/người dùng khi chưa có bằng chứng.
+Trước lệnh tiếp theo phải biết block trước chạy đến đâu, PASS/FAIL/chưa chạy, file đã đổi, working tree, commit/push.
+Không làm lại từ đầu nếu có thể tiếp tục an toàn; không chạy lại block đã biết lỗi.
+
+12. PATCH NHỎ / PHASE RÕ
+- Không trộn Agent/Worker/Telegram/Durable Object/setup nếu không cần.
+- 1 nhiệm vụ = 1 patch; file tối thiểu; commit nhỏ.
+- Phase phải có mục tiêu và test độc lập khi có thể.
+- Phase phụ thuộc chỉ tiếp tục sau khi trạng thái cần thiết của phase trước đã xác nhận.
+
+13. GATE TRƯỚC COMMIT
+Chỉ chạy gate phù hợp với file thực sự tồn tại trong HEAD:
+python3 -m py_compile agent Toolcheck
+bash -n setup-m166.sh
+bash -n Termuxboot
+node --check cloudflare-worker/worker.js
+node --check cloudflare-worker/rollout.js
+node --check cloudflare-worker/fleet-state.js
+git diff --check
+File không tồn tại => báo rõ, không giả định.
+JSON phải dùng parser thật.
+Kiểm tra thêm: EOF newline, cấu trúc mục tiêu, file ngoài scope, secret, whitespace, postcondition temp+real.
+
+14. SECRET
+Không in secret/token/API key/password/URL có key-token/toàn config nhạy cảm.
+Không để chúng xuất hiện trong terminal/diff/log/commit/ảnh/chat/tên temp/error.
+Config nhạy cảm chỉ được báo:
+- file tồn tại;
+- JSON hợp lệ;
+- key tồn tại;
+- giá trị là chuỗi không rỗng.
+Không in giá trị.
+Quét diff trước khi hiển thị.
+Secret từng public commit => phải revoke/rotate; xóa ở commit mới không xóa lịch sử.
+
+15. AGENT CONFIG
+Phải dùng:
+/storage/emulated/0/Download/Shouko/agent_config.json
+Không đọc/sửa/ghi đè:
+/storage/emulated/0/Download/Shouko/config.json
+Key bắt buộc:
+worker_report_url
+agent_report_secret
+Chỉ xác nhận tồn tại/JSON/key/non-empty string; không in giá trị.
+Không commit agent_config.json/secret vào repo public.
+
+16. DEVICE / PROFILE / AGENT
+Device ID: m1..m999999.
+Profile: MARMOT hoặc NOVA.
+Paths:
+- /storage/emulated/0/Download/Shouko/device_id.txt
+- /storage/emulated/0/Download/Shouko/device_group.txt
+- /storage/emulated/0/Download/Shouko/agent_state.json
+- /storage/emulated/0/Download/Shouko/agent_config.json
+- /sdcard/Download/Agent_Log.txt
+Agent đọc: lenh_all.txt, lenh_marmot.txt, lenh_nova.txt.
+Setup/Termux:Boot:
+- validate Device ID/profile;
+- lấy bản mới nhất main vào temp;
+- syntax-check trước replace;
+- backup trước replace;
+- không sửa config app khác;
+- không pkill quá rộng;
+- không duplicate Agent hợp lệ;
+- giữ Agent hợp lệ đang chạy;
+- không log secret;
+- heartbeat thành công chỉ khi Worker thật sự HTTP 200.
+
+17. KHI CẦN NGƯỜI DÙNG NHẬP THÔNG TIN
+Phải giải thích thông tin là gì, dùng làm gì, lấy ở đâu, menu/màn hình nào, chọn/nhập/để trống gì, quyền nào, kết quả hợp lệ.
+Không yêu cầu gửi secret qua chat/ảnh/log/terminal output.
+Cho cách kiểm tra hợp lệ mà không lộ giá trị.
+Bằng chứng đã PASS thì không bắt lặp lại trừ khi code đổi, có mâu thuẫn, hoặc test cũ không đo đúng hành vi.
+
+18. DIFF / STAGE / COMMIT / PUSH
+Trước commit:
+- đúng repo/branch;
+- remote HEAD không đổi ngoài dự kiến;
+- chỉ file mục tiêu;
+- không tracked/staged/untracked/deleted/renamed ngoài scope;
+- syntax/structure/JSON/EOF/diff-check PASS;
+- diff không secret.
+Hiển thị:
+GIT_PAGER=cat git diff --stat
+GIT_PAGER=cat git diff
+Stage từng file cụ thể; không git add .
+Sau commit: xác nhận commit mới thật sự tồn tại.
+Ngay trước push: git fetch origin main và kiểm origin/main.
+Remote đổi + đụng file/logic liên quan => đọc lại/áp lại trên HEAD mới.
+Không force push.
+Sau push:
+git fetch origin main
+LOCAL_SHA="$(git rev-parse HEAD)"
+REMOTE_SHA="$(git rev-parse origin/main)"
+Chỉ PUSH=THÀNH_CÔNG khi LOCAL_SHA == REMOTE_SHA và working tree sạch.
+Luôn báo:
+BASE_COMMIT=
+FINAL_COMMIT=
+PATCH=
+COMMIT=
+PUSH=
+BUILD_DEPLOY=
+FUNCTION_TEST=
+
+19. CLOUDFLARE / TEST
+- Push main có thể auto build/deploy.
+- Đối chiếu đúng commit trong Cloudflare Recent builds.
+- Build xanh chỉ chứng minh build/deploy, không chứng minh chức năng.
+- FUNCTION_TEST xác nhận riêng.
+- Không deploy thủ công nếu đúng commit đã auto deploy thành công.
+
+20. KHÔNG LẶP TEST ĐÃ XÁC NHẬN
+Tách: gate tĩnh / build-deploy / acceptance test / vận hành.
+- Gate tĩnh chạy khi commit có code liên quan thay đổi.
+- Acceptance test không lặp nếu code liên quan không đổi.
+- Commit chỉ đổi file lệnh không tự làm mất giá trị test Agent/Worker cũ.
+- Chỉ còn 1–2 mục chưa xác nhận thì chỉ test đúng mục đó.
+
+21. TELEGRAM / COMMAND NỘI BỘ
+Không copy Telegram syntax thẳng vào Agent command nếu Agent không hiểu.
+Phải xác minh pipeline từ code hiện tại:
+Telegram → Worker parse → normalized command → envelope → channel → Agent.
+Trước patch đọc Agent/Worker hiện tại để biết command grammar thật.
+Nhiều entry point => kiểm semantic từng path trong đúng function/scope; không suy từ một global occurrence.
+
+22. NHIỀU CHAT TRÊN TERMUX
+Nếu nhiều chat cùng làm repo:
+- 1 chat = 1 workspace/clone riêng;
+- không sửa chung working tree;
+- không dùng trạng thái chat khác làm bằng chứng;
+- fetch origin/main trước patch và trước push;
+- remote đổi => kiểm commit mới trước khi tiếp tục.
+Phát hiện chung working tree => dừng trước patch/commit; không reset/restore/stash/xóa/stage thay đổi không rõ chủ sở hữu.
+
+23. ZIP / FILE DÀI
+- Không base64/gzip payload/openssl enc/data URI/payload mã hóa để chuyển patch.
+- Nội dung phải kiểm tra bằng mắt.
+- Code dài có thể dùng ZIP ChatGPT đính kèm; tải về Android và kiểm SHA-256 trước khi chạy.
+- Không upload ZIP lên Codespaces trong môi trường hiện tại.
+- Trước chạy: checksum + syntax-check phù hợp.
+- Không giả định CWD; xác định REPO_ROOT thật.
+- Test end-to-end đúng workflow sẽ giao cho người dùng khi có thể.
+
+24. TRÌNH TỰ MỖI BẢN SỬA
+1) đọc HEAD + file liên quan;
+2) xác nhận TERMUX_ONLY + REPO_ROOT;
+3) kiểm repo/branch/local/remote/working tree;
+4) pull khi an toàn, ghi BASE_COMMIT;
+5) đọc lại cấu trúc mục tiêu;
+6) AST/parser/brace-balanced scope;
+7) chứng minh postcondition;
+8) ghi trạng thái ban đầu + backup target;
+9) sinh nội dung trong memory;
+10) ghi temp;
+11) syntax/structure/postcondition temp;
+12) atomic replace khi PASS;
+13) gate file thật;
+14) kiểm tracked/staged/untracked/deleted/renamed;
+15) quét secret;
+16) git diff --check;
+17) hiển thị diff an toàn;
+18) fetch/kiểm remote;
+19) stage file cụ thể;
+20) commit;
+21) fetch/kiểm remote lần cuối;
+22) push;
+23) đối chiếu LOCAL_SHA/REMOTE_SHA;
+24) working tree sạch;
+25) báo riêng PATCH/COMMIT/PUSH/BUILD_DEPLOY/FUNCTION_TEST.
+
+25. NGUYÊN TẮC CUỐI
+- Đúng trước nhanh; ít bước nhưng đủ kiểm tra.
+- Không đoán; không tái dùng HEAD cũ.
+- Không global text count cho cấu trúc code.
+- Không lặp checker/block đã biết lỗi.
+- Không lộ secret.
+- Không báo thành công khi chưa có bằng chứng.
+- Không dùng Codespaces cho tới khi người dùng chủ động bật lại.
+
+QUY TẮC CHỌN MODEL / REASONING
+
+Trước mỗi nhiệm vụ code, phải tự đánh giá độ khó và dùng mức reasoning phù hợp.
+
+- Low: việc rất đơn giản, đọc file, tìm chuỗi, sửa nhỏ rõ ràng.
+- Medium: tác vụ code thông thường, ít file, logic không phức tạp.
+- High: debug khó, nhiều file, race condition, async, state, parser, kiến trúc hoặc lỗi khó tái hiện.
+- Extra high: vấn đề rất khó, nhiều nguyên nhân khả dĩ, thay đổi ảnh hưởng rộng hoặc cần suy luận sâu trước khi sửa.
+- Max/Ultra: chỉ dùng khi High/Extra high chưa giải quyết được, vấn đề đặc biệt phức tạp hoặc sai sót có rủi ro lớn.
+
+Không dùng Low chỉ để tiết kiệm quota nếu nhiệm vụ cần suy luận sâu.
+Không dùng Max/Ultra cho việc đơn giản gây lãng phí quota.
+
+Nếu mức reasoning hiện tại không đủ cho nhiệm vụ:
+- DỪNG trước khi sửa;
+- báo:
+  CURRENT_REASONING=
+  RECOMMENDED_REASONING=
+  REASON=
+- yêu cầu tôi đổi bằng /model rồi mới tiếp tục.
+
+Với bug khó:
+đọc code thật → xác định nguyên nhân → kiểm chứng giả thuyết → mới sửa.
+Không tăng reasoning để thay thế việc đọc HEAD, kiểm tra code và chạy test.
+
+Mục tiêu:
+DÙNG MỨC NHẸ NHẤT NHƯNG ĐỦ ĐỂ GIẢI QUYẾT VẤN ĐỀ ĐÚNG NGAY TỪ ĐẦU.

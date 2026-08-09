@@ -1,0 +1,112 @@
+AOTSCRIPT_HANDOFF_CURRENT.txt
+BẢN BÀN GIAO HIỆN TẠI
+
+MỤC ĐÍCH
+- CORE = luật lâu dài; HANDOFF = trạng thái và mục tiêu phiên hiện tại.
+- Không dùng code/HEAD/working tree trong HANDOFF làm nguồn sự thật cho patch mới; phải xác minh repo thật theo CORE.
+
+MÔI TRƯỜNG ĐÃ XÁC NHẬN
+EXECUTION_ENV=TERMUX_ONLY
+CODESPACES=KHÔNG_SỬ_DỤNG
+REPOSITORY=tinhpr9/Aotscript
+BRANCH=main
+GITHUB_CONNECTOR=READ_ONLY
+
+PRODUCT_GOAL
+- Hoàn thiện AOT Group Control: tool đồng bộ thao tác từ máy reference sang máy follower theo chuỗi:
+  reference thực hiện hành động -> relay/Worker chuyển hành động -> follower thực hiện tương ứng -> ACK/status xác nhận.
+- Reference hiện tại: m37.
+- Follower hiện tại: m117.
+- App acceptance hiện tại: org.swiftapps.swiftbackup (Swift Backup).
+- Mục tiêu không chỉ là một E2E pass; mục tiêu là cơ chế đồng bộ ổn định, đúng foreground/UI state, selector/coordinate/action, fingerprint/precondition, relay/ACK và runtime lifecycle.
+
+CHUYÊN MÔN TRỌNG TÂM
+- Android Activity/Task lifecycle, foreground/resumed state.
+- dumpsys activity/window và View Hierarchy.
+- UI hierarchy parsing, semantic selector/resource-id, coordinate mapping, fingerprint/precondition.
+- Timing/race giữa launch, focus, snapshot và action.
+- Reference/follower action replication, relay/WebSocket, ACK/status, dedupe/out-of-sync guard.
+- Runtime lifecycle và acceptance E2E.
+
+BLOCKER VỪA ĐÓNG
+- Lỗi trước đây: m117 trả m117_fingerprint_mismatch tại bước NAV_CLOUD.
+- Causal chain đã được chứng minh:
+  1. Swift Backup thật sự là mResumedActivity trên m117.
+  2. dumpsys window windows trên m117 có thể rỗng hoặc giữ launcher stale ginlemon.flowerfree.
+  3. foreground_package() cũ phụ thuộc window focus nên có thể chọn sai package.
+  4. dump_ui_xml() vì thế có thể chọn sai View Hierarchy.
+  5. Follower thực thi action nhưng after_fingerprint khác reference.
+- Fix đã thêm logic xác định package từ topResumedActivity/mResumedActivity trước, dùng window focus làm fallback.
+- Selftest đã bổ sung các case stale launcher, missing focus, multi-activity hierarchy, ambiguous resumed state và fallback.
+
+COMMIT LIÊN QUAN
+LAST_VERIFIED_REMOTE_MAIN=742d0bea9b0a794c724dabcb3fc7a688d6508d7e
+COMMIT_MESSAGE=Fix resumed activity package detection
+FILES_CHANGED=
+- aot-group-control/controller.py
+- aot-group-control/selftest.py
+
+LƯU Ý NGUỒN SỰ THẬT
+- SHA/trạng thái trong HANDOFF chỉ là bàn giao.
+- Trước patch mới phải kiểm repo thật theo CORE:
+  origin, branch, local HEAD, origin/main, tracked/staged/untracked/deleted/renamed và code hiện tại.
+- Không dùng line number/code cũ từ HANDOFF làm patch source.
+
+TRẠNG THÁI BẢN SỬA GẦN NHẤT
+PATCH=THÀNH_CÔNG
+COMMIT=THÀNH_CÔNG
+PUSH=THÀNH_CÔNG
+BUILD_DEPLOY=THÀNH_CÔNG
+FUNCTION_TEST=THÀNH_CÔNG
+
+BẰNG CHỨNG RUNTIME m117
+- Runtime controller mới đã được nạp vào Termux native m117.
+- DEVICE_ID=m117
+- ROLE=follower
+- SESSION=m37-m117-p3
+- REFERENCE_DEVICE=m37
+- M117_RUNTIME_HASH_MATCH=YES
+- M117_RUNTIME_UPDATE=SUCCESS
+- Follower runtime đã restart thành công trước acceptance.
+
+BẰNG CHỨNG ACCEPTANCE E2E GẦN NHẤT
+- E2E_ACCOUNT_TAP=SUCCESS
+- E2E_BACK=SUCCESS
+- E2E_CLOUD_TAP=SUCCESS
+- E2E_HOME_AFTER_CLOUD=SUCCESS
+- E2E_SCHEDULE_TAP=SUCCESS
+- E2E_HOME_AFTER_SCHEDULE=SUCCESS
+- E2E_SWIPE=SUCCESS
+- E2E_DEDUPE=SUCCESS
+- E2E_OUT_OF_SYNC_GUARD=SUCCESS
+- E2E_GUARD_TAP_EXECUTED=NO
+- AOT_E2E_BATCH=SUCCESS
+- REFERENCE_DEVICE=m37
+- FOLLOWERS=m117
+- Reference runtime được khởi động lại sau E2E.
+
+CURRENT_BLOCKER
+- Không còn blocker cho acceptance path m37 -> m117 trên Swift Backup đã kiểm.
+- Blocker m117_fingerprint_mismatch = ĐÃ_ĐÓNG.
+
+QUY TẮC TẬP TRUNG
+1. Không chạy lại acceptance E2E đã PASS nếu code liên quan chưa đổi hoặc không có bằng chứng test cũ không còn đo đúng hành vi.
+2. Không quay lại lỗi foreground/hierarchy cũ nếu không có bằng chứng mới.
+3. Không coi build/deploy là thay thế FUNCTION_TEST; FUNCTION_TEST gần nhất đã có bằng chứng riêng và PASS.
+4. Nếu bắt đầu nhiệm vụ mới, phải xác định PRODUCT_GOAL và CURRENT_BLOCKER mới trước patch.
+5. Nếu nhiệm vụ mới vẫn thuộc AOT Group Control, giữ trọng tâm Android state/hierarchy/action replication thay vì lan sang tool/setup không liên quan.
+6. Nếu code liên quan thay đổi, trạng thái PATCH/COMMIT/PUSH/BUILD_DEPLOY/FUNCTION_TEST phải được đánh giá lại riêng.
+
+QUY TẮC TIẾP TỤC
+1. Đọc đầy đủ AOTSCRIPT_RULES_CORE.
+2. Đọc HANDOFF này.
+3. Nếu Codex làm trực tiếp trong repo và AGENTS.md tồn tại, đọc AGENTS.md.
+4. Kiểm trạng thái repo thật theo CORE trước mọi patch mới.
+5. Không dùng HEAD/code/line number trong HANDOFF làm nguồn sự thật.
+6. Không lặp test đã PASS nếu không có lý do kỹ thuật mới.
+7. Chỉ báo trạng thái THÀNH_CÔNG khi có bằng chứng riêng cho trạng thái đó.
+
+BƯỚC TIẾP THEO DỰ KIẾN
+- Không cần chạy lại E2E hiện tại.
+- Chọn feature/blocker AOT tiếp theo dựa trên mục tiêu sản phẩm.
+- Trước thay đổi code tiếp theo: xác minh repo thật, đọc code hiện tại, xác định blocker mới rồi mới patch.

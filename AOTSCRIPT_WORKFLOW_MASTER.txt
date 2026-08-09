@@ -1,0 +1,1532 @@
+AOTSCRIPT_WORKFLOW_MASTER
+QUY TRÌNH MASTER — PROVISION / ĐỒNG BỘ / AOT GROUP CONTROL
+
+==================================================
+0. VAI TRÒ VÀ THỨ TỰ ƯU TIÊN
+==================================================
+
+File này lưu:
+- quy trình vận hành thiết bị Aotscript của người dùng;
+- thứ tự các bước thủ công và tự động;
+- checkpoint giữa các phase;
+- nguyên tắc đồng bộ nhiều máy;
+- quy trình đánh giá framework/backend bên ngoài;
+- nguyên tắc tiếp tục công việc mà không làm lại những bước đã PASS.
+
+File này KHÔNG thay thế:
+- AOTSCRIPT_RULES_CORE;
+- trạng thái thật hiện tại của repository/hệ thống;
+- AOTSCRIPT_HANDOFF_CURRENT;
+- AGENTS.md dành cho Codex.
+
+Thứ tự ưu tiên bắt buộc:
+
+AOTSCRIPT_RULES_CORE
+→ trạng thái thật hiện tại của repository/hệ thống
+→ AOTSCRIPT_HANDOFF_CURRENT
+→ AOTSCRIPT_WORKFLOW_MASTER
+→ nội dung trao đổi hiện tại.
+
+Không dùng file này làm nguồn sự thật cho:
+- HEAD hiện tại;
+- code hiện tại;
+- branch/remote hiện tại;
+- working tree hiện tại;
+- kết quả build/deploy hiện tại;
+- kết quả function test hiện tại.
+
+Khi cần các trạng thái trên phải xác minh trạng thái thật theo CORE.
+
+EXECUTION_ENV=TERMUX_ONLY.
+Không sử dụng hoặc đề xuất GitHub Codespaces cho tới khi người dùng chủ động cho phép lại.
+
+==================================================
+1. MỤC TIÊU TỔNG
+==================================================
+
+Mục tiêu vận hành:
+
+1. Provision một hoặc nhiều Android/UGPhone theo quy trình chuẩn.
+2. Giảm tối đa thao tác tay nhưng không tự động hóa mù quáng các bước:
+   - chứa secret;
+   - liên quan account;
+   - phụ thuộc UI không ổn định;
+   - có rủi ro phá trạng thái máy;
+   - chưa có runtime evidence.
+3. Có checkpoint rõ ràng để tiếp tục đúng chỗ nếu bị gián đoạn.
+4. Không bắt người dùng làm lại bước đã có bằng chứng PASS trừ khi:
+   - code liên quan đã đổi;
+   - trạng thái máy liên quan đã đổi;
+   - có mâu thuẫn bằng chứng;
+   - test cũ không còn đo đúng hành vi.
+5. Khi làm AOT Group Control:
+   reference thực hiện action
+   → relay/Worker
+   → follower thực hiện
+   → ACK/status
+   → xác minh state/result.
+6. Khi có nhiều máy:
+   không dùng thành công của máy này để suy ra máy khác thành công.
+
+==================================================
+2. NGUYÊN TẮC PHÂN LOẠI BƯỚC
+==================================================
+
+Mọi bước trong workflow phải thuộc một trong ba loại:
+
+A. AUTO
+- Có thể chạy tự động.
+- Có input/output rõ.
+- Có postcondition kiểm được.
+- Có rollback hoặc retry an toàn khi phù hợp.
+
+B. MANUAL_GATE
+- Người dùng phải thao tác UI hoặc cung cấp xác nhận.
+- AI phải hướng dẫn chính xác từng bước.
+- Không tự đánh dấu PASS.
+- Chỉ tiếp tục sau khi người dùng xác nhận hoặc có bằng chứng phù hợp.
+
+C. VERIFY
+- Chỉ kiểm trạng thái.
+- Không thay đổi hệ thống nếu không cần.
+- Ưu tiên kiểm chứng tự động/read-only.
+
+Không được biến MANUAL_GATE thành AUTO chỉ để giảm số bước nếu chưa chứng minh an toàn.
+
+==================================================
+3. NGUYÊN TẮC ĐỒNG BỘ NHIỀU MÁY
+==================================================
+
+Mỗi máy phải có trạng thái riêng.
+
+Ví dụ:
+
+DEVICE=m37
+PHASE=...
+STATUS=...
+
+DEVICE=m117
+PHASE=...
+STATUS=...
+
+Không được chỉ lưu:
+
+PHASE=SUCCESS
+
+cho cả nhóm nếu chưa biết từng máy.
+
+Nếu chạy theo nhóm:
+
+TARGET_DEVICES=m37,m117,...
+
+Mỗi phase phải có:
+
+PHASE_NAME=
+PHASE_TYPE=AUTO|MANUAL_GATE|VERIFY
+REQUIRED_DEVICES=
+PER_DEVICE_STATUS=
+GLOBAL_STATUS=
+
+GLOBAL_STATUS chỉ PASS khi tất cả REQUIRED_DEVICES của phase đã PASS.
+
+Nếu một follower FAIL:
+- không mặc định reference FAIL;
+- không phá máy đã PASS;
+- giữ máy PASS ở trạng thái hiện tại;
+- diagnostic đúng follower bị lỗi;
+- không chạy lại cả fleet nếu không cần.
+
+==================================================
+4. CHECKPOINT / RESUME
+==================================================
+
+Workflow phải có checkpoint sau mỗi phase lớn.
+
+Không chạy lại từ đầu khi đã biết:
+
+PHASE_X=PASS
+
+Trước khi tiếp tục phải xác định:
+
+LAST_CONFIRMED_PHASE=
+CURRENT_PHASE=
+NEXT_REQUIRED_ACTION=
+BLOCKED_BY=
+TARGET_DEVICE=
+
+Nếu chat mới tiếp tục workflow:
+- đọc CORE;
+- đọc HANDOFF;
+- đọc file này;
+- xác định checkpoint gần nhất có bằng chứng;
+- tiếp tục từ bước chưa hoàn thành gần nhất.
+
+Không yêu cầu người dùng nhớ hoặc kể lại toàn bộ quy trình nếu trạng thái đã có trong nguồn/bằng chứng hiện tại.
+
+==================================================
+5. QUY TRÌNH GỐC — THỦ CÔNG 1
+==================================================
+
+PHASE=MANUAL_PRE_ROOT
+TYPE=MANUAL_GATE
+
+Người dùng:
+- thủ công bật root máy.
+
+Không tự suy ra root đã bật.
+Nếu cần xác minh sau đó, dùng phép kiểm phù hợp mà không thay đổi hệ thống.
+
+--------------------------------------------------
+
+PHASE=MANUAL_PRE_GOOGLE
+TYPE=MANUAL_GATE
+
+Người dùng:
+- thủ công tắt Play Protect;
+- cập nhật CH Play trong Google Play theo quy trình hiện tại của người dùng.
+
+Không tự thay đổi account hoặc security setting khi chưa được người dùng yêu cầu cụ thể.
+
+--------------------------------------------------
+
+PHASE=INSTALL_TERMUX
+TYPE=MANUAL_GATE/AUTO
+
+APK Termux chuẩn người dùng đang dùng:
+
+https://f-droid.org/repo/com.termux_1022.apk
+
+Sau khi Termux được cài và mở:
+
+pkg install -y python unzip zip
+
+--------------------------------------------------
+
+PHASE=PROVISION_INIT
+TYPE=AUTO
+
+Thiết lập theo từng máy:
+
+DEVICE_ID="m37"
+DEVICE_GROUP="NOVA"
+
+DEVICE_ID phải thay đúng máy đang provision.
+DEVICE_GROUP chỉ được là profile hợp lệ theo CORE.
+
+Block chuẩn:
+
+bash <<'AOTSCRIPT_PROVISION_INIT'
+set -Eeuo pipefail
+DEVICE_ID="m37"
+DEVICE_GROUP="NOVA"
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+
+curl -fsSL \
+  --retry 3 \
+  --connect-timeout 15 \
+  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/provision-device.sh?t=$(date +%s)" \
+  -o "$TMP"
+
+[ -s "$TMP" ]
+bash -n "$TMP"
+bash "$TMP" "$DEVICE_ID" "$DEVICE_GROUP"
+AOTSCRIPT_PROVISION_INIT
+
+Lưu ý:
+- DEVICE_ID/DEVICE_GROUP phải đúng máy hiện tại.
+- Không hardcode m37 cho tất cả follower.
+- Script tải về temp.
+- Phải có file.
+- Phải syntax-check trước khi chạy.
+- Thành công của script không tự suy ra toàn bộ provision đã FUNCTION_TEST PASS.
+
+--------------------------------------------------
+
+PHASE=INSTALL_TERMUX_API
+TYPE=MANUAL_GATE
+
+Cài Termux:API:
+
+https://f-droid.org/repo/com.termux.api_1002.apk
+
+Sau khi cài phải xác nhận app tồn tại/mở được khi workflow cần.
+
+--------------------------------------------------
+
+PHASE=WIZARD_START_INITIAL
+TYPE=AUTO
+
+Chạy:
+
+"$HOME/bin/aotscript-wizard" start
+
+--------------------------------------------------
+
+PHASE=WIZARD_PHASE11
+TYPE=AUTO + MANUAL/AUTH GATE KHI CẦN
+
+Block chuẩn:
+
+bash <<'AOTSCRIPT_M37_PHASE11_TEST'
+set -Eeuo pipefail
+
+BIN="$HOME/bin/aotscript-wizard"
+
+TMP="$HOME/bin/.aotscript-wizard.phase11.$$"
+mkdir -p "$HOME/bin"
+
+if [ -x "$BIN" ]; then
+  "$BIN" stop || true
+fi
+
+curl -fsSL \
+  --retry 3 \
+  --connect-timeout 15 \
+  "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/wizard-supervisor.sh?t=$(date +%s)" \
+  -o "$TMP"
+
+[ -s "$TMP" ]
+bash -n "$TMP"
+chmod 700 "$TMP"
+mv -f "$TMP" "$BIN"
+
+echo "WIZARD_PHASE11=READY"
+
+"$BIN" google-config-import
+"$BIN" google-login
+"$BIN" start
+AOTSCRIPT_M37_PHASE11_TEST
+
+Các bước login/config có thể cần tương tác/account.
+
+Không:
+- yêu cầu người dùng paste password/token/secret vào chat;
+- in credential;
+- chụp credential;
+- lưu credential trong repo public.
+
+==================================================
+6. BACKUP APP — DATA
+==================================================
+
+PHASE=MANUAL_BACKUP_LABEL_DATA
+TYPE=MANUAL_GATE
+
+Người dùng:
+- thủ công backup các app label data.
+
+Sau đó VERIFY:
+
+rclone listremotes
+rclone lsd gdrive:
+
+Người dùng ấn/xác nhận:
+ĐÃ XONG
+
+Chỉ khi backup thật hoàn thành mới PASS phase này.
+
+Không dùng việc rclone remote tồn tại để suy ra backup data đã hoàn thành.
+
+==================================================
+7. BACKUP APP — KHÔNG DATA
+==================================================
+
+PHASE=MANUAL_BACKUP_ALL_NO_DATA
+TYPE=MANUAL_GATE
+
+Người dùng:
+- thủ công backup all app không data;
+- chờ backup all hoàn thành;
+- xác nhận ĐÃ XONG.
+
+Không tiếp tục chỉ vì backup đã bắt đầu.
+
+==================================================
+8. TOOLCHECK / COOKIE / AUTO EXEC
+==================================================
+
+PHASE=TOOLCHECK_SETUP
+TYPE=MANUAL_GATE hoặc AUTO nếu tool hiện tại đã có interface ổn định
+
+Thực hiện theo quy trình hiện tại:
+
+- Setup cookie
+- Check cookie
+- Login cookie
+- chỉnh auto exec
+
+Cookie/credential là dữ liệu nhạy cảm.
+
+Không:
+- gửi cookie vào chat;
+- in nguyên cookie;
+- đưa cookie vào log/diff;
+- commit cookie;
+- dùng screenshot có cookie.
+
+Nếu có checker:
+chỉ báo hợp lệ/không hợp lệ, không hiển thị secret.
+
+==================================================
+9. MPROVISION PRE
+==================================================
+
+PHASE=MPROVISION_PRE
+TYPE=AUTO/MANUAL_GATE hỗn hợp
+
+Chạy:
+
+mprovision done pre
+
+Các việc thủ công cần hoàn thành trong giai đoạn này theo quy trình gốc:
+
+- bật Nhà phát triển;
+- bật "Buộc cho phép các ứng dụng trên bộ nhớ ngoài";
+- bật "Buộc các hoạt động có thể thay đổi kích thước";
+- chỉnh Độ rộng nhỏ nhất = 700dp;
+- bật Cửa sổ dạng tự do;
+- bật Buộc chạy chế độ máy tính;
+- cập nhật keyboard;
+- tải Delta/Shouko máy trước.
+
+Các tên menu có thể khác theo Android/ROM.
+AI phải hướng dẫn theo đúng màn hình/ảnh hiện tại của người dùng.
+Không đoán menu nếu UI khác.
+
+Không đánh dấu MPROVISION_PRE hoàn tất chỉ vì command chạy xong nếu manual gate liên quan chưa hoàn tất.
+
+==================================================
+10. THỦ CÔNG 2 — SAU PHẦN TỰ ĐỘNG CHÍNH
+==================================================
+
+PHASE=MANUAL_SHOUKO_KEY
+TYPE=MANUAL_GATE + SECRET
+
+Người dùng:
+- thủ công lấy key Shouko theo workflow hiện tại.
+
+Key Shouko được coi là secret.
+
+Không bao giờ yêu cầu:
+- gửi key vào chat;
+- chụp key;
+- in key trong terminal output;
+- commit key;
+- đưa key vào log.
+
+Nếu cần xác minh:
+chỉ xác minh tồn tại/non-empty/format phù hợp mà không in giá trị.
+
+==================================================
+11. MPROVISION UI POST
+==================================================
+
+PHASE=MPROVISION_UI_POST
+TYPE=AUTO + MANUAL_GATE
+
+Chạy:
+
+mprovision ui-post
+
+Các thao tác thủ công:
+
+- quay ngang control;
+- chỉnh khung tab;
+- mở Termux:Boot 1 lần.
+
+Mỗi thao tác UI chỉ được PASS khi có xác nhận/bằng chứng riêng.
+
+==================================================
+12. 1.1.1.1
+==================================================
+
+PHASE=MANUAL_1111
+TYPE=MANUAL_GATE
+
+Người dùng:
+- thủ công bật 1.1.1.1.
+
+Nếu cần kiểm network:
+VERIFY riêng.
+Không dùng việc app mở làm bằng chứng tunnel/network đã hoạt động nếu chưa kiểm.
+
+==================================================
+13. LỆNH KHỞI ĐỘNG
+==================================================
+
+PHASE=BOOT_COMMAND
+TYPE=AUTO/VERIFY
+
+Lệnh chuẩn:
+
+su -c "export PATH=\$PATH:/data/data/com.termux/files/usr/bin && export TERM=xterm-256color && export TMPDIR=/data/data/com.termux/files/usr/tmp && export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && cd /storage/emulated/0/Download && /data/data/com.termux/files/home/caylapbu/main"
+
+Sau chạy phải kiểm:
+- command thực sự start;
+- process/service cần thiết thực sự tồn tại;
+- không duplicate process sai;
+- runtime cần thiết hoạt động.
+
+Không coi exit code 0 một mình là FUNCTION_TEST.
+
+==================================================
+14. ID / LINK CẦN CHỈNH
+==================================================
+
+PHASE=ACCOUNT_OR_LINK_ADJUSTMENT
+TYPE=MANUAL_GATE hoặc task riêng
+
+Giá trị workflow gốc:
+
+97598239454123
+
+Yêu cầu gốc:
+- kêu AI chỉnh link tương ứng khi tới bước này.
+
+Không hardcode logic chỉnh link vào prompt này vì:
+- code/link hiện tại có thể thay đổi;
+- phải đọc trạng thái thật và code/file hiện tại theo CORE trước khi sửa.
+
+Khi tới phase:
+- xác định chính xác link/file/field hiện tại;
+- đọc code/state thật;
+- patch nhỏ nhất nếu cần;
+- test riêng.
+
+==================================================
+15. KIỂM USER / TRÙNG ACCOUNT
+==================================================
+
+PHASE=ACCOUNT_VALIDATION
+TYPE=VERIFY
+
+Yêu cầu:
+- Check lại đã lên đủ user hay chưa.
+- Kiểm tra có account bị trùng hay không.
+
+Không in credential.
+Chỉ hiển thị thông tin tối thiểu cần thiết để nhận diện duplicate theo workflow hợp lệ.
+
+Kết quả cần phân biệt:
+USER_COUNT=
+EXPECTED_USER_COUNT=
+DUPLICATE_ACCOUNT=
+VALIDATION=
+
+==================================================
+16. TERMUX:BOOT / RESET VALIDATION
+==================================================
+
+PHASE=BOOT_ACCEPTANCE
+TYPE=MANUAL_GATE + FUNCTION_TEST
+
+Quy trình gốc:
+- reset máy cho tới khi kiểm chứng Termux:Boot chạy đúng.
+
+Không reset lặp vô hạn một cách mù quáng.
+
+Mỗi lần test phải biết:
+- boot/reset đã xảy ra;
+- Termux:Boot có được trigger;
+- process/runtime mục tiêu có start;
+- Agent/runtime có duplicate không;
+- chức năng cần thiết có hoạt động.
+
+Khi đã chứng minh boot workflow PASS thì không tiếp tục reset vô ích.
+
+==================================================
+17. MPROVISION POST
+==================================================
+
+PHASE=MPROVISION_POST
+TYPE=AUTO
+
+Khi các post/manual gate liên quan đã hoàn tất:
+
+mprovision done post
+
+Không chạy trước khi các prerequisite bắt buộc đã PASS.
+
+==================================================
+18. LƯU SHOUKO + DELTA
+==================================================
+
+PHASE=ARCHIVE_FINAL
+TYPE=MANUAL_GATE/VERIFY
+
+Sau khi máy chạy ổn:
+- lưu lại tệp/thư mục Shouko cần thiết theo workflow hiện tại;
+- lưu Delta cần thiết.
+
+Không đưa secret/config nhạy cảm lên repo public.
+
+Nếu backup chứa secret:
+- dùng nguồn backup riêng phù hợp;
+- không in nội dung;
+- chỉ xác minh file tồn tại/backup thành công bằng metadata/check hợp lệ.
+
+==================================================
+19. KẾT THÚC PROVISION MỘT MÁY
+==================================================
+
+Chỉ báo:
+
+DEVICE_PROVISION=SUCCESS
+
+khi tất cả phase bắt buộc cho máy đó đã PASS.
+
+Không dùng:
+- provision script PASS
+hoặc
+- boot PASS
+hoặc
+- backup PASS
+
+để suy ra toàn bộ máy PASS.
+
+Báo tối thiểu:
+
+DEVICE_ID=
+DEVICE_GROUP=
+LAST_PHASE=
+PROVISION=
+BOOT_TEST=
+ACCOUNT_VALIDATION=
+BACKUP_STATUS=
+AOT_READY=
+
+==================================================
+20. ĐỒNG BỘ QUY TRÌNH NHIỀU MÁY
+==================================================
+
+Mục tiêu dài hạn:
+có thể giảm thao tác lặp trên nhiều UGPhone.
+
+Nhưng không broadcast mù quáng toàn bộ workflow.
+
+Phân loại:
+
+CÓ THỂ ƯU TIÊN ĐỒNG BỘ/AUTO:
+- cài package Termux khi interface cho phép;
+- pkg install;
+- tải/chạy provision script;
+- wizard update/start;
+- mprovision command;
+- verification;
+- runtime checks;
+- boot checks;
+- file/hash/config-presence checks;
+- action UI đã được AOT chứng minh ổn định.
+
+CẦN MANUAL GATE HOẶC PER-DEVICE VERIFY:
+- bật root;
+- Play Protect/Google Play setting;
+- login Google/account;
+- cookie;
+- backup data;
+- backup all;
+- Shouko key;
+- Developer Options;
+- layout/freeform/desktop mode khi ROM khác;
+- 1.1.1.1;
+- account-specific steps;
+- secret-specific steps;
+- reset/reboot acceptance.
+
+Một action UI có thể broadcast từ reference sang follower CHỈ khi:
+- app/package đúng;
+- foreground/state đúng;
+- selector hoặc coordinate mapping phù hợp;
+- precondition PASS;
+- follower ACK;
+- postcondition PASS;
+- out-of-sync guard không chặn.
+
+Nếu follower khác UI/state:
+không ép chạy action chỉ để giữ đồng bộ.
+
+==================================================
+21. AOT GROUP CONTROL — BASELINE VÀ TÍCH HỢP
+==================================================
+
+Không phá baseline AOT đã có bằng chứng PASS.
+
+Khi code liên quan chưa đổi:
+- không lặp lại acceptance cũ chỉ để "chắc hơn";
+- không quay lại diagnostic blocker đã đóng nếu không có bằng chứng mới.
+
+Khi phát triển feature tiếp:
+- xác định PRODUCT_GOAL;
+- xác định CURRENT_BLOCKER;
+- đọc repo thật;
+- patch nhỏ nhất;
+- test riêng.
+
+==================================================
+22. QUY TRÌNH ĐÁNH GIÁ FRAMEWORK/ĐỒ CÓ SẴN
+==================================================
+
+Không mặc định:
+- LAMDA thắng;
+- uiautomator2 thắng;
+- raw ADB thắng;
+- Aotscript hiện tại thắng.
+
+Dùng quy trình:
+
+GATE 0 — FREEZE BASELINE
+- giữ nguyên hệ thống đang PASS;
+- không cài framework thử nghiệm lên baseline chỉ vì tò mò.
+
+GATE 1 — ARCHITECTURE FIT AUDIT
+TYPE=READ_ONLY
+
+So sánh các ứng viên thực sự phù hợp, ví dụ:
+- Aotscript hiện tại;
+- raw ADB + Android UiAutomator;
+- uiautomator2;
+- FIRERPA/LAMDA;
+- Appium UiAutomator2 nếu phù hợp;
+- framework Android automation/device-farm khác nếu đáp ứng yêu cầu.
+
+Không nghiên cứu vô hạn.
+Fail hard requirement thì loại sớm.
+
+==================================================
+23. HARD REQUIREMENTS CHO FRAMEWORK
+==================================================
+
+Phải đánh giá:
+
+- TERMUX_ONLY;
+- Android → Android;
+- không bắt buộc PC;
+- reference → nhiều follower;
+- tap;
+- swipe;
+- BACK/HOME;
+- semantic selector/resource-id/text khi cần;
+- coordinate mapping khi cần;
+- khác resolution;
+- foreground/UI state;
+- hierarchy;
+- precondition/fingerprint hoặc cơ chế tương đương;
+- ACK/result;
+- dedupe;
+- out-of-sync protection;
+- cross-network/relay;
+- runtime lifecycle;
+- reconnect/recovery;
+- auto-start khi phù hợp;
+- root/non-root requirement;
+- compatibility Android/UGPhone;
+- performance/latency;
+- security;
+- license;
+- maintainability;
+- rollback/uninstall sạch.
+
+==================================================
+24. HARD-KILL CRITERIA
+==================================================
+
+Nếu mục tiêu là replacement toàn hệ thống:
+
+NEED_PC=YES
+→ loại khỏi replacement TERMUX_ONLY.
+
+ANDROID_HOST=NO
+→ loại.
+
+ANDROID_TO_ANDROID=NO
+→ loại.
+
+MULTI_FOLLOWER=NO và không thể bổ sung hợp lý
+→ loại khỏi replacement.
+
+Không có cách ghép:
+- state validation;
+- ACK;
+- dedupe;
+- out-of-sync guard;
+- relay/cross-network
+
+→ không được coi là replacement toàn hệ thống.
+
+Một framework vẫn có thể được giữ làm ứng viên HYBRID nếu nó chỉ thay tốt một lớp cụ thể.
+
+==================================================
+25. GATE 2 — DISPOSABLE POC
+==================================================
+
+Chỉ POC ứng viên thắng GATE 1.
+
+Ưu tiên:
+- clone;
+- máy phụ;
+- môi trường disposable.
+
+Không dùng m37/m117 baseline trước nếu chưa cần.
+
+POC phải chia phase:
+
+1. install/start;
+2. Termux compatibility;
+3. device connection;
+4. foreground detection;
+5. hierarchy;
+6. selector;
+7. tap;
+8. swipe;
+9. BACK/HOME;
+10. resolution difference;
+11. state/precondition;
+12. ACK/result;
+13. dedupe;
+14. out-of-sync;
+15. cross-network;
+16. reconnect/restart;
+17. long-running lifecycle;
+18. uninstall/rollback.
+
+Không dùng PASS của phase 1 để suy ra phase 18.
+
+==================================================
+26. GATE 3 — BENCHMARK
+==================================================
+
+So framework thắng POC với baseline Aotscript.
+
+Các tiêu chí:
+
+CORRECTNESS
+STABILITY
+LATENCY
+UI_STATE_ACCURACY
+RESOLUTION_INDEPENDENCE
+RECOVERY
+LONG_RUNNING_RUNTIME
+SECURITY
+MAINTENANCE_COST
+SETUP_COMPLEXITY
+FLEET_SCALABILITY
+
+Không thay backend chỉ vì framework có nhiều feature hơn.
+
+==================================================
+27. QUYẾT ĐỊNH KEEP / HYBRID / REPLACE
+==================================================
+
+KEEP:
+- Aotscript hiện tại tốt hơn hoặc framework ngoài không đem lại lợi ích đủ lớn.
+
+HYBRID:
+- framework ngoài tốt hơn ở một lớp cụ thể;
+- chỉ thay lớp đó;
+- giữ relay/ACK/dedupe/state logic đang tốt nếu không cần thay.
+
+REPLACE:
+chỉ được chọn khi runtime evidence chứng minh framework ngoài:
+- đáp ứng toàn bộ hard requirements;
+- ổn định hơn;
+- dễ bảo trì hơn;
+- không tạo dependency không chấp nhận được;
+- migration có rollback rõ;
+- FUNCTION_TEST đầy đủ PASS.
+
+Mặc định không rewrite hệ thống đang PASS chỉ vì tìm được framework mới.
+
+==================================================
+28. SECRET / ACCOUNT / CONFIG
+==================================================
+
+Mọi thứ sau được coi là nhạy cảm:
+- cookie;
+- password;
+- Google credential;
+- Shouko key;
+- API token;
+- Worker secret;
+- agent_report_secret;
+- URL có token/key;
+- config chứa secret.
+
+Không:
+- yêu cầu gửi qua chat;
+- in terminal;
+- in log;
+- đưa vào screenshot;
+- đưa vào diff;
+- commit repo public.
+
+Khi verify chỉ báo:
+EXISTS=YES/NO
+FORMAT_VALID=YES/NO
+REQUIRED_KEYS=YES/NO
+NON_EMPTY=YES/NO
+
+Không báo giá trị.
+
+==================================================
+29. XỬ LÝ LỖI
+==================================================
+
+Khi một bước FAIL:
+
+1. Xác định phase thật sự đang chạy.
+2. Xác định lệnh đã chạy đến đâu.
+3. Xác định file/state đã đổi gì.
+4. Phân loại lỗi.
+5. Không đổ lỗi repo/người dùng nếu chưa có bằng chứng.
+6. Không chạy lại block đã biết lỗi.
+7. Nếu rollback-safe:
+   rollback đúng phần lượt hiện tại.
+8. Diagnostic nhỏ nhất phân biệt nguyên nhân.
+9. Fix nhỏ nhất.
+10. Test lại đúng phase bị lỗi.
+11. Không quay về phase 1 nếu không cần.
+
+==================================================
+30. CÁCH AI HƯỚNG DẪN NGƯỜI DÙNG
+==================================================
+
+Khi tới MANUAL_GATE:
+
+- chỉ hướng dẫn đúng bước hiện tại;
+- giải thích bước đó làm gì;
+- chỉ vị trí/menu;
+- nói rõ chọn gì;
+- nói rõ kết quả hợp lệ;
+- không nhảy 5–10 bước cùng lúc nếu cần người dùng xác nhận;
+- sau khi người dùng gửi ảnh, đọc đúng ảnh và tiếp tục từ đó.
+
+Khi có thể tự làm an toàn bằng Codex/Termux:
+- không đẩy việc sang người dùng một cách không cần thiết.
+
+==================================================
+31. TRẠNG THÁI BÁO CÁO MASTER
+==================================================
+
+Khi đang provision:
+
+PRODUCT_GOAL=
+TARGET_DEVICES=
+CURRENT_DEVICE=
+CURRENT_PHASE=
+PHASE_TYPE=
+LAST_CONFIRMED_PHASE=
+CURRENT_BLOCKER=
+NEXT_REQUIRED_ACTION=
+
+PER_DEVICE_STATUS:
+mXX=...
+mYY=...
+
+Khi có thay đổi repository, vẫn phải báo riêng:
+
+PATCH=
+COMMIT=
+PUSH=
+BUILD_DEPLOY=
+FUNCTION_TEST=
+
+Không suy trạng thái này từ trạng thái khác.
+
+==================================================
+32. QUY TẮC KHI NGƯỜI DÙNG NÓI "LÀM TIẾP"
+==================================================
+
+Không bắt đầu lại workflow.
+
+Phải:
+
+1. đọc CORE;
+2. đọc HANDOFF;
+3. đọc workflow master này;
+4. xác định checkpoint gần nhất;
+5. xác định thiết bị hiện tại;
+6. xác định phase hiện tại;
+7. xác định blocker thật;
+8. tiếp tục đúng bước gần nhất.
+
+Nếu bằng chứng hiện tại đủ:
+không hỏi lại.
+
+Nếu thiếu đúng một thông tin:
+chỉ hỏi đúng thông tin đó.
+
+==================================================
+33. QUY TẮC KHI NGƯỜI DÙNG NÓI "ĐỒNG BỘ HẾT"
+==================================================
+
+Không hiểu thành:
+"broadcast mù tất cả thao tác".
+
+Hiểu là:
+
+- chuẩn hóa workflow;
+- tự động hóa phần deterministic;
+- dùng AOT cho UI action đã được chứng minh;
+- giữ manual gate cho secret/account/risky UI;
+- xác minh từng máy;
+- checkpoint từng phase;
+- retry/rollback đúng máy lỗi;
+- không phá máy đã PASS;
+- có global orchestrator nhưng state vẫn per-device.
+
+Mục tiêu cuối:
+
+MỘT QUY TRÌNH MASTER
+→ NHIỀU THIẾT BỊ
+→ ÍT THAO TÁC TAY NHẤT CÓ THỂ
+→ KHÔNG MẤT KIỂM SOÁT
+→ KHÔNG BỎ GATE
+→ KHÔNG LỘ SECRET
+→ KHÔNG CHẠY LẠI VIỆC ĐÃ PASS
+→ BIẾT CHÍNH XÁC MỖI MÁY ĐANG Ở ĐÂU.
+
+==================================================
+34. NGUYÊN TẮC CUỐI
+==================================================
+
+ĐÚNG
+→ AN TOÀN
+→ TỰ ĐỘNG HÓA
+→ ĐỒNG BỘ
+→ TIỆN
+→ NHANH.
+
+Không đảo thứ tự này.
+
+Tự động hóa không có nghĩa là bỏ xác minh.
+Đồng bộ không có nghĩa là mọi máy phải thực hiện action khi state không phù hợp.
+Một máy PASS không chứng minh máy khác PASS.
+Một command PASS không chứng minh toàn workflow PASS.
+Build PASS không chứng minh FUNCTION_TEST PASS.
+Không phá baseline tốt để thử công nghệ mới.
+Chỉ tích hợp framework ngoài khi có bằng chứng nó giải quyết đúng vấn đề tốt hơn.
+
+==================================================
+35. CODEX CONTEXT / AOT ENTRYPOINT — MỤC TIÊU KIẾN TRÚC
+==================================================
+
+Mục tiêu của phần này:
+- để Codex trên Termux/UGPhone luôn đọc đúng CORE/HANDOFF/WORKFLOW trước khi làm Aotscript;
+- không bắt người dùng tải/copy nhiều file hoặc dán prompt dài trên từng máy;
+- không làm bẩn working tree product chỉ để cập nhật context;
+- không tự pull/sửa product repo trước khi CORE được đọc;
+- giữ một entrypoint ngắn, dễ dùng trên Android;
+- hỗ trợ nhiều thiết bị nhưng state/checkpoint vẫn per-device.
+
+Đây là QUY TRÌNH MỤC TIÊU.
+Không được coi các thành phần sau là đã tồn tại/chạy PASS nếu chưa có bằng chứng thật:
+- branch aotscript-context;
+- launcher aot;
+- context cache;
+- AGENTS router mới;
+- tích hợp vào msetup/provision.
+
+Khi chưa triển khai xong phải báo đúng trạng thái, ví dụ:
+CODEX_CONTEXT_ARCHITECTURE=PLANNED_NOT_VERIFIED
+
+Không dùng phần này để suy ra HEAD/code/runtime hiện tại.
+
+==================================================
+36. PHÂN TÁCH PRODUCT VÀ CONTEXT
+==================================================
+
+Product repository vẫn là:
+REPOSITORY=tinhpr9/Aotscript
+PRODUCT_BRANCH=main
+
+Mục tiêu phân phối context:
+CONTEXT_BRANCH=aotscript-context
+
+main dùng cho product code và các file ổn định thuộc product/repo.
+
+aotscript-context dùng để phân phối context vận hành thay đổi độc lập với product working tree, tối thiểu gồm:
+- AOTSCRIPT_RULES_CORE.txt
+- AOTSCRIPT_HANDOFF_CURRENT.txt
+- AOTSCRIPT_WORKFLOW_MASTER.txt
+- MANIFEST.sha256
+
+AGENTS.md dành cho Codex là router/hướng dẫn, không phải bản sao của toàn bộ CORE/WORKFLOW.
+Nếu AGENTS.md được đặt trong product repo thì phải ngắn, ổn định và chỉ hướng Codex tới context đúng.
+
+Không nhồi toàn bộ CORE/HANDOFF/WORKFLOW vào AGENTS.md chỉ để auto-load.
+
+Không coi AGENTS, HANDOFF hoặc WORKFLOW là nguồn cao hơn CORE.
+
+Thứ tự nguồn vẫn giữ nguyên:
+AOTSCRIPT_RULES_CORE
+→ trạng thái thật hiện tại của repository/hệ thống
+→ AOTSCRIPT_HANDOFF_CURRENT
+→ AOTSCRIPT_WORKFLOW_MASTER
+→ yêu cầu hiện tại.
+
+==================================================
+37. NGUYÊN TẮC CONTEXT BRANCH
+==================================================
+
+Context branch phải:
+- không được checkout đè lên product working tree đang dùng để code;
+- không được dùng để thay thế trạng thái thật của main;
+- không chứa secret;
+- có manifest/checksum để phát hiện file thiếu/hỏng;
+- có commit xác định để mọi máy biết snapshot context đang dùng;
+- được fetch/read bằng Git trong Termux;
+- không được ghi bằng GitHub connector/API.
+
+Khi cập nhật context branch:
+- thực hiện trong Termux;
+- dùng workspace/worktree/temp clone riêng nếu cần để không đụng product working tree;
+- fetch remote branch trước khi sửa;
+- kiểm remote change/xung đột;
+- patch nhỏ nhất;
+- quét secret;
+- stage file cụ thể;
+- commit/push không force;
+- xác minh local/remote commit sau push.
+
+Không được merge context branch vào main chỉ để phân phối context.
+
+Nếu CI/Cloudflare có build/preview trên branch ngoài main:
+- coi đó là trạng thái riêng;
+- không suy ra product main đã deploy;
+- không dùng build context branch làm FUNCTION_TEST product.
+
+==================================================
+38. LAUNCHER DUY NHẤT — aot
+==================================================
+
+Mục tiêu trải nghiệm hằng ngày:
+
+    aot
+
+Một lệnh này là entrypoint chuẩn để làm Aotscript bằng Codex.
+
+Launcher aot PHẢI chỉ làm phần bootstrap/context an toàn trước khi Codex đọc CORE.
+Nó KHÔNG được tự ý patch/pull/commit/push product code.
+
+Trách nhiệm mục tiêu của aot:
+
+1. Xác định REPO_ROOT thật, không hardcode nếu chưa xác minh.
+2. Xác minh repository/origin đúng Aotscript.
+3. Không thay đổi product working tree.
+4. Fetch context branch theo cách không checkout đè product tree.
+5. Xác định CONTEXT_COMMIT thật.
+6. Materialize snapshot context vào cache riêng bằng temp + atomic replace/rename.
+7. Kiểm đủ file bắt buộc.
+8. Kiểm manifest/checksum.
+9. Không in secret/config nhạy cảm.
+10. Xuất/đặt đường dẫn context cho phiên Codex theo cách đã kiểm chứng.
+11. Mở Codex tại REPO_ROOT thật.
+12. Yêu cầu Codex đọc đầy đủ CORE, HANDOFF, WORKFLOW và AGENTS phù hợp trước khi phân tích/sửa.
+13. Sau khi nguồn đã đọc, Codex mới kiểm trạng thái repo/runtime thật theo CORE.
+
+Launcher không được dùng trạng thái HANDOFF để suy ra working tree/runtime hiện tại.
+
+Launcher không được tự chạy git pull product main trước khi CORE được đọc.
+
+==================================================
+39. HÀNH VI MẶC ĐỊNH CỦA aot
+==================================================
+
+Mục tiêu sử dụng tối giản:
+
+    aot
+
+Nếu không có task argument:
+- hiểu là người dùng muốn tiếp tục Aotscript;
+- Codex phải áp dụng quy tắc RESUME hiện có;
+- đọc CORE/HANDOFF/WORKFLOW;
+- xác định PRODUCT_GOAL/CURRENT_BLOCKER/checkpoint;
+- kiểm trạng thái thật khi bước tiếp theo phụ thuộc repo/runtime;
+- tiếp tục đúng bước chưa hoàn thành gần nhất;
+- không chạy lại phase/acceptance đã PASS nếu không có lý do kỹ thuật mới.
+
+Nếu người dùng cung cấp task mới, ví dụ về mặt ý nghĩa:
+
+    aot "<nhiệm vụ mới>"
+
+thì:
+- task người dùng là yêu cầu hiện tại;
+- vẫn phải đọc nguồn bắt buộc trước;
+- nếu task là feature/blocker mới, xác định PRODUCT_GOAL/CURRENT_BLOCKER mới trước patch;
+- không cho task mới bỏ qua CORE.
+
+Cú pháp Codex CLI cụ thể phải được xác minh từ Codex CLI hiện tại trên Termux trước khi implement launcher.
+Không hardcode flag Codex từ tài liệu/phiên cũ nếu chưa kiểm.
+
+==================================================
+40. FAIL-SAFE KHI CONTEXT KHÔNG HỢP LỆ
+==================================================
+
+Mặc định fail closed cho thao tác thay đổi Aotscript.
+
+Nếu một trong các điều sau xảy ra:
+- fetch context fail và không xác minh được context mới nhất;
+- branch context không tồn tại;
+- manifest fail;
+- file CORE/HANDOFF/WORKFLOW thiếu hoặc rỗng;
+- context cache hỏng;
+- context commit không xác định được;
+
+thì không được cho Codex đi thẳng tới patch/commit/push Aotscript bằng trí nhớ cũ.
+
+Báo tối thiểu:
+CONTEXT_FETCH=
+CONTEXT_COMMIT=
+CORE_READY=
+HANDOFF_READY=
+WORKFLOW_READY=
+MANIFEST_VALID=
+CODEX_START=
+CURRENT_BLOCKER=
+NEXT_REQUIRED_ACTION=
+
+Không in nội dung secret.
+
+Nếu sau này có chế độ offline:
+- phải là chế độ riêng, có điều kiện rõ;
+- mặc định không cho write/commit/push khi freshness của context chưa xác minh;
+- không tự fallback im lặng sang context cũ.
+
+==================================================
+41. AGENTS.md — ROUTER CHO CODEX
+==================================================
+
+AGENTS.md không thay CORE.
+
+Mục tiêu của AGENTS.md:
+- nhận diện đây là Aotscript;
+- yêu cầu đọc context bắt buộc trước khi sửa;
+- yêu cầu kiểm repo/runtime thật;
+- nhắc không dùng HANDOFF/WORKFLOW làm HEAD/runtime truth;
+- nhắc rollback/scope/gate/reasoning theo CORE;
+- nếu context chưa sẵn sàng thì DỪNG trước patch.
+
+AGENTS.md không nên:
+- hardcode task hiện tại;
+- hardcode HEAD/line number;
+- chứa secret;
+- chứa bản sao toàn bộ WORKFLOW;
+- chứa runtime state từng máy làm nguồn sự thật.
+
+Nếu repo đã có AGENTS.md:
+- phải đọc bản thật hiện tại trước khi sửa;
+- không ghi đè mù;
+- merge/chỉnh nhỏ nhất theo CORE nếu cần.
+
+==================================================
+42. BOOTSTRAP LẦN ĐẦU
+==================================================
+
+PHASE=CODEX_CONTEXT_BOOTSTRAP
+TYPE=AUTO + VERIFY, có MANUAL_GATE chỉ khi cần chuyển file/approval thực sự
+
+Mục tiêu:
+đưa bộ nguồn bắt buộc hiện tại tới một máy Termux tin cậy để Codex có thể đọc trước lần triển khai đầu tiên.
+
+Trong giai đoạn chuyển tiếp, nguồn Project/ChatGPT hiện có vẫn là nguồn đang áp dụng cho ChatGPT theo Project Instructions.
+Không tự tuyên bố context branch là canonical cho ChatGPT trước khi migration đó được người dùng xác nhận và Project Instructions được cập nhật phù hợp.
+
+Bootstrap có thể dùng một bundle human-readable/ZIP nếu cần, nhưng:
+- chỉ dùng một lần để seed;
+- kiểm SHA-256 trước khi dùng;
+- không chứa secret;
+- không base64/payload mã hóa;
+- không dùng ZIP-per-device làm workflow lâu dài.
+
+Trước khi Codex tạo bất kỳ thay đổi repo nào sau bootstrap:
+- đọc đầy đủ CORE local;
+- đọc HANDOFF local;
+- đọc WORKFLOW local khi liên quan;
+- đọc AGENTS nếu tồn tại;
+- xác minh repo thật theo CORE.
+
+Bootstrap PASS chỉ chứng minh context local đã sẵn sàng.
+Không suy ra launcher/context branch/msetup integration đã PASS.
+
+==================================================
+43. TRIỂN KHAI CONTEXT BRANCH
+==================================================
+
+PHASE=CODEX_CONTEXT_BRANCH_SETUP
+TYPE=AUTO + VERIFY
+
+Chỉ chạy sau CODEX_CONTEXT_BOOTSTRAP PASS.
+
+Codex phải:
+1. xác minh repo thật;
+2. xác minh origin/branch/HEAD/working tree;
+3. dùng workspace riêng nếu product working tree có thay đổi hoặc để cô lập context branch;
+4. kiểm xem remote đã có aotscript-context chưa;
+5. không ghi đè branch có sẵn nếu chưa đọc trạng thái thật;
+6. tạo/cập nhật context branch bằng file nguồn đã được xác nhận;
+7. tạo MANIFEST.sha256 không chứa secret;
+8. verify file/checksum;
+9. commit/push trong Termux nếu đúng scope;
+10. fetch lại và đối chiếu remote commit.
+
+Báo riêng:
+CONTEXT_PATCH=
+CONTEXT_COMMIT=
+CONTEXT_PUSH=
+CONTEXT_REMOTE_MATCH=
+PRODUCT_MAIN_CHANGED=
+
+PRODUCT_MAIN_CHANGED phải được chứng minh riêng, không suy đoán.
+
+==================================================
+44. TRIỂN KHAI LAUNCHER aot
+==================================================
+
+PHASE=AOT_LAUNCHER_SETUP
+TYPE=AUTO + VERIFY
+
+Chỉ thực hiện sau khi context branch có bằng chứng đọc được.
+
+Launcher phải được test bằng input đại diện trước khi coi PASS.
+Tối thiểu phải test:
+- repo đúng;
+- repo sai;
+- context branch tồn tại;
+- context branch thiếu;
+- manifest PASS;
+- manifest FAIL;
+- cache mới;
+- cache đang tồn tại;
+- network/fetch fail;
+- không làm thay đổi product working tree;
+- không in secret;
+- Codex được mở tại đúng REPO_ROOT;
+- đường dẫn context được truyền đúng;
+- task argument có/không có hoạt động đúng theo interface Codex hiện tại.
+
+Checker của launcher cũng phải được test; checker crash không được quy lỗi repo.
+
+AOT_LAUNCHER=PASS chỉ khi có postcondition thực tế.
+
+==================================================
+45. TÍCH HỢP VÀO msetup / PROVISION
+==================================================
+
+PHASE=AOT_LAUNCHER_MSETUP_INTEGRATION
+TYPE=AUTO + VERIFY
+
+Chỉ tích hợp sau khi launcher độc lập đã PASS.
+
+Mục tiêu:
+máy mới sau provision không cần người dùng tự copy launcher/context bằng tay.
+
+msetup/provision có thể cài launcher aot nếu:
+- code msetup/provision hiện tại đã được đọc thật;
+- patch đúng scope;
+- không phá flow đang PASS;
+- syntax/gate PASS;
+- rollback rõ;
+- test trên máy phù hợp PASS.
+
+Không rewrite phần provision đang PASS chỉ để làm kiến trúc đẹp hơn.
+
+Không cài thử trên toàn fleet cùng lúc.
+
+==================================================
+46. ROLLOUT NHIỀU THIẾT BỊ
+==================================================
+
+PHASE=AOT_LAUNCHER_FLEET_ROLLOUT
+TYPE=AUTO + PER_DEVICE_VERIFY
+
+Mỗi máy phải có trạng thái riêng:
+
+DEVICE=mXX
+AOT_COMMAND_EXISTS=
+CONTEXT_FETCH=
+CONTEXT_COMMIT=
+MANIFEST_VALID=
+CODEX_REPO_ROOT=
+RESULT=
+
+Một máy PASS không chứng minh máy khác PASS.
+
+Rollout ưu tiên:
+1. máy POC/đã chọn;
+2. verify;
+3. máy tiếp theo;
+4. không broadcast mù nếu có khác biệt Termux/auth/storage/repo state.
+
+Follower FAIL:
+- không phá máy đã PASS;
+- diagnostic đúng follower;
+- retry/fix đúng phase lỗi;
+- không chạy lại toàn fleet nếu không cần.
+
+==================================================
+47. CẬP NHẬT CORE / HANDOFF / WORKFLOW SAU MIGRATION
+==================================================
+
+Sau khi context branch đã được xác nhận là kênh phân phối cho Codex:
+
+CORE:
+- chỉ thay khi luật kỹ thuật dài hạn thật sự thay đổi;
+- review kỹ;
+- không dùng CORE để lưu checkpoint tạm.
+
+HANDOFF:
+- cập nhật khi PRODUCT_GOAL/CURRENT_BLOCKER/checkpoint/bằng chứng bàn giao thay đổi đáng kể;
+- không lưu HEAD/runtime như nguồn sự thật;
+- không in secret.
+
+WORKFLOW:
+- cập nhật khi quy trình vận hành chuẩn thay đổi;
+- không dùng để lưu transient runtime state.
+
+Mỗi cập nhật context phải:
+- fetch remote branch;
+- đọc bản hiện tại;
+- patch đúng file;
+- quét secret;
+- cập nhật manifest;
+- commit/push trong Termux;
+- verify remote commit.
+
+Không bắt mọi cloud phone phải được chỉnh tay sau mỗi cập nhật.
+Lần chạy aot tiếp theo phải lấy context mới và ghi CONTEXT_COMMIT đang dùng.
+
+==================================================
+48. CHATGPT PROJECT SOURCE TRONG GIAI ĐOẠN CHUYỂN TIẾP
+==================================================
+
+Không tự xóa/giảm vai trò các Project Sources hiện tại.
+
+Cho tới khi người dùng chủ động xác nhận migration nguồn:
+- ChatGPT vẫn đọc các file Project Source theo Project Instructions hiện hành;
+- context branch là kênh phân phối cho Codex/Termux;
+- nếu hai nơi mâu thuẫn, không tự đoán nguồn mới hơn chỉ dựa vào timestamp;
+- phải tuân thứ tự nguồn mà Project Instructions/CORE hiện hành quy định.
+
+Nếu sau này muốn context branch trở thành canonical source chung cho cả ChatGPT và Codex:
+- đó là thay đổi kiến trúc nguồn riêng;
+- phải cập nhật Project Instructions có chủ đích;
+- phải verify ChatGPT thật sự đọc được nguồn mới;
+- chỉ sau đó mới loại workflow copy thủ công cũ.
+
+==================================================
+49. QUAN HỆ VỚI AOT GROUP CONTROL VÀ FRAMEWORK POC
+==================================================
+
+CODEX CONTEXT / aot launcher là hạ tầng hỗ trợ.
+Không biến việc tối ưu launcher/context thành PRODUCT_GOAL chính nếu không chặn AOT Group Control.
+
+Nếu baseline AOT đã PASS:
+- giữ baseline;
+- không chạy lại acceptance chỉ vì launcher/context thay đổi;
+- chỉ test AOT lại khi code/runtime liên quan AOT thay đổi hoặc có bằng chứng mâu thuẫn.
+
+Framework/backend POC vẫn tuân Gate 0/1/2/3 hiện có.
+Launcher/context không được dùng làm lý do cài framework thử nghiệm lên máy baseline trái workflow.
+
+==================================================
+50. REPORT CHO CODEX CONTEXT WORKFLOW
+==================================================
+
+Khi làm workflow này, báo tối thiểu:
+
+PRODUCT_GOAL=
+TARGET_DEVICES=
+CURRENT_DEVICE=
+CURRENT_PHASE=
+PHASE_TYPE=
+LAST_CONFIRMED_PHASE=
+CURRENT_BLOCKER=
+NEXT_REQUIRED_ACTION=
+
+CONTEXT_BRANCH=
+CONTEXT_COMMIT=
+CONTEXT_FETCH=
+CORE_READY=
+HANDOFF_READY=
+WORKFLOW_READY=
+MANIFEST_VALID=
+AOT_LAUNCHER=
+CODEX_START=
+
+Nếu có thay đổi product repo vẫn báo riêng:
+PATCH=
+COMMIT=
+PUSH=
+BUILD_DEPLOY=
+FUNCTION_TEST=
+
+Không suy trạng thái này từ trạng thái khác.
+
+==================================================
+51. ACCEPTANCE CHO KIẾN TRÚC aot
+==================================================
+
+Chỉ coi workflow mới hoàn tất khi có bằng chứng tối thiểu:
+
+1. Một máy bootstrap đọc được đầy đủ context.
+2. Context branch remote tồn tại và snapshot verify PASS.
+3. Launcher aot lấy đúng context commit.
+4. Launcher không làm thay đổi product working tree trước khi Codex đọc CORE.
+5. Codex mở đúng Aotscript repo.
+6. Codex đọc CORE/HANDOFF/WORKFLOW trước technical action.
+7. Plain/misuse path có fail-safe phù hợp nếu context thiếu.
+8. Một lần context update được máy đã setup nhận tự động ở lần aot tiếp theo.
+9. Rollout sang ít nhất một máy khác được verify riêng nếu workflow nhiều máy cần dùng.
+10. msetup integration chỉ được coi PASS sau test riêng của msetup.
+
+Không dùng PASS của mục 1 để suy ra mục 10.
+
+==================================================
+52. TRẢI NGHIỆM NGƯỜI DÙNG MỤC TIÊU
+==================================================
+
+Sau khi toàn bộ workflow đã được triển khai và VERIFY PASS:
+
+Máy mới:
+    msetup <device_id> <MARMOT|NOVA>
+
+Làm Aotscript hằng ngày:
+    aot
+
+Mục tiêu là không còn phải:
+- tải ZIP context cho từng máy;
+- copy 3/4 file bằng tay mỗi lần;
+- dán prompt luật dài mỗi phiên;
+- nhớ checkpoint đã có trong HANDOFF/WORKFLOW;
+- pull product code mù trước khi đọc CORE.
+
+Không tự mở Codex khi Termux boot chỉ để giảm thêm một thao tác.
+Người dùng vẫn chủ động gọi aot để bắt đầu agent.
+
+==================================================
+53. NGUYÊN TẮC CUỐI CHO CODEX CONTEXT
+==================================================
+
+ĐÚNG
+→ AN TOÀN
+→ TỰ ĐỘNG HÓA
+→ ĐỒNG BỘ
+→ TIỆN
+→ NHANH.
+
+Một lệnh aot chỉ là tối ưu giao diện sử dụng.
+Nó không được phép bỏ:
+- nguồn bắt buộc;
+- repo preflight;
+- per-device state;
+- MANUAL_GATE;
+- rollback;
+- secret protection;
+- test/gate;
+- bằng chứng riêng cho PATCH/COMMIT/PUSH/BUILD_DEPLOY/FUNCTION_TEST.
+
+Nếu kiến trúc thực tế hoặc Codex CLI thay đổi:
+- kiểm trạng thái/tài liệu hiện tại;
+- giữ mục tiêu và invariant ở phần này;
+- không bám implementation cũ chỉ vì nó từng đúng.
