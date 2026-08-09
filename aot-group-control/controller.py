@@ -78,6 +78,7 @@ class UiNode:
     enabled: bool
     scrollable: bool
     password: bool
+    selected: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
@@ -90,6 +91,7 @@ class UiNode:
             "enabled": self.enabled,
             "scrollable": self.scrollable,
             "password": self.password,
+            "selected": self.selected,
         }
 
 
@@ -392,9 +394,14 @@ def activity_top_to_ui_xml(
 
         parts = body.split()
         flags = parts[1] if len(parts) > 1 else ""
+        private_flags = parts[2] if len(parts) > 2 else ""
         visible = len(flags) >= 1 and flags[0] == "V"
         enabled = visible and len(flags) >= 3 and flags[2] == "E"
         clickable = len(flags) >= 7 and flags[6] == "C"
+        selected = (
+            len(private_flags) >= 3
+            and private_flags[2] == "S"
+        )
         class_name = match.group("class")
         scrollable = (
             (len(flags) >= 6 and flags[4] == "H")
@@ -437,6 +444,7 @@ def activity_top_to_ui_xml(
                 "enabled": "true" if enabled else "false",
                 "scrollable": "true" if scrollable else "false",
                 "password": "false",
+                "selected": "true" if selected else "false",
                 "bounds": (
                     f"[{abs_left},{abs_top}]"
                     f"[{abs_right},{abs_bottom}]"
@@ -508,6 +516,7 @@ def parse_ui_xml(xml_text: str) -> list[UiNode]:
                     enabled=_bool_attr(child.attrib.get("enabled")),
                     scrollable=_bool_attr(child.attrib.get("scrollable")),
                     password=_bool_attr(child.attrib.get("password")),
+                    selected=_bool_attr(child.attrib.get("selected")),
                 )
             )
             walk(child, index)
@@ -516,7 +525,7 @@ def parse_ui_xml(xml_text: str) -> list[UiNode]:
     return nodes
 
 
-def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
+def _stable_ui_candidates(nodes: list[UiNode]) -> list[UiNode]:
     by_index = {node.index: node for node in nodes}
 
     def has_scrollable_ancestor(node: UiNode) -> bool:
@@ -532,7 +541,7 @@ def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
             parent = ancestor.parent
         return False
 
-    candidates = [
+    return [
         node
         for node in nodes
         if (
@@ -541,12 +550,10 @@ def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
             and not has_scrollable_ancestor(node)
         )
     ]
-    actionable = [
-        node
-        for node in candidates
-        if node.clickable or node.scrollable
-    ]
-    pool = actionable or candidates
+
+
+def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
+    pool = _stable_ui_candidates(nodes)
 
     counts: dict[str, int] = {}
     for node in pool:
@@ -561,7 +568,7 @@ def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
                 (
                     node.resource_id,
                     node.class_name,
-                    "1" if node.clickable else "0",
+                    "1" if node.selected else "0",
                     "1" if node.scrollable else "0",
                 )
             )
@@ -572,7 +579,7 @@ def ui_fingerprint(package: str, nodes: list[UiNode]) -> str:
             "|".join(
                 (
                     node.class_name,
-                    "1" if node.clickable else "0",
+                    "1" if node.selected else "0",
                     "1" if node.scrollable else "0",
                 )
             )
@@ -594,12 +601,13 @@ def interaction_layout_signature(
     if width <= 0 or height <= 0:
         raise AotControllerError("invalid interaction layout size")
 
+    candidates = _stable_ui_candidates(nodes)
     resource_counts: dict[str, int] = {}
-    for node in nodes:
-        if node.resource_id:
-            resource_counts[node.resource_id] = (
-                resource_counts.get(node.resource_id, 0) + 1
-            )
+    for node in candidates:
+        resource_counts[node.resource_id] = (
+            resource_counts.get(node.resource_id, 0) + 1
+        )
+    candidate_indexes = {node.index for node in candidates}
 
     def normalized(value: int, extent: int) -> int:
         return min(
@@ -613,7 +621,6 @@ def interaction_layout_signature(
         if (
             not node.enabled
             or node.bounds.area <= 0
-            or not (node.clickable or node.scrollable)
         ):
             continue
         geometry = ",".join(
@@ -627,19 +634,18 @@ def interaction_layout_signature(
         )
         entry = "|".join(
             (
-                node.resource_id,
                 node.class_name,
-                "1" if node.clickable else "0",
+                "1" if node.selected else "0",
                 "1" if node.scrollable else "0",
                 geometry,
             )
         )
         fallback.append(entry)
         if (
-            node.resource_id
+            node.index in candidate_indexes
             and resource_counts.get(node.resource_id) == 1
         ):
-            stable.append(entry)
+            stable.append(node.resource_id + "|" + entry)
 
     pool = stable or fallback or ["EMPTY"]
     orientation = "landscape" if width >= height else "portrait"
@@ -1074,6 +1080,7 @@ def main(argv: list[str] | None = None) -> int:
                     enabled=item["enabled"],
                     scrollable=item["scrollable"],
                     password=item["password"],
+                    selected=item.get("selected", False),
                 )
                 for item in snap["nodes"]
             ]

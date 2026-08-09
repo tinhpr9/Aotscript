@@ -51,11 +51,53 @@ fingerprint_a = module.ui_fingerprint("pkg", nodes)
 fingerprint_b = module.ui_fingerprint("pkg", list(reversed(nodes)))
 assert fingerprint_a == fingerprint_b
 
-# Fingerprint must distinguish navigation selection state.
+# Device-specific dumpsys clickability metadata must not change canonical
+# screen or interaction-layout identity when semantic structure is equal.
+metadata_variant_nodes = module.parse_ui_xml(xml)
+for node in metadata_variant_nodes:
+    node.clickable = not node.clickable
+assert (
+    module.ui_fingerprint("pkg", metadata_variant_nodes)
+    == fingerprint_a
+)
+assert (
+    module.interaction_layout_signature(
+        "pkg",
+        metadata_variant_nodes,
+        1000,
+        2000,
+        ime_visible=False,
+    )
+    == module.interaction_layout_signature(
+        "pkg",
+        nodes,
+        1000,
+        2000,
+        ime_visible=False,
+    )
+)
+
+# Canonical state must still distinguish navigation selection state.
 state_nodes = module.parse_ui_xml(xml)
-state_nodes[1].clickable = False
+state_nodes[1].selected = True
 fingerprint_state = module.ui_fingerprint("pkg", state_nodes)
 assert fingerprint_state != fingerprint_a
+assert (
+    module.interaction_layout_signature(
+        "pkg",
+        state_nodes,
+        1000,
+        2000,
+        ime_visible=False,
+    )
+    != module.interaction_layout_signature(
+        "pkg",
+        nodes,
+        1000,
+        2000,
+        ime_visible=False,
+    )
+)
 
 # Dynamic children inside a scrollable container must not make the screen
 # fingerprint flap while the stable app chrome is unchanged.
@@ -250,7 +292,7 @@ TASK org.swiftapps.swiftbackup
     View Hierarchy:
       DecorView@abc[MainActivity]
         android.widget.FrameLayout{aaa V.E...... ........ 10,20-710,1260 #1020002 android:id/content}
-          android.widget.Button{bbb V.E...C.. ........ 100,1000-300,1200 #7f010001 app:id/nav_account}
+          android.widget.Button{bbb V.E...C.. ..S..... 100,1000-300,1200 #7f010001 app:id/nav_account}
           android.widget.Button{ccc V.E...C.. ........ 300,1000-500,1200 #7f010002 app:id/nav_home}
     Looper (main, tid 1)
 """
@@ -263,6 +305,7 @@ activity_account = module._unique_resource_id(
 assert activity_account.bounds.as_list() == [110, 1020, 310, 1220]
 assert activity_account.clickable is True
 assert activity_account.enabled is True
+assert activity_account.selected is True
 activity_content = module._unique_resource_id(
     activity_nodes,
     "android:id/content",
@@ -425,6 +468,7 @@ def scaled_copy(source_nodes, factor):
             enabled=node.enabled,
             scrollable=node.scrollable,
             password=node.password,
+            selected=node.selected,
         )
         for node in source_nodes
     ]
