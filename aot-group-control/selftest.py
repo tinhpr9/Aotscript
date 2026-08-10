@@ -26,12 +26,30 @@ with mock.patch.object(module.os, "geteuid", return_value=0):
         "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id",
     ]
 
-with mock.patch.object(module.os, "geteuid", return_value=2000):
+with (
+    mock.patch.object(module.os, "geteuid", return_value=2000),
+    mock.patch.object(
+        module.shutil,
+        "which",
+        return_value="/native/termux/su",
+    ),
+):
     assert module._root_command_argv("id") == [
-        "/data/data/com.termux/files/usr/bin/su",
+        "/native/termux/su",
         "-c",
         "PATH=/system/bin:/system/xbin:/vendor/bin; export PATH; id",
     ]
+
+with (
+    mock.patch.object(module.os, "geteuid", return_value=2000),
+    mock.patch.object(module.shutil, "which", return_value=None),
+):
+    try:
+        module._root_command_argv("id")
+    except module.AotControllerError as exc:
+        assert str(exc) == "native su executable unavailable"
+    else:
+        raise AssertionError("missing native su executable was accepted")
 
 xml = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation='0'>

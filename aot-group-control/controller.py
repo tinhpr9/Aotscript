@@ -8,6 +8,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -22,7 +23,6 @@ DUMPSYS = "/system/bin/dumpsys"
 WM = "/system/bin/wm"
 ANDROID_ROOT_PATH = "/system/bin:/system/xbin:/vendor/bin"
 ANDROID_SH = "/system/bin/sh"
-TERMUX_SU = "/data/data/com.termux/files/usr/bin/su"
 DEVICE_ID_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/device_id.txt"
 )
@@ -119,6 +119,13 @@ def _root_shell_command(command: str) -> str:
     )
 
 
+def _native_su_executable() -> str:
+    executable = shutil.which("su")
+    if not executable or not os.path.isabs(executable):
+        raise AotControllerError("native su executable unavailable")
+    return executable
+
+
 def _root_command_argv(command: str) -> list[str]:
     root_command = _root_shell_command(command)
     if os.geteuid() == 0:
@@ -128,7 +135,7 @@ def _root_command_argv(command: str) -> list[str]:
             root_command,
         ]
     return [
-        TERMUX_SU,
+        _native_su_executable(),
         "-c",
         root_command,
     ]
