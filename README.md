@@ -1,17 +1,16 @@
-# Aotscript — setup một lệnh trong Termux
+# Aotscript — setup bền vững trong Termux
 
-Điều kiện duy nhất: **Termux đã được cài và mở**. Mỗi máy dán cùng một lệnh dưới đây, sau đó nhập Device ID (ví dụ `m88`) và nhóm `NOVA` hoặc `MARMOT` khi được hỏi. Nếu Termux đóng hoặc máy reboot, chạy lại đúng câu lệnh để tiếp tục từ state đã lưu; provision và backup đã xong sẽ không chạy lại.
+Điều kiện ban đầu: Termux đã được cài và mở. Bootstrap đã được GPT kiểm tra chỉ cần chạy một lần; nó cài launcher local vào `$PREFIX/bin/aotsetup`.
 
-```sh
-pkg install -y curl && AOT_SETUP_TMP="$(mktemp)" && curl -fsSL --retry 3 --connect-timeout 15 "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/setup.sh?t=$(date +%s)" -o "$AOT_SETUP_TMP" && bash -n "$AOT_SETUP_TMP" && bash "$AOT_SETUP_TMP"; AOT_SETUP_RC=$?; rm -f "$AOT_SETUP_TMP"; [ "$AOT_SETUP_RC" -eq 0 ]
-```
+Sau lần đầu:
 
-Các checkpoint giao diện vẫn bắt buộc làm tay và được wizard/notification nhắc bằng nút **MỞ LẠI / ĐÃ XONG**:
+- Chạy `aotsetup` để tiếp tục đúng checkpoint, không tải lại `setup.sh`.
+- Chạy `aotsetup update` chỉ khi muốn chủ động lấy launcher mới từ nhánh `main`.
+- Máy mới hỏi Device ID và nhóm `NOVA`/`MARMOT` một lần. Máy clone tự đối chiếu setup-driver, mprovision và Shouko; state mâu thuẫn hoặc JSON hỏng sẽ dừng trước mutation.
+- Migration clone lưu state nguồn cùng manifest SHA-256 trong `$HOME/.local/state/aotscript/foreign-state/`, không replay provision, backup hoặc restore đã hoàn tất.
 
-- Tắt Play Protect, cập nhật Google Play; cài Termux:API và Termux:Boot từ F-Droid, rồi mở Termux:Boot một lần.
-- Google config/import/login khi quy trình yêu cầu; Swift Backup app kèm label/data và các app còn lại không data.
-- Developer Options: app trên bộ nhớ ngoài, resize, 700dp, freeform và desktop mode; cập nhật keyboard, chuẩn bị Delta/Shouko.
-- Toolcheck, cookie setup/check/login, auto-exec, key Shouko, 1.1.1.1/WARP, đủ user và không trùng account.
-- Ghi chú `97598239454123, kêu AI chỉnh link` vẫn là cảnh báo thủ công vì chưa xác định chính xác file và định dạng cần sửa.
+Whitelist phân loại identity chỉ gồm `$STATE_BASE/setup-driver/device_id`, `$STATE_BASE/setup-driver/device_group`, `$STATE_BASE/mprovision.json`, `Shouko/device_id.txt` và `Shouko/device_group.txt`. `agent_state.json` và provision reports là state phụ thuộc identity nên chỉ được archive/reset trong migration; `agent_config.json`, cookie, Delta, auto-exec, key và dữ liệu ứng dụng không thuộc whitelist và không bị sửa.
 
-Setup không chạy AOT Group Control, không kiểm tra/hướng dẫn Root, không xóa dữ liệu và không reset máy. `mprovision done pre` tự kiểm tra rclone; `done post` tự chạy UI post, audit, backup cuối và publish nên không cần gọi các bước đó riêng.
+Checkpoint giao diện vẫn làm tay qua wizard/notification **MỞ LẠI / ĐÃ XONG**: Play Protect và Google Play; Termux:API/Boot từ F-Droid; Google login khi cần; Swift Backup; Developer Options 700dp/freeform/desktop; keyboard và Delta/Shouko; toolcheck, cookie, auto-exec, key Shouko, WARP và kiểm tra user/account.
+
+Ghi chú `97598239454123, kêu AI chỉnh link` vẫn chỉ là cảnh báo thủ công cho đến khi xác định đúng file/field. Setup không kích hoạt AOT Group Control, không hiển thị checkpoint Root, không xóa dữ liệu ứng dụng và không reset máy.

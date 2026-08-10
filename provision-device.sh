@@ -193,8 +193,10 @@ set -u
 PYTHON="/data/data/com.termux/files/usr/bin/python"
 CURL="/data/data/com.termux/files/usr/bin/curl"
 BASH="/data/data/com.termux/files/usr/bin/bash"
+SHA256SUM="/data/data/com.termux/files/usr/bin/sha256sum"
 STATE_DIR="${MPROVISION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/aotscript}"
 STATE="${AOTSCRIPT_STATE_FILE:-$STATE_DIR/mprovision.json}"
+CACHE_DIR="$STATE_DIR/setup-driver"
 REF="${AOTSCRIPT_PROVISION_REF:-}"
 
 if [ -z "$REF" ] && [ -s "$STATE" ]; then
@@ -225,6 +227,19 @@ PY_MPROVISION_WRAPPER_REF
 fi
 
 [[ "$REF" =~ ^(main|[0-9a-f]{40})$ ]] || REF="main"
+
+CACHE="$CACHE_DIR/provision-device-$REF.sh"
+CACHE_SHA_FILE="$CACHE.sha256"
+CACHE_SHA="$(cat "$CACHE_SHA_FILE" 2>/dev/null || true)"
+
+if [[ "$REF" =~ ^[0-9a-f]{40}$ ]] &&
+   [[ "$CACHE_SHA" =~ ^[0-9a-f]{64}$ ]] &&
+   [ -s "$CACHE" ] &&
+   [ "$($SHA256SUM "$CACHE" | awk 'NR == 1 {print $1}')" = "$CACHE_SHA" ] &&
+   "$BASH" -n "$CACHE"; then
+  AOTSCRIPT_PROVISION_REF="$REF" \
+    exec "$BASH" "$CACHE" "$@"
+fi
 
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT INT TERM
@@ -1599,7 +1614,6 @@ show_manual_pre() {
   cat <<'__MP_MANUAL_PRE__'
 
 ========== THỦ CÔNG 1 ==========
-[ ] Bật root trước khi bắt đầu; mprovision sẽ tự kiểm tra root.
 [AUTO] Google Login Assistant ưu tiên root bootstrap private; rclone chỉ là fallback sau khi Termux đã có cấu hình.
 [ ] Kiểm tra Play Protect theo quy trình vận hành.
 [ ] Swift Backup: backup Termux kèm data.
