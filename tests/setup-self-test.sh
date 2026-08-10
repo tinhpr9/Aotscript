@@ -53,6 +53,7 @@ run_setup() {
   XDG_STATE_HOME="$root/state" \
   PREFIX="$root/prefix" \
   AOTSCRIPT_SETUP_TEST_MODE=1 \
+  AOTSCRIPT_SETUP_INPUT_MODE=env \
   AOTSCRIPT_SETUP_STORAGE_ROOT="$root/storage" \
   AOTSCRIPT_SETUP_HOST_ID="$host" \
     "$@"
@@ -245,6 +246,9 @@ grep -Fq 'CACHE_DIR="$STATE_DIR/setup-driver"' "$PROVISION" || fail provision-ca
 if grep -Fq 'Bật root trước khi bắt đầu' "$PROVISION"; then
   fail root-checkpoint-visible
 fi
+timeout 180 env AOTSCRIPT_SETUP_UNDER_TEST="$SETUP" \
+  python "$ROOT/tests/setup-terminal-lock-test.py" ||
+  fail terminal-lock-regressions
 
 printf 'AOTSETUP_FRESH_INSTALL=PASS\n'
 printf 'AOTSETUP_LOCAL_LAUNCHER=PASS\n'

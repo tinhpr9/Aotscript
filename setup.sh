@@ -27,6 +27,12 @@ LOCK_DIR="$SETUP_STATE_DIR/setup.lock"
 MIGRATION_JOURNAL="$SETUP_STATE_DIR/clone-migration.json"
 CURRENT_STEP="startup"
 LOCK_HELD=0
+LOCK_START_TIME=""
+LOCK_SCRIPT_PATH=""
+TERMINAL_FD=""
+TERMINAL_OPEN=0
+TERMINAL_SAVED_STATE=""
+PROMPT_RESULT=""
 SELECTED_DEVICE_ID=""
 SELECTED_DEVICE_GROUP=""
 
@@ -110,7 +116,7 @@ update_local_launcher() {
   CURRENT_STEP="update-local-launcher"
   if ! command -v curl >/dev/null 2>&1; then
     command -v pkg >/dev/null 2>&1 || die "Thiếu curl và pkg."
-    pkg install -y curl || die "Không cài được curl cho update."
+    pkg install -y curl </dev/null || die "Không cài được curl cho update."
     hash -r
   fi
   stage="$(mktemp "$(dirname "$LAUNCHER")/.aotsetup.update.XXXXXX")" || die "Không tạo được file update tạm."
@@ -122,7 +128,7 @@ update_local_launcher() {
       die "Không copy được update fixture."
     }
   else
-    curl -fsSL --retry 3 --connect-timeout 15 \
+    curl -fsSL --retry 3 --connect-timeout 15 </dev/null \
       "$MAIN_SETUP_URL?t=$(date +%s)" -o "$stage" || {
         rm -f "$stage"
         die "Không tải được setup.sh mới từ main."
@@ -141,35 +147,205 @@ update_local_launcher() {
   emit OK "aotsetup đã update từ main; lần chạy sau dùng bản local mới."
 }
 
-release_lock() {
-  local owner=""
+process_start_time() {
+  local pid="$1"
+  [ -r "/proc/$pid/stat" ] || return 1
+  awk '{print $22}' "/proc/$pid/stat" 2>/dev/null
+}
+
+process_uid() {
+  local pid="$1"
+  [ -r "/proc/$pid/status" ] || return 1
+  awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null
+}
+
+process_is_running() {
+  local pid="$1" state
+  kill -0 "$pid" 2>/dev/null || return 1
+  state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)"
+  [ -n "$state" ] && [ "$state" != Z ]
+}
+
+lock_read_field() {
+  local field="$1"
+  [ -s "$LOCK_DIR/$field" ] || return 0
+  tr -d '\r\n' < "$LOCK_DIR/$field"
+}
+
+lock_write_field() {
+  local field="$1" value="$2" tmp
+  tmp="$LOCK_DIR/.$field.tmp.$$"
+  printf '%s\n' "$value" > "$tmp"
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$LOCK_DIR/$field"
+}
+
+lock_remove_stale() {
+  rm -f \
+    "$LOCK_DIR/pid" "$LOCK_DIR/start_time" "$LOCK_DIR/state" \
+    "$LOCK_DIR/uid" "$LOCK_DIR/state_dir" "$LOCK_DIR/script_path" \
+    "$LOCK_DIR/identity" "$LOCK_DIR"/.*.tmp.* 2>/dev/null || true
+  rmdir "$LOCK_DIR" 2>/dev/null || die "Không dọn được lock cũ an toàn."
+}
+
+process_matches_setup_owner() {
+  local pid="$1" expected_script="$2" expected_state_dir="$3"
+  local proc_uid cmdline proc_home="" proc_xdg="" proc_state_dir=""
+  [ -r "/proc/$pid/status" ] && [ -r "/proc/$pid/cmdline" ] &&
+    [ -r "/proc/$pid/environ" ] || return 1
+  proc_uid="$(process_uid "$pid" 2>/dev/null || true)"
+  [ "$proc_uid" = "$(process_uid "$$" 2>/dev/null || true)" ] || return 1
+  cmdline="$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  [ -n "$cmdline" ] || return 1
+  if [ -n "$expected_script" ]; then
+    printf '%s\n' "$cmdline" | grep -Fx -- "$expected_script" >/dev/null || return 1
+  else
+    printf '%s\n' "$cmdline" |
+      grep -E '(^|/)(aotsetup|setup[.]sh)$' >/dev/null || return 1
+  fi
+  proc_home="$(
+    tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null |
+      sed -n 's/^HOME=//p' | head -n 1
+  )"
+  proc_xdg="$(
+    tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null |
+      sed -n 's/^XDG_STATE_HOME=//p' | head -n 1
+  )"
+  if [ -n "$proc_xdg" ]; then
+    proc_state_dir="$proc_xdg/aotscript/setup-driver"
+  elif [ -n "$proc_home" ]; then
+    proc_state_dir="$proc_home/.local/state/aotscript/setup-driver"
+  fi
+  [ "$proc_state_dir" = "$expected_state_dir" ]
+}
+
+lock_set_state() {
+  local state="$1" owner start
   [ "$LOCK_HELD" = 1 ] || return 0
-  owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
-  if [ "$owner" = "$$" ]; then
-    rm -f "$LOCK_DIR/pid"
+  owner="$(lock_read_field pid)"
+  start="$(lock_read_field start_time)"
+  [ "$owner" = "$$" ] && [ "$start" = "$LOCK_START_TIME" ] || return 0
+  lock_write_field state "$state"
+}
+
+release_lock() {
+  local owner="" start=""
+  [ "$LOCK_HELD" = 1 ] || return 0
+  owner="$(lock_read_field pid)"
+  start="$(lock_read_field start_time)"
+  if [ "$owner" = "$$" ] && [ "$start" = "$LOCK_START_TIME" ]; then
+    rm -f \
+      "$LOCK_DIR/pid" "$LOCK_DIR/start_time" "$LOCK_DIR/state" \
+      "$LOCK_DIR/uid" "$LOCK_DIR/state_dir" "$LOCK_DIR/script_path" \
+      "$LOCK_DIR/identity" "$LOCK_DIR"/.*.tmp.* 2>/dev/null || true
     rmdir "$LOCK_DIR" 2>/dev/null || true
   fi
   LOCK_HELD=0
 }
 
 acquire_lock() {
-  local owner=""
+  local owner="" stored_start="" actual_start="" owner_state="" owner_script=""
+  local owner_state_dir="" attempt
   CURRENT_STEP="lock"
   mkdir -p "$SETUP_STATE_DIR"
-  if mkdir "$LOCK_DIR" 2>/dev/null; then
-    printf '%s\n' "$$" > "$LOCK_DIR/pid"
-    LOCK_HELD=1
-    return 0
+  LOCK_START_TIME="$(process_start_time "$$")" || die "Không đọc được process start-time."
+  LOCK_SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+  for attempt in {1..40}; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      lock_write_field start_time "$LOCK_START_TIME"
+      lock_write_field state RUNNING_STEP
+      lock_write_field uid "$(process_uid "$$")"
+      lock_write_field state_dir "$SETUP_STATE_DIR"
+      lock_write_field script_path "$LOCK_SCRIPT_PATH"
+      lock_write_field identity AOTSETUP_LOCK_V2
+      lock_write_field pid "$$"
+      LOCK_HELD=1
+      return 0
+    fi
+    owner="$(lock_read_field pid)"
+    if [ -z "$owner" ] && [ "$attempt" -le 10 ]; then
+      sleep 0.05
+      continue
+    fi
+    if ! [[ "$owner" =~ ^[0-9]+$ ]] || ! process_is_running "$owner"; then
+      lock_remove_stale
+      continue
+    fi
+    actual_start="$(process_start_time "$owner" 2>/dev/null || true)"
+    stored_start="$(lock_read_field start_time)"
+    owner_state="$(lock_read_field state)"
+    owner_script="$(lock_read_field script_path)"
+    owner_state_dir="$(lock_read_field state_dir)"
+    if [ -n "$stored_start" ] && [ "$stored_start" != "$actual_start" ]; then
+      lock_remove_stale
+      continue
+    fi
+    if [ -z "$stored_start" ] || [ -z "$owner_script" ] ||
+       [ -z "$owner_state_dir" ]; then
+      if process_matches_setup_owner "$owner" "" "$SETUP_STATE_DIR"; then
+        die "Một phiên aotsetup cũ có metadata thiếu đang chạy (PID=$owner); không thể tiếp quản an toàn."
+      fi
+      lock_remove_stale
+      continue
+    fi
+    if [ "$owner_state_dir" != "$SETUP_STATE_DIR" ] ||
+       ! process_matches_setup_owner "$owner" "$owner_script" "$owner_state_dir"; then
+      lock_remove_stale
+      continue
+    fi
+    case "$owner_state" in
+      WAITING_INPUT)
+        emit INFO "Tiếp quản phiên aotsetup đang chờ nhập (PID=$owner)."
+        kill -TERM "$owner" 2>/dev/null ||
+          die "Không gửi được TERM tới phiên chờ nhập đã xác minh (PID=$owner)."
+        for _ in {1..30}; do
+          if ! process_is_running "$owner" ||
+             [ "$(process_start_time "$owner" 2>/dev/null || true)" != "$stored_start" ]; then
+            break
+          fi
+          sleep 0.1
+        done
+        if process_is_running "$owner" &&
+           [ "$(process_start_time "$owner" 2>/dev/null || true)" = "$stored_start" ]; then
+          die "Phiên chờ nhập PID=$owner không dừng sau TERM; lock được giữ nguyên."
+        fi
+        [ -d "$LOCK_DIR" ] && lock_remove_stale
+        ;;
+      RUNNING_STEP|STARTING)
+        die "Một phiên aotsetup khác đang chạy (PID=$owner, trạng thái=$owner_state)."
+        ;;
+      *)
+        die "Phiên aotsetup PID=$owner có trạng thái lock không hợp lệ; không tự kết thúc."
+        ;;
+    esac
+  done
+  die "Không lấy được lock sau khi xử lý cạnh tranh."
+}
+
+terminal_prepare() {
+  [ "$TERMINAL_OPEN" = 1 ] || {
+    if ! exec {TERMINAL_FD}<>/dev/tty; then
+      die "Đây là phiên tương tác nhưng không mở được /dev/tty. Hãy chạy aotsetup trong cửa sổ Termux đang hoạt động."
+    fi
+    TERMINAL_OPEN=1
+    TERMINAL_SAVED_STATE="$(stty -g <&"$TERMINAL_FD" 2>/dev/null || true)"
+  }
+  stty sane echo <&"$TERMINAL_FD" 2>/dev/null || true
+}
+
+terminal_restore() {
+  [ "$TERMINAL_OPEN" = 1 ] || return 0
+  if [ -n "$TERMINAL_SAVED_STATE" ]; then
+    stty "$TERMINAL_SAVED_STATE" <&"$TERMINAL_FD" 2>/dev/null || true
   fi
-  owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
-  if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
-    die "Một phiên aotsetup khác đang chạy (PID=$owner)."
-  fi
-  rm -f "$LOCK_DIR/pid" 2>/dev/null || true
-  rmdir "$LOCK_DIR" 2>/dev/null || die "Không dọn được lock cũ."
-  mkdir "$LOCK_DIR" || die "Không tạo được lock."
-  printf '%s\n' "$$" > "$LOCK_DIR/pid"
-  LOCK_HELD=1
+  stty echo <&"$TERMINAL_FD" 2>/dev/null || true
+  exec {TERMINAL_FD}>&- 2>/dev/null || true
+  TERMINAL_OPEN=0
+}
+
+cleanup() {
+  terminal_restore
+  release_lock
 }
 
 state_read() {
@@ -209,8 +385,9 @@ normalize_group() {
 
 prompt_value() {
   local kind="$1" prompt="$2" value=""
-  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
-     [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
+  if [ "${AOTSCRIPT_SETUP_INPUT_MODE:-tty}" = env ]; then
+    [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
+      die "Input qua biến môi trường chỉ được phép trong self-test."
     case "$kind" in
       DEVICE_ID) value="${AOTSCRIPT_SETUP_DEVICE_ID:-}" ;;
       GROUP) value="${AOTSCRIPT_SETUP_GROUP:-}" ;;
@@ -219,15 +396,22 @@ prompt_value() {
     esac
   fi
   if [ -z "$value" ]; then
-    printf '%s' "$prompt" >&2
-    IFS= read -r value || die "Không đọc được câu trả lời."
+    terminal_prepare
+    lock_set_state WAITING_INPUT
+    printf '%s' "$prompt" >&"$TERMINAL_FD"
+    if ! IFS= read -r -u "$TERMINAL_FD" value; then
+      lock_set_state RUNNING_STEP
+      die "Không đọc được câu trả lời từ terminal điều khiển."
+    fi
+    lock_set_state RUNNING_STEP
   fi
-  printf '%s\n' "$value"
+  PROMPT_RESULT="$value"
 }
 
 confirm_once() {
   local message="$1" answer normalized
-  answer="$(prompt_value CONFIRM "$message [y/N]: ")"
+  prompt_value CONFIRM "$message [y/N]: "
+  answer="$PROMPT_RESULT"
   normalized="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
   case "$normalized" in
     y|yes|co|có) return 0 ;;
@@ -250,7 +434,7 @@ ensure_packages() {
   if [ "${#missing[@]}" -gt 0 ]; then
     command -v pkg >/dev/null 2>&1 || die "Thiếu pkg trong Termux."
     emit INFO "Cài package còn thiếu: ${missing[*]}"
-    pkg install -y "${missing[@]}" || die "pkg install thất bại."
+    pkg install -y "${missing[@]}" </dev/null || die "pkg install thất bại."
     hash -r
   fi
   for command in curl python unzip zip sha256sum; do
@@ -265,14 +449,20 @@ host_fingerprint() {
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     raw="${AOTSCRIPT_SETUP_HOST_ID:-test-host}"
   else
-    android_id="$(su -c 'settings get secure android_id' 2>/dev/null | tr -d '\r\n ' || true)"
-    serial="$(su -c 'getprop ro.boot.serialno' 2>/dev/null | tr -d '\r\n ' || true)"
+    android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+    serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
     case "$android_id" in null|unknown) android_id="" ;; esac
     case "$serial" in null|unknown) serial="" ;; esac
     [ -n "$android_id$serial" ] && raw="$android_id|$serial"
   fi
   [ -n "$raw" ] || die "Không tạo được fingerprint ổn định cho máy hiện tại."
   printf '%s' "$raw" | sha256sum | awk '{print $1}'
+}
+
+test_su_stdin_isolation() {
+  [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] || return 0
+  [ "${AOTSCRIPT_SETUP_TEST_SU_STDIN_PROBE:-0}" = 1 ] || return 0
+  su -c true </dev/null || die "Self-test su stdin isolation thất bại."
 }
 
 identity_tool() {
@@ -812,7 +1002,7 @@ download_provision() {
   fi
   stage="$SETUP_STATE_DIR/.provision-device.tmp.$$"
   rm -f "$stage"
-  curl -fsSL --retry 3 --connect-timeout 15 \
+  curl -fsSL --retry 3 --connect-timeout 15 </dev/null \
     "$RAW_BASE/provision-device.sh?t=$(date +%s)" -o "$stage" || {
       rm -f "$stage"
       die "Không tải được provision-device.sh revision pin."
@@ -867,7 +1057,7 @@ run_provision_once() {
   fi
   [ "$(state_read provision_initialized)" != yes ] || die "Thiếu mprovision state sau lần khởi tạo trước."
   script="$(download_provision)"
-  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" bash "$script" "$device_id" "$group" ||
+  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" bash "$script" "$device_id" "$group" </dev/null ||
     die "Provision không hoàn tất bước hiện tại."
   [ -s "$MPROVISION_STATE" ] || die "Provision không tạo state."
   read_mprovision_phase "$device_id" "$group" >/dev/null || die "State provision postcondition sai."
@@ -891,13 +1081,14 @@ bootstrap_checkpoint() {
   local action normalized
   [ "$(state_read bootstrap_ui_done)" = yes ] && return 0
   show_bootstrap_checkpoint
-  action="$(prompt_value CHECKPOINT "Lựa chọn: ")"
+  prompt_value CHECKPOINT "Lựa chọn: "
+  action="$PROMPT_RESULT"
   normalized="$(printf '%s' "$action" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
   case "$normalized" in
     MỞLẠI|MOLAI)
       command -v termux-open-url >/dev/null 2>&1 && {
-        termux-open-url "https://f-droid.org/packages/com.termux.api/" >/dev/null 2>&1 || true
-        termux-open-url "https://f-droid.org/packages/com.termux.boot/" >/dev/null 2>&1 || true
+        termux-open-url "https://f-droid.org/packages/com.termux.api/" </dev/null >/dev/null 2>&1 || true
+        termux-open-url "https://f-droid.org/packages/com.termux.boot/" </dev/null >/dev/null 2>&1 || true
       }
       emit INFO "Checkpoint vẫn đang chờ."
       exit 0
@@ -927,7 +1118,7 @@ start_wizard() {
   else
     die "Thiếu aotscript-wizard."
   fi
-  "$wizard" start || die "Wizard chưa chạy được; xem wizard-supervisor.log."
+  "$wizard" start </dev/null || die "Wizard chưa chạy được; xem wizard-supervisor.log."
   state_write wizard_started yes
 }
 
@@ -946,9 +1137,11 @@ choose_identity() {
     FRESH|NEEDS_CONFIRM) ;;
     *) die "Identity classification không an toàn: ${status:-EMPTY}." ;;
   esac
-  raw_id="$(prompt_value DEVICE_ID "Device ID hiện tại (ví dụ m74): ")"
+  prompt_value DEVICE_ID "Device ID hiện tại (ví dụ m74): "
+  raw_id="$PROMPT_RESULT"
   device_id="$(normalize_device_id "$raw_id")" || die "Device ID không hợp lệ."
-  raw_group="$(prompt_value GROUP "Nhóm hiện tại (NOVA hoặc MARMOT): ")"
+  prompt_value GROUP "Nhóm hiện tại (NOVA hoặc MARMOT): "
+  raw_group="$PROMPT_RESULT"
   group="$(normalize_group "$raw_group")" || die "Nhóm không hợp lệ."
   if [ "$status" = FRESH ] || [ "$device_id" = "$source_id" ]; then
     if [ "$status" = NEEDS_CONFIRM ] && [ "$group" != "$source_group" ]; then
@@ -996,22 +1189,22 @@ main() {
     "") ;;
     update)
       [ "$#" = 1 ] || die "aotsetup update không nhận tham số khác."
-      acquire_lock
-      trap release_lock EXIT
       update_local_launcher
       return 0
       ;;
     *) die "Chỉ hỗ trợ: aotsetup hoặc aotsetup update." ;;
   esac
-  acquire_lock
-  trap release_lock EXIT
+  trap cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  trap 'exit 129' HUP
   trap 'on_error "$?" "$LINENO"' ERR
+  acquire_lock
   if [ -n "${AOTSCRIPT_SETUP_HOLD_LOCK_SECONDS:-}" ]; then
     sleep "$AOTSCRIPT_SETUP_HOLD_LOCK_SECONDS"
   fi
   ensure_packages
+  test_su_stdin_isolation
   host_hash="$(host_fingerprint)"
   if resume_pending_migration "$host_hash"; then
     migration_rc=0
