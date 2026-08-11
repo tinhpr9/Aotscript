@@ -2,3 +2,8 @@
 # telegram_expires_at=1786518309710
 # telegram_command_id=1786431909710-27198560
 IDLE
+
+# telegram_target_ids=m74,m88,m116,m117,m118,m153,m154
+# telegram_expires_at=1786540488087
+# telegram_command_id=1786454088087-53019af4
+Updatescript https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Novagag2
