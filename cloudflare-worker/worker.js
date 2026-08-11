@@ -1384,6 +1384,25 @@ function aotHubHtml() {
       border-top: 1px solid #2b2f39;
       padding-top: 6px;
     }
+    .batch-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+    .batch-targets {
+      display: grid;
+      grid-template-columns: repeat(auto-fit,minmax(150px,1fr));
+      gap: 6px;
+      margin: 10px 0;
+    }
+    .batch-target {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px;
+      border: 1px solid #2b2f39;
+      border-radius: 9px;
+    }
     @media (max-width: 560px) {
       .summary {
         grid-template-columns: repeat(2,minmax(0,1fr));
@@ -1419,8 +1438,13 @@ function aotHubHtml() {
     <section id="followers" class="grid"></section>
     <div id="lastControl" class="hint"></div>
     <section class="card batch">
-      <button id="openSwift">Batch → Mở Swift Backup</button>
+      <div class="batch-actions">
+        <button id="selectOnline">Chọn máy online</button>
+        <button id="clearSelection">Bỏ chọn hết</button>
+        <button id="openSwift">Mở Swift Backup</button>
+      </div>
       <div class="hint">Chỉ gửi OPEN_SWIFT_BACKUP tới các máy đang kết nối.</div>
+      <div id="batchTargets" class="batch-targets"></div>
       <div id="batchResults" class="batch-results"></div>
     </section>
     <nav class="controls">
@@ -1437,13 +1461,18 @@ function aotHubHtml() {
     var tg = window.Telegram && window.Telegram.WebApp;
     var auth = tg ? String(tg.initData || "") : "";
     var currentState = null;
-    var timer = null;
+    var selectedDeviceIds = new Set();
+    var dashboardSocket = null;
+    var reconnectTimer = null;
+    var reconnectAttempt = 0;
+    var socketGeneration = 0;
     var sessionInput = document.getElementById("session");
     var sessionStorageKey = "aot-hub-session-id";
     var errorEl = document.getElementById("error");
     var referenceEl = document.getElementById("reference");
     var followersEl = document.getElementById("followers");
     var lastControlEl = document.getElementById("lastControl");
+    var batchTargetsEl = document.getElementById("batchTargets");
     var batchResultsEl = document.getElementById("batchResults");
 
     if (tg) {
@@ -1491,7 +1520,8 @@ function aotHubHtml() {
           );
         } catch (error) {}
       }
-      startPolling();
+      loadState();
+      connectDashboard();
     }
 
     async function api(path, options) {
@@ -1560,6 +1590,45 @@ function aotHubHtml() {
       }).join("");
     }
 
+    function sessionDevices(data) {
+      var devices = [];
+      if (data && data.reference) devices.push(data.reference);
+      return devices.concat((data && data.followers) || []);
+    }
+
+    function renderBatchTargets(data) {
+      var devices = sessionDevices(data);
+      var members = new Set(devices.map(function (item) {
+        return String(item.device_id);
+      }));
+      Array.from(selectedDeviceIds).forEach(function (deviceId) {
+        var device = devices.find(function (item) {
+          return String(item.device_id) === deviceId;
+        });
+        if (!members.has(deviceId) || !device || device.online !== true) {
+          selectedDeviceIds.delete(deviceId);
+        }
+      });
+      batchTargetsEl.innerHTML = devices.map(function (item) {
+        var deviceId = String(item.device_id || "");
+        var online = item.online === true;
+        return '<label class="batch-target"><input type="checkbox" data-device-id="' +
+          esc(deviceId) + '"' +
+          (selectedDeviceIds.has(deviceId) ? ' checked' : '') +
+          (online ? '' : ' disabled') + '><span>' + esc(deviceId) +
+          ' — ' + (online ? 'ONLINE' : 'OFFLINE') + '</span></label>';
+      }).join("");
+      Array.from(batchTargetsEl.querySelectorAll("input[data-device-id]")).forEach(
+        function (input) {
+          input.onchange = function () {
+            var deviceId = String(input.getAttribute("data-device-id") || "");
+            if (input.checked && !input.disabled) selectedDeviceIds.add(deviceId);
+            else selectedDeviceIds.delete(deviceId);
+          };
+        }
+      );
+    }
+
     function render(data) {
       currentState = data;
       var summary = data.summary || {};
@@ -1578,6 +1647,7 @@ function aotHubHtml() {
         ? ("Control: " + String(last.status || "-") +
            (last.reason ? " — " + String(last.reason) : ""))
         : "";
+      renderBatchTargets(data);
       renderBatch(data.last_batch);
       var image = document.getElementById("referencePreview");
       if (image) {
@@ -1640,15 +1710,21 @@ function aotHubHtml() {
       button.disabled = true;
       try {
         errorEl.textContent = "";
+        var onlineSelected = sessionDevices(currentState).filter(function (item) {
+          return item.online === true && selectedDeviceIds.has(String(item.device_id));
+        }).map(function (item) { return String(item.device_id); });
+        if (!onlineSelected.length) {
+          throw new Error("Hãy chọn ít nhất một máy ONLINE.");
+        }
         var data = await api("/aot/hub/api/control", {
           method: "POST",
           body: {
             session_id: sessionId(),
-            kind: "open_swift_backup"
+            kind: "open_swift_backup",
+            target_device_ids: onlineSelected
           }
         });
         renderBatch(data.batch);
-        window.setTimeout(loadState, 250);
       } catch (error) {
         errorEl.textContent = String(error.message || error);
       } finally {
@@ -1656,12 +1732,52 @@ function aotHubHtml() {
       }
     }
 
-    function startPolling() {
-      if (timer) {
-        window.clearInterval(timer);
+    function scheduleDashboardReconnect(generation) {
+      if (generation !== socketGeneration || !auth) return;
+      var base = Math.min(30000, 1000 * Math.pow(2, reconnectAttempt));
+      var delay = Math.round(base * (0.75 + Math.random() * 0.5));
+      reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
+      reconnectTimer = window.setTimeout(function () {
+        if (generation === socketGeneration) connectDashboard(generation);
+      }, delay);
+    }
+
+    function connectDashboard(existingGeneration) {
+      if (!auth || !isValidSessionId(sessionId()) || !window.WebSocket) return;
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
       }
-      loadState();
-      timer = window.setInterval(loadState, 1500);
+      var generation = existingGeneration || (socketGeneration + 1);
+      socketGeneration = generation;
+      if (dashboardSocket) {
+        dashboardSocket.onclose = null;
+        dashboardSocket.close();
+      }
+      var scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+      var socket = new window.WebSocket(
+        scheme + "//" + window.location.host + "/aot/hub/api/ws?session_id=" +
+        encodeURIComponent(sessionId()) + "&init_data=" + encodeURIComponent(auth)
+      );
+      dashboardSocket = socket;
+      socket.onopen = function () { reconnectAttempt = 0; };
+      socket.onmessage = function (event) {
+        try {
+          var data = JSON.parse(String(event.data || ""));
+          if (
+            data.type === "aot_hub_state" &&
+            data.session_id === sessionId()
+          ) {
+            errorEl.textContent = "";
+            render(data);
+          }
+        } catch (error) {}
+      };
+      socket.onclose = function () {
+        if (dashboardSocket === socket) dashboardSocket = null;
+        scheduleDashboardReconnect(generation);
+      };
+      socket.onerror = function () { socket.close(); };
     }
 
     restoreSession();
@@ -1676,6 +1792,16 @@ function aotHubHtml() {
     document.getElementById("back").onclick = function () {
       sendControl("back");
     };
+    document.getElementById("selectOnline").onclick = function () {
+      sessionDevices(currentState).forEach(function (item) {
+        if (item.online === true) selectedDeviceIds.add(String(item.device_id));
+      });
+      renderBatchTargets(currentState);
+    };
+    document.getElementById("clearSelection").onclick = function () {
+      selectedDeviceIds.clear();
+      renderBatchTargets(currentState);
+    };
     document.getElementById("openSwift").onclick = openSwiftBackupBatch;
     document.getElementById("up").onclick = function () {
       sendControl("swipe", {
@@ -1688,7 +1814,8 @@ function aotHubHtml() {
       });
     };
 
-    startPolling();
+    loadState();
+    connectDashboard();
   }());
   </script>
 </body>
@@ -1752,6 +1879,34 @@ async function handleAotHubState(
   );
 }
 
+async function handleAotHubDashboardWebSocket(request, env, url) {
+  const user = await validateAotTelegramInitData(
+    url.searchParams.get("init_data"),
+    env
+  );
+  if (!user) {
+    return noStoreJson({ ok: false, error: "hub_unauthorized" }, 401);
+  }
+  if (
+    String(request.headers.get("Upgrade") || "").toLowerCase() !==
+    "websocket"
+  ) {
+    return noStoreJson({ ok: false, error: "upgrade_required" }, 426);
+  }
+  const sessionId = normalizeAotSessionId(
+    url.searchParams.get("session_id")
+  );
+  if (!sessionId) {
+    return noStoreJson({ ok: false, error: "invalid_session_id" }, 400);
+  }
+  return fleetStateStub(env).fetch(
+    new Request(
+      `https://fleet-state.internal/aot/hub/dashboard-ws?session=${encodeURIComponent(sessionId)}`,
+      { method: "GET", headers: { Upgrade: "websocket" } }
+    )
+  );
+}
+
 function normalizeAotHubControl(body) {
   if (
     !body ||
@@ -1776,10 +1931,21 @@ function normalizeAotHubControl(body) {
       "open_swift_backup",
     ].includes(kind)
   ) {
-    return {
+    const control = {
       session_id: sessionId,
       kind,
     };
+    if (kind === "open_swift_backup") {
+      if (
+        !Array.isArray(body.target_device_ids) ||
+        body.target_device_ids.length < 1 ||
+        body.target_device_ids.length > AOT_MAX_TARGETS
+      ) {
+        return null;
+      }
+      control.target_device_ids = body.target_device_ids.map(String);
+    }
+    return control;
   }
   if (kind === "tap") {
     const x = Number(body.x_norm);
@@ -4632,6 +4798,13 @@ export default {
           env,
           url
         );
+      }
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/aot/hub/api/ws"
+      ) {
+        return await handleAotHubDashboardWebSocket(request, env, url);
       }
 
       if (

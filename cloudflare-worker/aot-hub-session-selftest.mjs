@@ -74,7 +74,7 @@ function loadDashboard(storage) {
     "session", "error", "reference", "followers", "lastControl",
     "online", "synced", "out", "offline", "refresh", "apply",
     "pause", "resume", "back", "up", "down", "openSwift",
-    "batchResults",
+    "batchResults", "batchTargets", "selectOnline", "clearSelection",
   ];
   const elements = new Map(
     elementIds.map((id) => [id, {
@@ -84,6 +84,7 @@ function loadDashboard(storage) {
       innerHTML: "",
       disabled: false,
       onclick: null,
+      querySelectorAll() { return []; },
     }])
   );
   const document = {
@@ -94,9 +95,9 @@ function loadDashboard(storage) {
   const window = {
     Telegram: null,
     localStorage: storage,
-    setInterval() { return 1; },
-    clearInterval() {},
     setTimeout() {},
+    clearTimeout() {},
+    location: { protocol: "https:", host: "test" },
   };
   vm.runInNewContext(scriptMatch[1], {
     window,
@@ -133,11 +134,15 @@ if (elements.get("session").value !== defaultMatch[1]) {
 }
 
 if (
-  !html.includes("Batch → Mở Swift Backup") ||
+  !html.includes("Chọn máy online") ||
+  !html.includes("Bỏ chọn hết") ||
+  !html.includes("Mở Swift Backup") ||
   !scriptMatch[1].includes('kind: "open_swift_backup"') ||
-  !scriptMatch[1].includes("renderBatch(data.last_batch)")
+  !scriptMatch[1].includes("target_device_ids: onlineSelected") ||
+  !scriptMatch[1].includes("new window.WebSocket") ||
+  scriptMatch[1].includes("setInterval(")
 ) {
-  throw new Error("fixed Swift Backup batch UI is missing");
+  throw new Error("selected WebSocket Swift Backup batch UI is invalid");
 }
 
 console.log("AOT_HUB_SESSION_SELFTEST=OK");

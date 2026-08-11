@@ -49,6 +49,7 @@ const ctx = {
       ? [{ send(payload) { socketSends.push({ tag, payload, at: Date.now() }); } }]
       : [];
   },
+  getTags(socket) { return socket.tags || []; },
 };
 const fleet = new FleetState(ctx, {});
 const session = "m37-m117-p3";
@@ -153,7 +154,9 @@ if (state.followers[0].status !== "WAITING") {
 // Fixed batch action snapshots connectivity and sends directly to all online sockets.
 const batchSessionRecord = await ctx.storage.get(`aot_session:${session}`);
 batchSessionRecord.followers.m88 = { device_id: "m88" };
+batchSessionRecord.followers.m74 = { device_id: "m74" };
 await ctx.storage.put(`aot_session:${session}`, batchSessionRecord);
+onlineTags.add(`aot:follower:${session}:m74`);
 socketSends.length = 0;
 response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
   method: "POST",
@@ -162,6 +165,20 @@ response = await fleet.controlAotHub(new Request("https://test/aot/hub/control",
     protocol: "phase4-1",
     session_id: session,
     kind: "open_swift_backup",
+    target_device_ids: ["m999"],
+  }),
+}));
+if (response.status !== 400 || socketSends.length !== 0) {
+  throw new Error("non-member batch target was trusted");
+}
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    protocol: "phase4-1",
+    session_id: session,
+    kind: "open_swift_backup",
+    target_device_ids: [reference, follower, "m88"],
   }),
 }));
 let batchResponse = await response.json();
@@ -176,6 +193,9 @@ if (byId[reference].status !== "SENT" || byId[follower].status !== "SENT") {
 }
 if (byId.m88.status !== "SKIPPED_OFFLINE") {
   throw new Error("offline device was not skipped");
+}
+if (byId.m74) {
+  throw new Error("unselected online device entered the batch");
 }
 if (socketSends.length !== 2) {
   throw new Error(`expected two near-simultaneous sends, got ${socketSends.length}`);
@@ -233,6 +253,120 @@ state = await response.json();
 const timedOut = state.last_batch.devices.find((item) => item.device_id === reference);
 if (!timedOut || timedOut.status !== "TIMEOUT") {
   throw new Error("batch timeout did not terminate pending state");
+}
+
+// Dashboard sockets use the same hibernating Durable Object and receive ACK/disconnect deltas.
+if (
+  !source.includes("acceptWebSocket(server, [this.aotDashboardTag(sessionId)])") ||
+  !source.includes("async webSocketClose(socket)")
+) {
+  throw new Error("dashboard WebSocket is not using hibernation APIs");
+}
+onlineTags.add(`aot-dashboard:${session}`);
+socketSends.length = 0;
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    protocol: "phase4-1",
+    session_id: session,
+    kind: "open_swift_backup",
+    target_device_ids: ["m74"],
+  }),
+}));
+const dashboardBatch = await response.json();
+socketSends.length = 0;
+response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    protocol: "phase4-1",
+    session_id: session,
+    reference_device_id: reference,
+    follower_device_id: "m74",
+    action_id: dashboardBatch.batch.action_id,
+    batch_action: "OPEN_SWIFT_BACKUP",
+    status: "ACCEPTED",
+    executed: false,
+  }),
+}));
+if (
+  !response.ok ||
+  socketSends.length !== 1 ||
+  JSON.parse(socketSends[0].payload).type !== "aot_hub_state"
+) {
+  throw new Error("dashboard did not receive ACK state");
+}
+socketSends.length = 0;
+const closingSocket = {
+  tags: [`aot:follower:${session}:${follower}`],
+};
+onlineTags.delete(`aot:follower:${session}:${follower}`);
+await fleet.webSocketClose(closingSocket);
+if (
+  socketSends.length !== 1 ||
+  JSON.parse(socketSends[0].payload).type !== "aot_hub_state"
+) {
+  throw new Error("dashboard did not receive disconnect state");
+}
+
+// Scale POC: 40 connected devices, one direct batch, and 40 accepted/opened ACKs.
+const scaleSession = "scale-40";
+const scaleFollowers = {};
+const scaleIds = [];
+for (let index = 1; index <= 40; index += 1) {
+  const deviceId = `m${index}`;
+  scaleIds.push(deviceId);
+  scaleFollowers[deviceId] = { device_id: deviceId };
+  onlineTags.add(`aot:follower:${scaleSession}:${deviceId}`);
+}
+await ctx.storage.put(`aot_session:${scaleSession}`, {
+  version: 1,
+  session_id: scaleSession,
+  reference_device_id: null,
+  followers: scaleFollowers,
+  paused: false,
+  last_control: null,
+});
+socketSends.length = 0;
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    protocol: "phase4-1",
+    session_id: scaleSession,
+    kind: "open_swift_backup",
+    target_device_ids: scaleIds,
+  }),
+}));
+batchResponse = await response.json();
+if (!response.ok || socketSends.length !== 40) {
+  throw new Error("40-device batch dispatch failed");
+}
+const scaleActionId = batchResponse.batch.action_id;
+let openedAcks = 0;
+for (const deviceId of scaleIds) {
+  for (const status of ["ACCEPTED", "OPENED"]) {
+    response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        protocol: "phase4-1",
+        session_id: scaleSession,
+        reference_device_id: scaleIds[0],
+        follower_device_id: deviceId,
+        action_id: scaleActionId,
+        batch_action: "OPEN_SWIFT_BACKUP",
+        status,
+        executed: status === "OPENED",
+      }),
+    }));
+    if (!response.ok) throw new Error(`40-device ACK failed: ${deviceId}/${status}`);
+    if (status === "OPENED") openedAcks += 1;
+  }
+}
+if (openedAcks !== 40) {
+  throw new Error("did not accept 40 OPENED ACKs");
 }
 
 console.log("AOT_FLEET_STATE_SELFTEST=OK");
