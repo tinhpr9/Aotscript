@@ -1636,7 +1636,10 @@ function aotHubHtml() {
           device_offline: "Máy đã offline"
         };
         var rawReason = String(item.reason || "");
-        var detail = rawReason ? " — " + (reasons[rawReason] || rawReason) : "";
+        var visibleReason = rawReason.indexOf("protocol_rejected:") === 0
+          ? ("Protocol bị từ chối — " + rawReason.slice("protocol_rejected:".length))
+          : (reasons[rawReason] || rawReason);
+        var detail = rawReason ? " — " + visibleReason : "";
         return '<div class="batch-row"><strong>' + esc(item.device_id) +
           '</strong><span>' + esc(item.display_status || item.status) +
           esc(detail) + '</span></div>';
@@ -1656,7 +1659,6 @@ function aotHubHtml() {
         : "Hai máy thử được chọn động từ các máy ONLINE. Stable theo nhóm tối đa 5 máy.";
       updateResultsEl.innerHTML = update.devices.map(function (item) {
         var reasons = {
-          legacy_bridge_no_ack: "Worker cũ không chấp nhận cả hai channel chuyển tiếp",
           worker_ack_timeout: "Worker không gửi trạng thái cập nhật kịp thời",
           websocket_send_failed: "WebSocket ngắt trước khi gửi lệnh",
           rollout_stopped_after_failure: "Đã dừng vì một máy trong nhóm trước FAILED",
@@ -1666,7 +1668,10 @@ function aotHubHtml() {
           health_ack_timeout_rolled_back: "Không có health ACK; đã rollback"
         };
         var rawReason = String(item.reason || "");
-        var detail = rawReason ? " — " + (reasons[rawReason] || rawReason) : "";
+        var visibleReason = rawReason.indexOf("protocol_rejected:") === 0
+          ? ("Protocol bị từ chối — " + rawReason.slice("protocol_rejected:".length))
+          : (reasons[rawReason] || rawReason);
+        var detail = rawReason ? " — " + visibleReason : "";
         return '<div class="batch-row"><strong>' + esc(item.device_id) +
           '</strong><span>' + esc(item.display_status || item.status) +
           esc(detail) + '</span></div>';
