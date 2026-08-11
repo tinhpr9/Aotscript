@@ -3,65 +3,175 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import pathlib
 import sys
 import tempfile
 
-ROOT = pathlib.Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location("aot_updater_selftest_target", ROOT / "updater.py")
+HERE = pathlib.Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("aot_bootstrap_selftest_target", HERE / "bootstrap.py")
 assert spec and spec.loader
-updater = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = updater
-spec.loader.exec_module(updater)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
 
-assert updater.channel_for_device("m37") == "canary"
-assert updater.channel_for_device("M117") == "canary"
-assert updater.channel_for_device("m38") == "stable"
 
-with tempfile.TemporaryDirectory(prefix="aot-updater-test-") as folder:
+def digest(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+assert module.channel_for_device("m37") == "canary"
+assert module.channel_for_device("M117") == "canary"
+assert module.channel_for_device("m38") == "stable"
+
+for channel in ("canary", "stable"):
+    actual = module.validate_manifest(
+        json.loads((HERE / f"worker-manifest-{channel}.json").read_text(encoding="utf-8")),
+        channel,
+    )
+    for item in actual["files"]:
+        assert digest(HERE / item["path"]) == item["sha256"], item["path"]
+    assert digest(HERE / "bootstrap.py") == actual["bootstrap"]["sha256"]
+
+with tempfile.TemporaryDirectory(prefix="aot-bundle-updater-") as folder:
     base = pathlib.Path(folder)
-    state = base / "state"
-    relay = base / "relay.py"
-    source = base / "new-relay.py"
-    relay.write_text("OLD = True\n", encoding="utf-8")
-    source.write_text("WORKER_VERSION = 'test-v2'\n", encoding="utf-8")
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    updater.ROOT = base
-    updater.RELAY_PATH = relay
-    updater.STATE_ROOT = state
-    updater.PENDING_PATH = state / "pending.json"
-    updater.HEALTH_PATH = state / "health.json"
-    updater.VERSION_PATH = state / "version.json"
-    updater.load_manifest = lambda channel: {
-        "version": "test-v2", "url": "https://example.invalid/relay.py",
-        "sha256": digest, "channel": channel,
+    source = base / "source"
+    source.mkdir()
+    root = base / "bootstrap-root"
+    state = base / "protected-state"
+    state.mkdir()
+    protected = {
+        "device_id.txt": "m37\n",
+        "device_group.txt": "NOVA\n",
+        "aot_group_config.json": json.dumps({"enabled": True, "role": "reference", "session_id": "fixture"}),
+        "agent_config.json": json.dumps({"worker_report_url": "https://example.invalid/report", "agent_report_secret": "fixture-secret"}),
     }
-    updater._download = lambda url, destination: destination.write_bytes(source.read_bytes())
-    pending = updater.prepare_update("m37", "update-test-1", "canary")
-    assert pending and relay.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
-    assert pathlib.Path(pending["backup"]).read_text(encoding="utf-8") == "OLD = True\n"
-    updater.rollback(pending)
-    assert relay.read_text(encoding="utf-8") == "OLD = True\n"
+    for name, value in protected.items():
+        (state / name).write_text(value, encoding="utf-8")
 
-    bad = "not python: ["
-    source.write_text(bad, encoding="utf-8")
-    updater.load_manifest = lambda channel: {
-        "version": "test-v3", "url": "https://example.invalid/relay.py",
-        "sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "channel": channel,
+    files = {
+        "relay.py": "WORKER_VERSION = 'fixture-v2'\n",
+        "runtime.py": "RUNTIME = 2\n",
+        "controller.py": "CONTROLLER = 2\n",
+        "updater.py": "UPDATER_API_VERSION = 2\n",
+        "e2e.py": "E2E = 2\n",
+        "worker_smoke_test.py": "raise SystemExit(0)\n",
+        "worker-release-schema.json": json.dumps({"schema_version": 2}),
+    }
+    for name, value in files.items():
+        (source / name).write_text(value, encoding="utf-8")
+
+    module.ROOT = root
+    module.RELEASES = root / "releases"
+    module.CURRENT = root / "current"
+    module.LAST_GOOD = root / "last_good"
+    module.LOCK_PATH = root / "supervisor.lock"
+    module.PENDING_PATH = root / "update_pending.json"
+    module.HEALTH_PATH = root / "update_health.json"
+    module.VERSION_PATH = root / "installed_release.json"
+    module.STATE_ROOT = state
+    module.CONFIG_PATH = state / "aot_group_config.json"
+    module.DEVICE_ID_PATH = state / "device_id.txt"
+    module.AGENT_CONFIG_PATH = state / "agent_config.json"
+
+    def manifest(version: str = "fixture-v2"):
+        return module.validate_manifest({
+            "schema_version": 2,
+            "version": version,
+            "channel": "canary",
+            "minimum_bootstrap_version": 2,
+            "files": [
+                {"path": name, "url": f"https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/{name}", "sha256": digest(source / name)}
+                for name in files
+            ],
+        }, "canary")
+
+    module._download = lambda url, destination: destination.write_bytes(
+        (source / pathlib.PurePosixPath(url).name).read_bytes()
+    )
+
+    before = {name: (state / name).read_bytes() for name in protected}
+    release = module.stage_release(manifest(), "action-1")
+    assert {item.name for item in release.iterdir() if item.name != "__pycache__"} == set(files)
+    assert all((state / name).read_bytes() == value for name, value in before.items())
+
+    legacy = module.RELEASES / "fixture-v1"
+    legacy.mkdir()
+    (legacy / "relay.py").write_text("OLD = True\n", encoding="utf-8")
+    module._atomic_link(module.CURRENT, legacy)
+    module._atomic_link(module.LAST_GOOD, legacy)
+    pending = {"action_id": "action-1", "version": "fixture-v2", "channel": "canary"}
+    module.activate_release(release, pending)
+    assert module._link_target(module.CURRENT) == release
+    assert module.wait_for_health(pending, timeout=0) is False
+    restored = module.rollback_release(pending)
+    assert restored == legacy and module._link_target(module.CURRENT) == legacy
+
+    # A broken release-side updater cannot damage the external supervisor rollback.
+    module.activate_release(release, pending)
+    (release / "updater.py").write_text("broken updater: [", encoding="utf-8")
+    assert module.wait_for_health(pending, timeout=0) is False
+    assert module.rollback_release(pending) == legacy
+    (source / "updater.py").write_text(files["updater.py"], encoding="utf-8")
+
+    bad_hash = manifest("fixture-bad-hash")
+    bad_hash["files"][0]["sha256"] = "0" * 64
+    try:
+        module.stage_release(bad_hash, "action-hash")
+    except module.BootstrapError as exc:
+        assert "sha256_mismatch" in str(exc)
+    else:
+        raise AssertionError("bad hash accepted")
+
+    (source / "relay.py").write_text("not python: [", encoding="utf-8")
+    try:
+        module.stage_release(manifest("fixture-bad-syntax"), "action-syntax")
+    except module.BootstrapError as exc:
+        assert "py_compile_failed" in str(exc)
+    else:
+        raise AssertionError("bad syntax accepted")
+
+    with module.supervisor_lock():
+        try:
+            with module.supervisor_lock():
+                pass
+        except module.BootstrapError as exc:
+            assert str(exc) == "update_already_running"
+        else:
+            raise AssertionError("duplicate supervisor acquired lock")
+
+    launcher_spec = importlib.util.spec_from_file_location(
+        "aot_bootstrap_launcher_selftest", HERE / "bootstrap_launcher.py"
+    )
+    assert launcher_spec and launcher_spec.loader
+    launcher = importlib.util.module_from_spec(launcher_spec)
+    launcher_spec.loader.exec_module(launcher)
+    launcher.ROOT = root
+    launcher.ACTIVE = root / "bootstrap-under-test.py"
+    launcher.LAST_GOOD = root / "bootstrap-under-test.py.last_good"
+    launcher.ACTIVE.write_text("broken bootstrap: [", encoding="utf-8")
+    launcher.LAST_GOOD.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    assert launcher.main(["self-test"]) == 0
+    assert launcher.ACTIVE.read_bytes() == launcher.LAST_GOOD.read_bytes()
+
+    # Bootstrap upgrades are staged and cannot replace the active copy when bad.
+    active_bootstrap = root / "bootstrap.py"
+    active_bootstrap.write_text("OLD_BOOTSTRAP = True\n", encoding="utf-8")
+    (source / "bootstrap.py").write_text("broken bootstrap: [", encoding="utf-8")
+    broken_bootstrap = {
+        "minimum_bootstrap_version": 2,
+        "bootstrap": {
+            "version": 3,
+            "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/bootstrap.py",
+            "sha256": digest(source / "bootstrap.py"),
+        },
     }
     try:
-        updater.prepare_update("m38", "update-test-2", "stable")
-    except Exception:
-        pass
+        module.maybe_upgrade_bootstrap(broken_bootstrap)
+    except module.BootstrapError as exc:
+        assert str(exc) == "bootstrap_py_compile_failed"
     else:
-        raise AssertionError("py_compile accepted invalid worker")
-    assert relay.read_text(encoding="utf-8") == "OLD = True\n"
+        raise AssertionError("broken bootstrap upgrade accepted")
+    assert active_bootstrap.read_text(encoding="utf-8") == "OLD_BOOTSTRAP = True\n"
 
-    try:
-        updater.prepare_update("m37", "update-test-3", "stable")
-    except updater.UpdateError as exc:
-        assert str(exc) == "channel_not_allowed_for_device"
-    else:
-        raise AssertionError("cross-channel update accepted")
-
-print("AOT_UPDATER_SELFTEST=OK")
+print("AOT_BUNDLE_UPDATER_SELFTEST=OK")

@@ -389,7 +389,7 @@ try:
             reference_device_id="m37", message=update_message,
         )
         assert len(spawned) == 1
-        assert "updater.py" in " ".join(spawned[0][0])
+        assert "bootstrap_launcher.py" in " ".join(spawned[0][0])
         assert module._handle_worker_update(
             state, local_id="m117", session_id="m37-m117-p3",
             reference_device_id="m37", message=update_message,

@@ -393,7 +393,7 @@ while (updateRecord.last_update.active_group) {
   const active = [...updateRecord.last_update.active_group];
   if (active.length > 5) throw new Error("active update group exceeded five");
   for (const member of active) {
-    for (const status of ["DOWNLOADING", "VERIFIED", "UPDATED"]) {
+    for (const status of ["DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING", "HEALTHY"]) {
       response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -416,6 +416,36 @@ for (const id of ["m37", "m117"]) {
 }
 if (!source.includes("async alarm()") || !source.includes("AOT_UPDATE_GROUP_SIZE = 5")) {
   throw new Error("durable rollout timeout/group guard missing");
+}
+
+// A failed group stops the release; a later group is never dispatched.
+socketSends.length = 0;
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ protocol: "phase4-1", session_id: scaleSession, kind: "update_stable" }),
+}));
+updateResponse = await response.json();
+const failedActionId = updateResponse.update.action_id;
+updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+const failedGroup = [...updateRecord.last_update.active_group];
+for (let index = 0; index < failedGroup.length; index += 1) {
+  const status = index === 0 ? "FAILED" : "HEALTHY";
+  response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      protocol: "phase4-1", session_id: scaleSession,
+      reference_device_id: scaleIds[0], follower_device_id: failedGroup[index].device_id,
+      action_id: failedActionId, batch_action: "UPDATE_WORKER", status,
+    }),
+  }));
+  if (!response.ok) throw new Error("failed-group ACK rejected");
+}
+updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+if (updateRecord.last_update.active_group || updateRecord.last_update.groups.length) {
+  throw new Error("rollout continued after an unhealthy group");
+}
+if (socketSends.filter((item) => item.tag.startsWith("aot:follower:")).length !== 5) {
+  throw new Error("a second rollout group was sent after failure");
 }
 
 onlineTags.add(`aot:follower:${session}:${follower}`);

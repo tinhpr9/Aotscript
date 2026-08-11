@@ -24,6 +24,7 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parent
 CONTROLLER_PATH = ROOT / "controller.py"
 UPDATER_PATH = ROOT / "updater.py"
+BOOTSTRAP_LAUNCHER = pathlib.Path.home() / ".aot-group-control" / "bootstrap_launcher.py"
 AGENT_CONFIG_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/agent_config.json"
 )
@@ -46,7 +47,7 @@ LIVE_STATUS_INTERVAL_SECONDS = 2.5
 SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
 OPEN_SWIFT_BACKUP_ACTION = "OPEN_SWIFT_BACKUP"
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-relay-2026.08.11.1"
+WORKER_VERSION = "aot-worker-2026.08.11.2"
 
 
 class AotRelayError(RuntimeError):
@@ -687,13 +688,10 @@ def _handle_worker_update(
     if action_already_processed(state, action_id):
         return True
     mark_action_processed(state, action_id)
-    relay_command = [sys.executable, "-u", str(pathlib.Path(__file__).resolve()), *sys.argv[1:]]
     command = [
-        sys.executable, "-u", str(UPDATER_PATH), "action",
-        "--device-id", local_id, "--action-id", action_id,
-        "--channel", channel, "--session", session_id,
+        sys.executable, "-u", str(BOOTSTRAP_LAUNCHER), "update-action",
+        "--action-id", action_id, "--channel", channel,
         "--reference-device", reference_id,
-        "--parent-pid", str(os.getpid()), *relay_command,
     ]
     subprocess.Popen(
         command,
@@ -1125,7 +1123,7 @@ def reference_loop(
                 "AOT_REFERENCE_CHANNEL=CONNECTED"
             )
             try:
-                updater.acknowledge_online(session_id, local_id, local_id)
+                updater.notify_pending_healthy()
             except Exception:
                 pass
             previous_sha = None
@@ -1333,9 +1331,7 @@ def follower_loop(
                 "AOT_FOLLOWER_CHANNEL=CONNECTED"
             )
             try:
-                updater.acknowledge_online(
-                    session_id, reference_device, local_id
-                )
+                updater.notify_pending_healthy()
             except Exception:
                 pass
             previous_sha = None

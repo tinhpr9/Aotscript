@@ -18,7 +18,7 @@ const AOT_BATCH_TTL_MS = 12 * 1000;
 const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
-const AOT_UPDATE_TERMINAL = new Set(["UPDATED", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
+const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
 
 function json(
   value,
@@ -1369,17 +1369,46 @@ export class FleetState
       const sent = this.sendAotPayload(this.aotSocketTag(member.role, sessionId, member.device_id), payload);
       if (sent === 0) {
         const device = update.devices[member.device_id];
-        device.status = "SKIPPED_OFFLINE";
-        device.history = ["SKIPPED_OFFLINE"];
+        device.status = "FAILED";
+        device.history = ["FAILED"];
         device.updated_at = Date.now();
       }
     }
     await this.writeAotSession(sessionId, record);
+    if (next.some((member) => update.devices[member.device_id].status === "FAILED")) {
+      await this.abortUpdateRollout(sessionId, record);
+      return;
+    }
     await this.ctx.storage.setAlarm(update.group_deadline);
     await this.broadcastAotHubState(sessionId);
   }
 
+  async abortUpdateRollout(sessionId, record) {
+    const update = record.last_update;
+    for (const group of update?.groups || []) {
+      for (const member of group) {
+        const device = update.devices[member.device_id];
+        if (device && device.status === "QUEUED") {
+          device.status = "FAILED";
+          device.history = ["FAILED"];
+          device.updated_at = Date.now();
+        }
+      }
+    }
+    if (update) {
+      update.groups = [];
+      update.active_group = null;
+      update.group_deadline = null;
+      update.failed = true;
+    }
+    await this.writeAotSession(sessionId, record);
+    await this.broadcastAotHubState(sessionId);
+  }
+
   async startWorkerUpdate(sessionId, record, channel) {
+    if (record.last_update?.active_group || (record.last_update?.groups || []).length) {
+      return json({ ok: false, error: "worker_update_in_progress" }, 409);
+    }
     const all = this.aotMembers(record);
     const selected = channel === "canary"
       ? all.filter((item) => ["m37", "m117"].includes(String(item.device_id).toLowerCase()))
@@ -2042,7 +2071,7 @@ export class FleetState
       );
     if (isBatch) {
       if (batchAction === AOT_UPDATE_ACTION) {
-        const allowed = new Set(["DOWNLOADING", "VERIFIED", "UPDATED", "ROLLED_BACK", "FAILED"]);
+        const allowed = new Set(["DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING", "HEALTHY", "ROLLED_BACK", "FAILED"]);
         const update = record.last_update;
         const device = update?.devices?.[followerId];
         const status = String(body.status || "");
@@ -2056,12 +2085,18 @@ export class FleetState
           device.updated_at = Date.now();
         }
         const activeIds = (update.active_group || []).map((item) => item.device_id);
-        if (activeIds.length && activeIds.every((id) => AOT_UPDATE_TERMINAL.has(update.devices[id]?.status))) {
+        const groupFinished = activeIds.length && activeIds.every((id) => AOT_UPDATE_TERMINAL.has(update.devices[id]?.status));
+        const groupHealthy = activeIds.length && activeIds.every((id) => update.devices[id]?.status === "HEALTHY");
+        if (groupFinished) {
           update.active_group = null;
           update.group_deadline = null;
         }
         await this.writeAotSession(sessionId, record);
-        if (!update.active_group) await this.dispatchNextUpdateGroup(sessionId, record);
+        if (groupFinished && !groupHealthy) {
+          await this.abortUpdateRollout(sessionId, record);
+        } else if (groupHealthy) {
+          await this.dispatchNextUpdateGroup(sessionId, record);
+        }
         await this.broadcastAotHubState(sessionId);
         return json({ ok: true, action_id: actionId, device_id: followerId, status: device.status });
       }
@@ -2249,8 +2284,7 @@ export class FleetState
       update.group_deadline = null;
       const sessionId = String(key).slice("aot_session:".length);
       await this.writeAotSession(sessionId, record);
-      await this.dispatchNextUpdateGroup(sessionId, record);
-      await this.broadcastAotHubState(sessionId);
+      await this.abortUpdateRollout(sessionId, record);
     }
   }
 
