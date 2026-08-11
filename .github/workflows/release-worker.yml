@@ -38,7 +38,7 @@ jobs:
               data = json.loads(pathlib.Path(f"aot-group-control/worker-manifest-{channel}.json").read_text())
               assert data["version"] == expected and data["channel"] == channel
           PY
-          python3 -m py_compile aot-group-control/*.py scripts/build-worker-release.py
+          python3 -m py_compile aot-group-control/*.py scripts/build-worker-release.py scripts/verify_worker_release.py
           for test in aot-group-control/*selftest.py; do timeout 180 python3 "$test"; done
           node --experimental-vm-modules cloudflare-worker/fleet-state-selftest.mjs
           node --experimental-vm-modules cloudflare-worker/aot-hub-session-selftest.mjs
@@ -51,8 +51,20 @@ jobs:
           TAG: worker-v${{ inputs.version }}
         run: |
           set -euo pipefail
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then exit 31; fi
-          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" >/dev/null 2>&1; then exit 32; fi
+          check_absent() {
+            local label="$1" endpoint="$2" status
+            if ! status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/${endpoint}")"; then
+              echo "GitHub API transport failed for ${label}" >&2
+              return 70
+            fi
+            python3 scripts/verify_worker_release.py require-absent "$label" "$status"
+          }
+          check_absent tag "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}"
+          check_absent release "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}"
 
       - name: Build immutable assets once
         env:
@@ -60,13 +72,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --output dist
-
-      - name: Require immutable releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq .enabled)" = true
 
       - name: Create draft, upload once, verify, and publish
         env:
@@ -78,23 +83,11 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "AOT Worker ${RELEASE_VERSION}" --notes "Immutable AOT Worker ${RELEASE_VERSION}" --draft
           gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > release.json
-          python3 - "$GITHUB_SHA" "$TAG" dist release.json <<'PY'
-          import hashlib, json, pathlib, sys
-          commit, tag, folder, response = sys.argv[1:]
-          data = json.loads(pathlib.Path(response).read_text())
-          assert data["draft"] is True and data["tag_name"] == tag
-          assert data["target_commitish"] == commit
-          local = {p.name: (p.stat().st_size, hashlib.sha256(p.read_bytes()).hexdigest()) for p in pathlib.Path(folder).iterdir()}
-          remote = {a["name"]: (a["size"], str(a.get("digest") or "").removeprefix("sha256:")) for a in data["assets"]}
-          assert local == remote, (local, remote)
-          PY
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > release-ref.json
+          python3 scripts/verify_worker_release.py verify \
+            "$GITHUB_SHA" "$TAG" dist release.json release-ref.json draft
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > published.json
-          python3 - "$GITHUB_SHA" "$TAG" published.json <<'PY'
-          import json, pathlib, sys
-          commit, tag, response = sys.argv[1:]
-          data = json.loads(pathlib.Path(response).read_text())
-          assert data["draft"] is False and data["tag_name"] == tag
-          assert data["target_commitish"] == commit and data.get("immutable") is True
-          assert len(data["assets"]) >= 3
-          PY
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > published-ref.json
+          python3 scripts/verify_worker_release.py verify \
+            "$GITHUB_SHA" "$TAG" dist published.json published-ref.json published release.json
