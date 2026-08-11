@@ -22,7 +22,7 @@ import urllib.request
 from typing import Any, Iterator
 
 BOOTSTRAP_VERSION = 2
-BOOTSTRAP_RELEASE_VERSION = 3
+BOOTSTRAP_RELEASE_VERSION = 4
 ROOT = pathlib.Path(__file__).resolve().parent
 RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
@@ -373,6 +373,7 @@ def send_status(pending: dict[str, Any], status: str) -> None:
         "follower_device_id": pending["device_id"], "action_id": pending["action_id"],
         "batch_action": "UPDATE_WORKER", "status": status,
         "worker_version": pending.get("version"), "channel": pending.get("channel"),
+        "reason": str(pending.get("failure_reason") or "")[:160],
     }, separators=(",", ":")).encode()
     request = urllib.request.Request(endpoint, data=payload, method="POST", headers={
         "Content-Type": "application/json", "X-Agent-Secret": secret,
@@ -479,6 +480,7 @@ def _run_update(config: dict[str, Any], device_id: str, pending: dict[str, Any],
         send_status(pending, "RESTARTING")
         if wait_for_health(pending):
             return 0
+        pending["failure_reason"] = "health_ack_timeout"
         try:
             os.kill(process.pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -493,6 +495,7 @@ def _run_update(config: dict[str, Any], device_id: str, pending: dict[str, Any],
         send_status(pending, "RESTARTING")
     if wait_for_health(pending):
         return 0
+    pending["failure_reason"] = "health_ack_timeout"
     try:
         os.kill(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -520,8 +523,9 @@ def action_update(args: argparse.Namespace) -> int:
                 "started_at": int(time.time()),
             }
             return _run_update(config, device_id, pending, True)
-    except Exception:
+    except Exception as exc:
         if pending:
+            pending["failure_reason"] = str(exc).split("\n", 1)[0][:160]
             try:
                 previous = pathlib.Path(str(pending.get("previous_release") or ""))
                 current = _link_target(CURRENT)

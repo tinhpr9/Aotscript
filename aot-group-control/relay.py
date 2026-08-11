@@ -50,7 +50,8 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.11.5"
+WORKER_VERSION = "aot-worker-2026.08.11.6"
+WORKER_CAPABILITIES = ("dynamic_update_channel",)
 
 
 class AotRelayError(RuntimeError):
@@ -801,6 +802,8 @@ def _live_status_payload(
         "role": role,
         "session_id": session_id,
         "device_id": device_id,
+        "worker_version": WORKER_VERSION,
+        "capabilities": list(WORKER_CAPABILITIES),
         "package": snap.get("package"),
         "fingerprint": snap.get("fingerprint"),
         "layout_signature": snap.get("layout_signature"),

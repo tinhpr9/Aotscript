@@ -251,6 +251,8 @@ finally:
 assert live_payload["layout_signature"] == "b" * 24
 assert live_payload["coordinate_ready"] is False
 assert live_payload["ime_visible"] is True
+assert live_payload["worker_version"] == module.WORKER_VERSION
+assert "dynamic_update_channel" in live_payload["capabilities"]
 assert "preview_b64" not in live_payload
 
 # ACK delivery and reference control results must retain status/executed truth.
@@ -453,37 +455,46 @@ try:
         module.STATE_PATH = pathlib.Path(tmp) / "update-state.json"
         state = module._load_state()
         module.subprocess.Popen = lambda command, **kwargs: spawned.append((command, kwargs))
+        update_reference = "m" + str(210 + 1)
+        update_target = "m" + str(210 + 2)
         update_message = {
             "type": "aot_batch_action", "protocol": module.HUB_PROTOCOL_VERSION,
-            "session_id": "dynamic-canary", "reference_device_id": "m211",
-            "target_device_ids": ["m211", "m212"], "action_id": "worker-canary-1",
+            "session_id": "dynamic-canary", "reference_device_id": update_reference,
+            "target_device_ids": [update_reference, update_target], "action_id": "worker-canary-1",
             "action": module.UPDATE_WORKER_ACTION, "channel": "canary",
             "expires_at": 9999999999999,
         }
         assert module._handle_worker_update(
-            state, local_id="m212", session_id="dynamic-canary",
-            reference_device_id="m211", message=update_message,
+            state, local_id=update_target, session_id="dynamic-canary",
+            reference_device_id=update_reference, message=update_message,
         )
         assert len(spawned) == 1
         assert "bootstrap_launcher.py" in " ".join(spawned[0][0])
         assert module._handle_worker_update(
-            state, local_id="m212", session_id="dynamic-canary",
-            reference_device_id="m211", message=update_message,
+            state, local_id=update_target, session_id="dynamic-canary",
+            reference_device_id=update_reference, message=update_message,
         )
         assert len(spawned) == 1
-        stable_channel = dict(update_message, action_id="worker-stable-1", channel="stable")
+        stable_channel = dict(update_message, action_id="worker-bridge-1", channel="stable")
         assert module._handle_worker_update(
-            state, local_id="m212", session_id="dynamic-canary",
-            reference_device_id="m211", message=stable_channel,
+            state, local_id=update_target, session_id="dynamic-canary",
+            reference_device_id=update_reference, message=stable_channel,
         )
         assert len(spawned) == 2
         assert spawned[-1][0][spawned[-1][0].index("--channel") + 1] == "stable"
-        invalid_channel = dict(update_message, action_id="worker-invalid-1", channel="preview")
+        bridge_duplicate = dict(stable_channel, channel="canary")
         assert module._handle_worker_update(
-            state, local_id="m212", session_id="dynamic-canary",
-            reference_device_id="m211", message=invalid_channel,
+            state, local_id=update_target, session_id="dynamic-canary",
+            reference_device_id=update_reference, message=bridge_duplicate,
         )
         assert len(spawned) == 2
+        invalid_channel = dict(update_message, action_id="worker-invalid-1", channel="preview")
+        assert module._handle_worker_update(
+            state, local_id=update_target, session_id="dynamic-canary",
+            reference_device_id=update_reference, message=invalid_channel,
+        )
+        assert len(spawned) == 2
+        assert not module.action_already_processed(state, "worker-invalid-1")
 finally:
     module.subprocess.Popen = old_popen
     module.STATE_PATH = old_state_path
