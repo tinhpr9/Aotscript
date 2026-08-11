@@ -50,7 +50,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.11.4"
+WORKER_VERSION = "aot-worker-2026.08.11.5"
 
 
 class AotRelayError(RuntimeError):
@@ -737,7 +737,7 @@ def _handle_worker_update(
             return True
     except (TypeError, ValueError):
         return True
-    if channel != updater.channel_for_device(local_id):
+    if updater.normalize_channel(channel) != channel:
         return True
     if action_already_processed(state, action_id):
         return True

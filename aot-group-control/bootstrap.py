@@ -22,6 +22,7 @@ import urllib.request
 from typing import Any, Iterator
 
 BOOTSTRAP_VERSION = 2
+BOOTSTRAP_RELEASE_VERSION = 3
 ROOT = pathlib.Path(__file__).resolve().parent
 RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
@@ -39,7 +40,8 @@ MANIFEST_URLS = {
     "canary": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-manifest-canary.json",
     "stable": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-manifest-stable.json",
 }
-CANARY_DEVICES = {"m37", "m117"}
+VALID_CHANNELS = frozenset(MANIFEST_URLS)
+DEFAULT_STARTUP_CHANNEL = "stable"
 UPDATE_STATUSES = {
     "DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING",
     "HEALTHY", "ROLLED_BACK", "FAILED",
@@ -58,8 +60,9 @@ class BootstrapError(RuntimeError):
     pass
 
 
-def channel_for_device(device_id: str) -> str:
-    return "canary" if device_id.lower() in CANARY_DEVICES else "stable"
+def normalize_channel(value: object) -> str | None:
+    channel = str(value or "").strip().lower()
+    return channel if channel in VALID_CHANNELS else None
 
 
 def _read_json(path: pathlib.Path) -> dict[str, Any]:
@@ -422,7 +425,7 @@ def supervisor_lock() -> Iterator[None]:
 
 def maybe_upgrade_bootstrap(manifest: dict[str, Any]) -> None:
     item = manifest.get("bootstrap")
-    if not item or int(item["version"]) <= BOOTSTRAP_VERSION:
+    if not item or int(item["version"]) <= BOOTSTRAP_RELEASE_VERSION:
         if manifest["minimum_bootstrap_version"] > BOOTSTRAP_VERSION:
             raise BootstrapError("bootstrap_upgrade_required")
         return
@@ -507,9 +510,9 @@ def action_update(args: argparse.Namespace) -> int:
     try:
         with supervisor_lock():
             config, device_id = _config()
-            channel = channel_for_device(device_id)
-            if channel != args.channel:
-                raise BootstrapError("channel_not_allowed_for_device")
+            channel = normalize_channel(args.channel)
+            if channel is None:
+                raise BootstrapError("invalid_update_channel")
             pending = {
                 "action_id": args.action_id, "channel": channel,
                 "device_id": device_id, "session_id": str(config["session_id"]),
@@ -541,7 +544,7 @@ def startup() -> int:
         stop_workers()
         pending = {
             "action_id": f"startup-{int(time.time())}-{os.getpid()}",
-            "channel": channel_for_device(device_id), "device_id": device_id,
+            "channel": DEFAULT_STARTUP_CHANNEL, "device_id": device_id,
             "session_id": str(config["session_id"]),
             "reference_device_id": str(config.get("reference_device_id") or device_id),
             "started_at": int(time.time()),
@@ -561,7 +564,11 @@ def startup() -> int:
 
 
 def self_test() -> int:
-    if BOOTSTRAP_VERSION < 2 or channel_for_device("m37") != "canary" or channel_for_device("m38") != "stable":
+    if (
+        BOOTSTRAP_VERSION < 2
+        or set(MANIFEST_URLS) != {"canary", "stable"}
+        or DEFAULT_STARTUP_CHANNEL != "stable"
+    ):
         return 1
     print(f"AOT_BOOTSTRAP_VERSION={BOOTSTRAP_VERSION}")
     return 0

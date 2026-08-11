@@ -20,15 +20,17 @@ def digest(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-assert module.channel_for_device("m37") == "canary"
-assert module.channel_for_device("M117") == "canary"
-assert module.channel_for_device("m38") == "stable"
+assert module.normalize_channel("canary") == "canary"
+assert module.normalize_channel("STABLE") == "stable"
+assert module.normalize_channel("other") is None
+assert module.DEFAULT_STARTUP_CHANNEL == "stable"
 
 for channel in ("canary", "stable"):
     actual = module.validate_manifest(
         json.loads((HERE / f"worker-manifest-{channel}.json").read_text(encoding="utf-8")),
         channel,
     )
+    assert actual["bootstrap"]["version"] == module.BOOTSTRAP_RELEASE_VERSION
     for item in actual["files"]:
         assert digest(HERE / item["path"]) == item["sha256"], item["path"]
     assert digest(HERE / "bootstrap.py") == actual["bootstrap"]["sha256"]
@@ -162,7 +164,7 @@ with tempfile.TemporaryDirectory(prefix="aot-bundle-updater-") as folder:
     broken_bootstrap = {
         "minimum_bootstrap_version": 2,
         "bootstrap": {
-            "version": 3,
+            "version": module.BOOTSTRAP_RELEASE_VERSION + 1,
             "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/bootstrap.py",
             "sha256": digest(source / "bootstrap.py"),
         },

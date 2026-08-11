@@ -28,19 +28,21 @@ def load(name: str, filename: str):
 updater = load("aot_release_smoke_updater", "updater.py")
 if updater.UPDATER_API_VERSION < 2:
     raise SystemExit("updater_api_too_old")
-if updater.channel_for_device("m37") != "canary":
-    raise SystemExit("canary_mapping_broken")
-if updater.channel_for_device("m38") != "stable":
-    raise SystemExit("stable_mapping_broken")
+if updater.normalize_channel("canary") != "canary":
+    raise SystemExit("canary_channel_broken")
+if updater.normalize_channel("stable") != "stable":
+    raise SystemExit("stable_channel_broken")
+if updater.normalize_channel("other") is not None:
+    raise SystemExit("invalid_channel_accepted")
 
 load("aot_release_smoke_controller", "controller.py")
 load("aot_release_smoke_runtime", "runtime.py")
 relay = load("aot_release_smoke_relay", "relay.py")
-if relay.WORKER_VERSION != "aot-worker-2026.08.11.4":
+if relay.WORKER_VERSION != "aot-worker-2026.08.11.5":
     raise SystemExit("worker_version_mismatch")
 
 relay_source = (ROOT / "relay.py").read_text(encoding="utf-8")
-if 'WORKER_VERSION = "aot-worker-2026.08.11.4"' not in relay_source:
+if 'WORKER_VERSION = "aot-worker-2026.08.11.5"' not in relay_source:
     raise SystemExit("worker_version_mismatch")
 if "FILTER_RESTORE_DATA" in relay_source:
     raise SystemExit("forbidden_restore_action")

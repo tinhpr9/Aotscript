@@ -75,7 +75,7 @@ function loadDashboard(storage) {
     "online", "synced", "out", "offline", "refresh", "apply",
     "pause", "resume", "back", "up", "down", "openSwift",
     "batchResults", "batchTargets", "selectOnline", "clearSelection",
-    "updateCanary", "updateStable", "updateResults",
+    "updateCanary", "updateStable", "updateError", "updateHint", "updateResults",
   ];
   const elements = new Map(
     elementIds.map((id) => [id, {
@@ -115,14 +115,14 @@ if (elements.get("session").value !== defaultMatch[1]) {
   throw new Error("missing storage did not preserve fallback session");
 }
 
-elements.get("session").value = "m74-m117-p3";
+elements.get("session").value = "team-session-3";
 elements.get("apply").onclick();
-if (storage.getItem("aot-hub-session-id") !== "m74-m117-p3") {
+if (storage.getItem("aot-hub-session-id") !== "team-session-3") {
   throw new Error("Apply did not persist selected session");
 }
 
 elements = loadDashboard(storage);
-if (elements.get("session").value !== "m74-m117-p3") {
+if (elements.get("session").value !== "team-session-3") {
   throw new Error("reload did not restore persisted session");
 }
 
@@ -142,6 +142,9 @@ if (
   !scriptMatch[1].includes("target_device_ids: onlineSelected") ||
   !scriptMatch[1].includes("swift_backup_not_foreground") ||
   !scriptMatch[1].includes("item.reason") ||
+  !scriptMatch[1].includes("data.message") ||
+  !html.includes('id="updateError" class="error"') ||
+  html.includes("Canary:") ||
   !scriptMatch[1].includes("new window.WebSocket") ||
   scriptMatch[1].includes("setInterval(")
 ) {

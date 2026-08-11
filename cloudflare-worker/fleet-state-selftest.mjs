@@ -441,7 +441,7 @@ const scaleSession = "scale-40";
 const scaleFollowers = {};
 const scaleIds = [];
 for (let index = 1; index <= 40; index += 1) {
-  const deviceId = `m${index}`;
+  const deviceId = `m${index + 100}`;
   scaleIds.push(deviceId);
   scaleFollowers[deviceId] = { device_id: deviceId };
   onlineTags.add(`aot:follower:${scaleSession}:${deviceId}`);
@@ -495,25 +495,136 @@ if (openedAcks !== 40) {
   throw new Error("did not accept 40 OPENED ACKs");
 }
 
-// Worker rollout reuses the same hibernating DO and never fans out beyond five.
+// Dynamic canary selection is identity/role/order independent and prefers the
+// two most recently failed ONLINE devices. An offline failed device is ignored.
+let updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+updateRecord.last_update = {
+  action_id: "previous-update", channel: "stable", groups: [], active_group: null,
+  devices: {
+    [scaleIds[4]]: { device_id: scaleIds[4], status: "FAILED", updated_at: 200 },
+    [scaleIds[19]]: { device_id: scaleIds[19], status: "FAILED", updated_at: 300 },
+    [scaleIds[29]]: { device_id: scaleIds[29], status: "FAILED", updated_at: 400 },
+  },
+};
+onlineTags.delete(`aot:follower:${scaleSession}:${scaleIds[29]}`);
+await ctx.storage.put(`aot_session:${scaleSession}`, updateRecord);
+socketSends.length = 0;
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ protocol: "phase4-1", session_id: scaleSession, kind: "update_canary" }),
+}));
+let updateResponse = await response.json();
+const firstCanaryIds = new Set(updateResponse.update.selected_device_ids);
+if (
+  !response.ok || updateResponse.update.channel !== "canary"
+  || firstCanaryIds.size !== 2
+  || !firstCanaryIds.has(scaleIds[4])
+  || !firstCanaryIds.has(scaleIds[19])
+  || firstCanaryIds.has(scaleIds[29])
+) {
+  throw new Error("dynamic canary did not prefer two failed ONLINE devices");
+}
+if (!updateResponse.update.devices.every((item) => item.display_status === "QUEUED")) {
+  throw new Error("canary did not expose QUEUED state");
+}
+
+// Fewer than two ONLINE members fails closed with a user-visible Vietnamese error.
+const smallSession = "dynamic-small";
+await ctx.storage.put(`aot_session:${smallSession}`, {
+  version: 1, session_id: smallSession, reference_device_id: "m901",
+  followers: { m902: { device_id: "m902" } }, paused: false,
+});
+onlineTags.add(`aot:reference:${smallSession}:m901`);
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ protocol: "phase4-1", session_id: smallSession, kind: "update_canary" }),
+}));
+const smallError = await response.json();
+if (response.status !== 409 || smallError.error !== "canary_requires_two_online" || !smallError.message.includes("2 máy ONLINE")) {
+  throw new Error("under-two-online canary error is not explicit");
+}
+
+// One failed trial device locks Stable release.
+updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+const failedCanaryAction = updateRecord.last_update.action_id;
+const failedCanaryGroup = [...updateRecord.last_update.active_group];
+for (let index = 0; index < failedCanaryGroup.length; index += 1) {
+  response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      protocol: "phase4-1", session_id: scaleSession,
+      reference_device_id: scaleIds[0], follower_device_id: failedCanaryGroup[index].device_id,
+      action_id: failedCanaryAction, batch_action: "UPDATE_WORKER",
+      status: index === 0 ? "FAILED" : "HEALTHY",
+      worker_version: "aot-worker-2026.08.11.5",
+    }),
+  }));
+  if (!response.ok) throw new Error("canary failure ACK rejected");
+}
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ protocol: "phase4-1", session_id: scaleSession, kind: "update_stable" }),
+}));
+const lockedStable = await response.json();
+if (response.status !== 409 || lockedStable.error !== "canary_release_failed") {
+  throw new Error("failed canary did not lock Stable release");
+}
+
+// A fresh dynamic canary succeeds regardless of Device ID, then Stable skips
+// those same HEALTHY devices at the same worker version.
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ protocol: "phase4-1", session_id: scaleSession, kind: "update_canary" }),
+}));
+updateResponse = await response.json();
+if (!response.ok || updateResponse.update.selected_device_ids.length !== 2) {
+  throw new Error("second dynamic canary dispatch failed");
+}
+const healthyCanaryIds = [...updateResponse.update.selected_device_ids];
+updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+const healthyCanaryAction = updateRecord.last_update.action_id;
+for (const member of [...updateRecord.last_update.active_group]) {
+  for (const status of ["DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING", "HEALTHY"]) {
+    response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        protocol: "phase4-1", session_id: scaleSession,
+        reference_device_id: scaleIds[0], follower_device_id: member.device_id,
+        action_id: healthyCanaryAction, batch_action: "UPDATE_WORKER", status,
+        worker_version: "aot-worker-2026.08.11.5",
+      }),
+    }));
+    if (!response.ok) throw new Error(`healthy canary ACK rejected: ${member.device_id}/${status}`);
+  }
+}
+updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+if (updateRecord.canary_release.status !== "HEALTHY") {
+  throw new Error("two healthy canary devices did not unlock Stable");
+}
+
 socketSends.length = 0;
 response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ protocol: "phase4-1", session_id: scaleSession, kind: "update_stable" }),
 }));
-let updateResponse = await response.json();
+updateResponse = await response.json();
 if (!response.ok || updateResponse.update.channel !== "stable") {
-  throw new Error("stable update dispatch failed");
+  throw new Error("Stable update dispatch after healthy canary failed");
 }
-if (socketSends.filter((item) => item.tag.startsWith("aot:follower:")).length > 5) {
-  throw new Error("worker rollout exceeded group size five");
+updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+for (const id of healthyCanaryIds) {
+  if (updateRecord.last_update.devices[id]?.history.join(",") !== "HEALTHY") {
+    throw new Error("Stable repeated a healthy canary device");
+  }
+  if ((updateRecord.last_update.active_group || []).some((item) => item.device_id === id)) {
+    throw new Error("healthy canary device entered Stable active group");
+  }
 }
-let updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
-const updateActionId = updateRecord.last_update.action_id;
 let updatedCount = 0;
+const stableActionId = updateRecord.last_update.action_id;
 while (updateRecord.last_update.active_group) {
   const active = [...updateRecord.last_update.active_group];
-  if (active.length > 5) throw new Error("active update group exceeded five");
+  if (active.length > 5) throw new Error("active Stable group exceeded five");
   for (const member of active) {
     for (const status of ["DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING", "HEALTHY"]) {
       response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
@@ -521,20 +632,18 @@ while (updateRecord.last_update.active_group) {
         body: JSON.stringify({
           protocol: "phase4-1", session_id: scaleSession,
           reference_device_id: scaleIds[0], follower_device_id: member.device_id,
-          action_id: updateActionId, batch_action: "UPDATE_WORKER", status,
+          action_id: stableActionId, batch_action: "UPDATE_WORKER", status,
+          worker_version: "aot-worker-2026.08.11.5",
         }),
       }));
-      if (!response.ok) throw new Error(`update ACK rejected: ${member.device_id}/${status}`);
+      if (!response.ok) throw new Error(`Stable ACK rejected: ${member.device_id}/${status}`);
     }
     updatedCount += 1;
   }
   updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
 }
-if (updatedCount !== 39) {
-  throw new Error(`stable channel updated ${updatedCount}, expected 39`);
-}
-for (const id of ["m37", "m117"]) {
-  if (updateRecord.last_update.devices[id]) throw new Error("canary device entered stable rollout");
+if (updatedCount !== 37) {
+  throw new Error(`Stable updated ${updatedCount}, expected 37 online non-canary devices`);
 }
 if (!source.includes("async alarm()") || !source.includes("AOT_UPDATE_GROUP_SIZE = 5")) {
   throw new Error("durable rollout timeout/group guard missing");
@@ -558,6 +667,7 @@ for (let index = 0; index < failedGroup.length; index += 1) {
       protocol: "phase4-1", session_id: scaleSession,
       reference_device_id: scaleIds[0], follower_device_id: failedGroup[index].device_id,
       action_id: failedActionId, batch_action: "UPDATE_WORKER", status,
+      worker_version: "aot-worker-2026.08.11.5",
     }),
   }));
   if (!response.ok) throw new Error("failed-group ACK rejected");
@@ -566,19 +676,8 @@ updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
 if (updateRecord.last_update.active_group || updateRecord.last_update.groups.length) {
   throw new Error("rollout continued after an unhealthy group");
 }
-if (socketSends.filter((item) => item.tag.startsWith("aot:follower:")).length !== 5) {
+if (socketSends.filter((item) => item.tag.startsWith(`aot:follower:${scaleSession}:`)).length !== 5) {
   throw new Error("a second rollout group was sent after failure");
-}
-
-onlineTags.add(`aot:follower:${session}:${follower}`);
-socketSends.length = 0;
-response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ protocol: "phase4-1", session_id: session, kind: "update_canary" }),
-}));
-updateResponse = await response.json();
-if (!response.ok || updateResponse.update.devices.length !== 2 || socketSends.filter((item) => item.tag.startsWith("aot:") && !item.tag.startsWith("aot-dashboard:")).length !== 2) {
-  throw new Error("m37+m117 canary dispatch failed");
 }
 
 console.log("AOT_FLEET_STATE_SELFTEST=OK");

@@ -455,28 +455,35 @@ try:
         module.subprocess.Popen = lambda command, **kwargs: spawned.append((command, kwargs))
         update_message = {
             "type": "aot_batch_action", "protocol": module.HUB_PROTOCOL_VERSION,
-            "session_id": "m37-m117-p3", "reference_device_id": "m37",
-            "target_device_ids": ["m37", "m117"], "action_id": "worker-canary-1",
+            "session_id": "dynamic-canary", "reference_device_id": "m211",
+            "target_device_ids": ["m211", "m212"], "action_id": "worker-canary-1",
             "action": module.UPDATE_WORKER_ACTION, "channel": "canary",
             "expires_at": 9999999999999,
         }
         assert module._handle_worker_update(
-            state, local_id="m117", session_id="m37-m117-p3",
-            reference_device_id="m37", message=update_message,
+            state, local_id="m212", session_id="dynamic-canary",
+            reference_device_id="m211", message=update_message,
         )
         assert len(spawned) == 1
         assert "bootstrap_launcher.py" in " ".join(spawned[0][0])
         assert module._handle_worker_update(
-            state, local_id="m117", session_id="m37-m117-p3",
-            reference_device_id="m37", message=update_message,
+            state, local_id="m212", session_id="dynamic-canary",
+            reference_device_id="m211", message=update_message,
         )
         assert len(spawned) == 1
-        wrong_channel = dict(update_message, action_id="worker-stable-1", channel="stable")
+        stable_channel = dict(update_message, action_id="worker-stable-1", channel="stable")
         assert module._handle_worker_update(
-            state, local_id="m117", session_id="m37-m117-p3",
-            reference_device_id="m37", message=wrong_channel,
+            state, local_id="m212", session_id="dynamic-canary",
+            reference_device_id="m211", message=stable_channel,
         )
-        assert len(spawned) == 1
+        assert len(spawned) == 2
+        assert spawned[-1][0][spawned[-1][0].index("--channel") + 1] == "stable"
+        invalid_channel = dict(update_message, action_id="worker-invalid-1", channel="preview")
+        assert module._handle_worker_update(
+            state, local_id="m212", session_id="dynamic-canary",
+            reference_device_id="m211", message=invalid_channel,
+        )
+        assert len(spawned) == 2
 finally:
     module.subprocess.Popen = old_popen
     module.STATE_PATH = old_state_path

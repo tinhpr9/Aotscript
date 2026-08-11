@@ -19,6 +19,7 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
+const AOT_WORKER_VERSION = "aot-worker-2026.08.11.5";
 
 function json(
   value,
@@ -1442,14 +1443,54 @@ export class FleetState
       status: String(item.status || "FAILED"),
       history: Array.isArray(item.history) ? item.history.map(String).slice(-6) : [],
       display_status: (Array.isArray(item.history) ? item.history : []).join(" → ") || String(item.status || "FAILED"),
+      worker_version: String(item.worker_version || ""),
       updated_at: Number(item.updated_at || update.created_at || 0),
     })).sort((a, b) => a.device_id.localeCompare(b.device_id, undefined, { numeric: true }));
     return {
       action_id: String(update.action_id || ""),
       action: AOT_UPDATE_ACTION,
       channel: String(update.channel || ""),
+      version: String(update.version || ""),
+      selected_device_ids: Array.isArray(update.selected_device_ids)
+        ? update.selected_device_ids.map(String)
+        : [],
       created_at: Number(update.created_at || 0),
       devices,
+    };
+  }
+
+  refreshCanaryReleaseGate(record) {
+    const update = record.last_update;
+    const gate = record.canary_release;
+    if (
+      !update || update.channel !== "canary" || !gate
+      || gate.action_id !== update.action_id
+    ) return;
+    const ids = Array.isArray(gate.device_ids) ? gate.device_ids : [];
+    const devices = ids.map((id) => update.devices?.[id]).filter(Boolean);
+    if (devices.length !== 2) {
+      gate.status = "FAILED";
+    } else if (devices.some((item) => ["FAILED", "ROLLED_BACK"].includes(item.status))) {
+      gate.status = "FAILED";
+    } else if (devices.every((item) =>
+      item.status === "HEALTHY" && item.worker_version === gate.version
+    )) {
+      gate.status = "HEALTHY";
+    } else {
+      gate.status = "PENDING";
+    }
+    gate.updated_at = Date.now();
+  }
+
+  rememberUpdateStatus(record, device) {
+    if (!device || !validDeviceId(device.device_id)) return;
+    if (!record.update_device_status || typeof record.update_device_status !== "object") {
+      record.update_device_status = {};
+    }
+    record.update_device_status[device.device_id] = {
+      status: String(device.status || "FAILED"),
+      worker_version: String(device.worker_version || ""),
+      updated_at: Number(device.updated_at || Date.now()),
     };
   }
 
@@ -1488,6 +1529,7 @@ export class FleetState
         device.status = "FAILED";
         device.history = ["FAILED"];
         device.updated_at = Date.now();
+        this.rememberUpdateStatus(record, device);
       }
     }
     await this.writeAotSession(sessionId, record);
@@ -1508,6 +1550,7 @@ export class FleetState
           device.status = "FAILED";
           device.history = ["FAILED"];
           device.updated_at = Date.now();
+          this.rememberUpdateStatus(record, device);
         }
       }
     }
@@ -1517,40 +1560,105 @@ export class FleetState
       update.group_deadline = null;
       update.failed = true;
     }
+    this.refreshCanaryReleaseGate(record);
     await this.writeAotSession(sessionId, record);
     await this.broadcastAotHubState(sessionId);
   }
 
   async startWorkerUpdate(sessionId, record, channel) {
+    if (!new Set(["canary", "stable"]).has(channel)) {
+      return json({ ok: false, error: "invalid_update_channel" }, 400);
+    }
     if (record.last_update?.active_group || (record.last_update?.groups || []).length) {
       return json({ ok: false, error: "worker_update_in_progress" }, 409);
     }
     const all = this.aotMembers(record);
-    const selected = channel === "canary"
-      ? all.filter((item) => ["m37", "m117"].includes(String(item.device_id).toLowerCase()))
-      : all.filter((item) => !["m37", "m117"].includes(String(item.device_id).toLowerCase()));
-    if (channel === "canary" && selected.length !== 2) {
-      return json({ ok: false, error: "canary_devices_not_in_session" }, 409);
+    const connected = (member) => this.ctx.getWebSockets(
+      this.aotSocketTag(member.role, sessionId, member.device_id)
+    ).length > 0;
+    const onlineMembers = all.filter(connected);
+    let selected;
+    let alreadyHealthy = new Set();
+    if (channel === "canary") {
+      if (onlineMembers.length < 2) {
+        return json({
+          ok: false,
+          error: "canary_requires_two_online",
+          message: "Cần ít nhất 2 máy ONLINE để cập nhật 2 máy thử.",
+          online_count: onlineMembers.length,
+        }, 409);
+      }
+      const previousDevices = {
+        ...(record.update_device_status || {}),
+        ...(record.last_update?.devices || {}),
+      };
+      selected = onlineMembers.map((member) => ({
+        ...member,
+        failed: previousDevices[member.device_id]?.status === "FAILED",
+        previous_updated_at: Number(previousDevices[member.device_id]?.updated_at || 0),
+        tie_breaker: crypto.randomUUID(),
+      })).sort((left, right) =>
+        Number(right.failed) - Number(left.failed)
+        || right.previous_updated_at - left.previous_updated_at
+        || left.tie_breaker.localeCompare(right.tie_breaker)
+      ).slice(0, 2).map(({ failed, previous_updated_at, tie_breaker, ...member }) => member);
+    } else {
+      const gate = record.canary_release;
+      if (gate?.status === "FAILED" && gate.version === AOT_WORKER_VERSION) {
+        return json({
+          ok: false,
+          error: "canary_release_failed",
+          message: "Máy thử đã FAILED; chưa thể phát hành Stable.",
+        }, 409);
+      }
+      if (
+        gate?.status !== "HEALTHY" || gate.version !== AOT_WORKER_VERSION
+        || !Array.isArray(gate.device_ids) || gate.device_ids.length !== 2
+      ) {
+        return json({
+          ok: false,
+          error: "canary_release_not_healthy",
+          message: "Hai máy thử phải HEALTHY đúng phiên bản trước khi phát hành Stable.",
+        }, 409);
+      }
+      alreadyHealthy = new Set(gate.device_ids.map(String));
+      selected = all;
     }
     const online = [];
     const devices = {};
     for (const member of selected) {
-      const connected = this.ctx.getWebSockets(this.aotSocketTag(member.role, sessionId, member.device_id)).length > 0;
+      const skipHealthy = channel === "stable" && alreadyHealthy.has(member.device_id);
+      const isConnected = connected(member);
       devices[member.device_id] = {
         device_id: member.device_id,
-        status: connected ? "QUEUED" : "SKIPPED_OFFLINE",
-        history: connected ? [] : ["SKIPPED_OFFLINE"], updated_at: Date.now(),
+        status: skipHealthy ? "HEALTHY" : (isConnected ? "QUEUED" : "SKIPPED_OFFLINE"),
+        history: skipHealthy ? ["HEALTHY"] : (isConnected ? ["QUEUED"] : ["SKIPPED_OFFLINE"]),
+        worker_version: skipHealthy ? AOT_WORKER_VERSION : "",
+        updated_at: Date.now(),
       };
-      if (connected) online.push(member);
+      if (isConnected && !skipHealthy) online.push(member);
     }
     const actionId = `worker-${channel}-${Date.now()}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
     const groups = [];
     for (let i = 0; i < online.length; i += AOT_UPDATE_GROUP_SIZE) groups.push(online.slice(i, i + AOT_UPDATE_GROUP_SIZE));
     record.last_update = {
       action_id: actionId, action: AOT_UPDATE_ACTION, channel,
+      version: AOT_WORKER_VERSION,
+      selected_device_ids: channel === "canary"
+        ? selected.map((item) => item.device_id)
+        : [...alreadyHealthy],
       reference_device_id: validDeviceId(record.reference_device_id) || selected[0]?.device_id,
       created_at: Date.now(), devices, groups, active_group: null,
     };
+    if (channel === "canary") {
+      record.canary_release = {
+        action_id: actionId,
+        version: AOT_WORKER_VERSION,
+        device_ids: selected.map((item) => item.device_id),
+        status: "PENDING",
+        updated_at: Date.now(),
+      };
+    }
     await this.writeAotSession(sessionId, record);
     await this.dispatchNextUpdateGroup(sessionId, record);
     return json({ ok: true, update: this.aotUpdateView(record.last_update) });
@@ -2193,15 +2301,22 @@ export class FleetState
         const update = record.last_update;
         const device = update?.devices?.[followerId];
         const status = String(body.status || "");
+        const workerVersion = String(body.worker_version || "").trim().slice(0, 80);
         if (!allowed.has(status) || !update || update.action_id !== actionId || !device) {
           return json({ ok: false, error: "invalid_update_ack" }, 400);
         }
         if (!AOT_UPDATE_TERMINAL.has(device.status)) {
-          device.status = status;
+          const nextStatus = status === "HEALTHY" && workerVersion !== update.version
+            ? "FAILED"
+            : status;
+          device.status = nextStatus;
           if (!Array.isArray(device.history)) device.history = [];
-          if (!device.history.includes(status)) device.history.push(status);
+          if (!device.history.includes(nextStatus)) device.history.push(nextStatus);
+          if (workerVersion) device.worker_version = workerVersion;
           device.updated_at = Date.now();
+          this.rememberUpdateStatus(record, device);
         }
+        this.refreshCanaryReleaseGate(record);
         const activeIds = (update.active_group || []).map((item) => item.device_id);
         const groupFinished = activeIds.length && activeIds.every((id) => AOT_UPDATE_TERMINAL.has(update.devices[id]?.status));
         const groupHealthy = activeIds.length && activeIds.every((id) => update.devices[id]?.status === "HEALTHY");
@@ -2406,6 +2521,7 @@ export class FleetState
           if (!Array.isArray(device.history)) device.history = [];
           if (!device.history.includes("FAILED")) device.history.push("FAILED");
           device.updated_at = Date.now();
+          this.rememberUpdateStatus(record, device);
         }
       }
       update.active_group = null;
