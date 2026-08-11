@@ -75,6 +75,7 @@ function loadDashboard(storage) {
     "online", "synced", "out", "offline", "refresh", "apply",
     "pause", "resume", "back", "up", "down", "openSwift",
     "batchResults", "batchTargets", "selectOnline", "clearSelection",
+    "updateCanary", "updateStable", "updateResults",
   ];
   const elements = new Map(
     elementIds.map((id) => [id, {
