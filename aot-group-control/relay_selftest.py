@@ -113,6 +113,28 @@ assert launch_commands == [
     ),
 ]
 
+enable_commands = []
+launch_attempts = []
+old_root_run = module.controller._root_run
+old_launch_package = module._launch_package
+try:
+    module.controller._root_run = lambda command, **_kwargs: enable_commands.append(command) or ""
+
+    def launch_after_enable(package):
+        launch_attempts.append(package)
+        if len(launch_attempts) == 1:
+            raise module.AotRelayError("package_activity_not_resolved")
+
+    module._launch_package = launch_after_enable
+    module._launch_swift_backup_once()
+finally:
+    module.controller._root_run = old_root_run
+    module._launch_package = old_launch_package
+assert launch_attempts == [module.SWIFT_BACKUP_PACKAGE] * 2
+assert enable_commands == [
+    "/system/bin/pm enable --user 0 org.swiftapps.swiftbackup >/dev/null"
+]
+
 parser = module.build_parser()
 parsed = parser.parse_args(
     [
@@ -283,6 +305,11 @@ old_foreground_package = module.controller.foreground_package
 old_batch_root_run = module.controller._root_run
 old_launch_package = module._launch_package
 old_state_path = module.STATE_PATH
+old_monotonic = module.time.monotonic
+old_sleep = module.time.sleep
+old_open_timeout = module.SWIFT_OPEN_TIMEOUT_SECONDS
+old_open_retry = module.SWIFT_OPEN_RETRY_SECONDS
+old_open_poll = module.SWIFT_OPEN_POLL_SECONDS
 try:
     with tempfile.TemporaryDirectory() as tmp:
         module.STATE_PATH = pathlib.Path(tmp) / "batch-state.json"
@@ -348,6 +375,50 @@ try:
         assert batch_acks[-1]["executed"] is True
 
         batch_acks.clear()
+        cold = dict(message, action_id="swift-fixture-cold")
+        clock = {"now": 0.0}
+        module.time.monotonic = lambda: clock["now"]
+        module.time.sleep = lambda seconds: clock.__setitem__(
+            "now", clock["now"] + seconds
+        )
+        module.SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
+        module.SWIFT_OPEN_RETRY_SECONDS = 15.0
+        module.SWIFT_OPEN_POLL_SECONDS = 0.5
+        module.controller.foreground_package = lambda: (
+            module.SWIFT_BACKUP_PACKAGE
+            if clock["now"] >= 20.0
+            else "com.android.settings"
+        )
+        module.controller._root_run = lambda _command: (
+            "package:/data/app/org.swiftapps.swiftbackup/base.apk\n"
+        )
+        launched = []
+        module._launch_package = lambda package: launched.append(package)
+        assert module._handle_batch_action(
+            {}, state, local_id="m117", session_id="m37-m117-p3",
+            message=cold,
+        )
+        assert launched == [module.SWIFT_BACKUP_PACKAGE] * 2
+        assert [ack["status"] for ack in batch_acks] == [
+            "ACCEPTED", "OPENED"
+        ]
+
+        batch_acks.clear()
+        failed_cold = dict(message, action_id="swift-fixture-timeout")
+        clock["now"] = 0.0
+        module.SWIFT_OPEN_TIMEOUT_SECONDS = 1.0
+        module.SWIFT_OPEN_RETRY_SECONDS = 0.25
+        module.controller.foreground_package = lambda: "com.android.settings"
+        assert module._handle_batch_action(
+            {}, state, local_id="m117", session_id="m37-m117-p3",
+            message=failed_cold,
+        )
+        assert [ack["status"] for ack in batch_acks] == [
+            "ACCEPTED", "FAILED"
+        ]
+        assert batch_acks[-1]["reason"] == "swift_backup_not_foreground"
+
+        batch_acks.clear()
         missing = dict(message, action_id="swift-fixture-3")
         module.controller.foreground_package = lambda: "com.android.settings"
         module.controller._root_run = lambda _command: ""
@@ -367,6 +438,11 @@ finally:
     module.controller._root_run = old_batch_root_run
     module._launch_package = old_launch_package
     module.STATE_PATH = old_state_path
+    module.time.monotonic = old_monotonic
+    module.time.sleep = old_sleep
+    module.SWIFT_OPEN_TIMEOUT_SECONDS = old_open_timeout
+    module.SWIFT_OPEN_RETRY_SECONDS = old_open_retry
+    module.SWIFT_OPEN_POLL_SECONDS = old_open_poll
 
 # UPDATE_WORKER is channel-bound, expires, and is deduped before spawning updater.
 old_popen = module.subprocess.Popen

@@ -140,6 +140,8 @@ if (
   !html.includes("Mở Swift Backup") ||
   !scriptMatch[1].includes('kind: "open_swift_backup"') ||
   !scriptMatch[1].includes("target_device_ids: onlineSelected") ||
+  !scriptMatch[1].includes("swift_backup_not_foreground") ||
+  !scriptMatch[1].includes("item.reason") ||
   !scriptMatch[1].includes("new window.WebSocket") ||
   scriptMatch[1].includes("setInterval(")
 ) {

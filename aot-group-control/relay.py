@@ -46,8 +46,11 @@ HUB_PROTOCOL_VERSION = "phase4-1"
 LIVE_STATUS_INTERVAL_SECONDS = 2.5
 SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
 OPEN_SWIFT_BACKUP_ACTION = "OPEN_SWIFT_BACKUP"
+SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
+SWIFT_OPEN_RETRY_SECONDS = 15.0
+SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.11.3"
+WORKER_VERSION = "aot-worker-2026.08.11.4"
 
 
 class AotRelayError(RuntimeError):
@@ -529,25 +532,50 @@ def _send_batch_ack(
     action_id: str,
     status: str,
     executed: bool,
+    reason: str | None = None,
 ) -> None:
+    payload = {
+        "protocol": HUB_PROTOCOL_VERSION,
+        "session_id": session_id,
+        "reference_device_id": reference_device_id,
+        "follower_device_id": device_id,
+        "action_id": action_id,
+        "batch_action": OPEN_SWIFT_BACKUP_ACTION,
+        "status": status,
+        "executed": executed,
+    }
+    if reason:
+        payload["reason"] = reason[:160]
     _send_ack(
         cfg,
-        {
-            "protocol": HUB_PROTOCOL_VERSION,
-            "session_id": session_id,
-            "reference_device_id": reference_device_id,
-            "follower_device_id": device_id,
-            "action_id": action_id,
-            "batch_action": OPEN_SWIFT_BACKUP_ACTION,
-            "status": status,
-            "executed": executed,
-        },
+        payload,
     )
 
 
+def _launch_swift_backup_once() -> None:
+    try:
+        _launch_package(SWIFT_BACKUP_PACKAGE)
+        return
+    except AotRelayError as exc:
+        if str(exc) != "package_activity_not_resolved":
+            raise
+    try:
+        controller._root_run(
+            "/system/bin/pm enable --user 0 "
+            + SWIFT_BACKUP_PACKAGE
+            + " >/dev/null"
+        )
+        _launch_package(SWIFT_BACKUP_PACKAGE)
+    except (AotRelayError, controller.AotControllerError) as exc:
+        raise AotRelayError("swift_backup_launcher_unavailable") from exc
+
+
 def _open_swift_backup() -> bool:
-    if controller.foreground_package() == SWIFT_BACKUP_PACKAGE:
-        return False
+    try:
+        if controller.foreground_package() == SWIFT_BACKUP_PACKAGE:
+            return False
+    except controller.AotControllerError:
+        pass
     try:
         package_paths = controller._root_run(
             "/system/bin/pm path " + SWIFT_BACKUP_PACKAGE
@@ -556,17 +584,42 @@ def _open_swift_backup() -> bool:
         raise AotRelayError("swift_backup_not_installed") from exc
     if not any(line.strip().startswith("package:") for line in package_paths):
         raise AotRelayError("swift_backup_not_installed")
+
+    started_at = time.monotonic()
+    deadline = started_at + SWIFT_OPEN_TIMEOUT_SECONDS
+    retry_at = started_at + SWIFT_OPEN_RETRY_SECONDS
+    retried = False
+    launch_error = ""
     try:
-        _launch_package(SWIFT_BACKUP_PACKAGE)
+        _launch_swift_backup_once()
     except AotRelayError as exc:
-        if str(exc) == "package_activity_not_resolved":
-            raise AotRelayError("swift_backup_not_installed") from exc
-        raise
-    for _ in range(12):
-        if controller.foreground_package() == SWIFT_BACKUP_PACKAGE:
+        launch_error = str(exc).split(":", 1)[0]
+    except controller.AotControllerError:
+        launch_error = "swift_backup_launch_failed"
+    # `am start -W` can time out after Android has already launched the app.
+    # Keep checking the verified foreground package before declaring failure.
+
+    while time.monotonic() < deadline:
+        try:
+            foreground = controller.foreground_package()
+        except controller.AotControllerError:
+            foreground = ""
+        if foreground == SWIFT_BACKUP_PACKAGE:
             return True
-        time.sleep(0.5)
-    raise AotRelayError("swift_backup_not_foreground")
+        now = time.monotonic()
+        if not retried and now >= retry_at:
+            retried = True
+            try:
+                _launch_swift_backup_once()
+                launch_error = ""
+            except AotRelayError as exc:
+                launch_error = str(exc).split(":", 1)[0]
+            except controller.AotControllerError:
+                launch_error = "swift_backup_launch_failed"
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(SWIFT_OPEN_POLL_SECONDS, remaining))
+    raise AotRelayError(launch_error or "swift_backup_not_foreground")
 
 
 def _handle_batch_action(
@@ -643,6 +696,7 @@ def _handle_batch_action(
             action_id=action_id,
             status=status,
             executed=False,
+            reason=str(exc).split(":", 1)[0],
         )
         return True
     _send_batch_ack(
