@@ -29,7 +29,7 @@ ASSETS = {
     },
     "bootstrap.py": {
         "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/bootstrap.py",
-        "sha256": "2c4bb4621e674cdf777c53deb5482feff2edda3fa5e8cb12c050c991945104ab",
+        "sha256": "2015a7b5895fa810ca268a1d9666f310ca9f4eb9c44dc377d0f30b54f68f761a",
     },
 }
 

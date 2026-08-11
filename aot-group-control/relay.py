@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import base64
 import hashlib
 import importlib.util
 import json
@@ -50,7 +51,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.11.7"
+WORKER_VERSION = "aot-worker-2026.08.11.8"
 WORKER_CAPABILITIES = ("dynamic_update_channel",)
 
 
@@ -740,6 +741,21 @@ def _handle_worker_update(
         return True
     if updater.normalize_channel(channel) != channel:
         return True
+    release = message.get("release")
+    if (
+        not isinstance(release, dict)
+        or release.get("protocol") != "github-release-v1"
+        or release.get("version") != WORKER_VERSION
+        or release.get("tag") != "worker-v" + WORKER_VERSION.removeprefix("aot-worker-")
+        or any(key.lower() in {"token", "authorization", "secret"} for key in release)
+    ):
+        return True
+    try:
+        release_metadata = base64.urlsafe_b64encode(
+            json.dumps(release, sort_keys=True, separators=(",", ":")).encode()
+        ).decode().rstrip("=")
+    except Exception:
+        return True
     if action_already_processed(state, action_id):
         return True
     mark_action_processed(state, action_id)
@@ -747,6 +763,7 @@ def _handle_worker_update(
         sys.executable, "-u", str(BOOTSTRAP_LAUNCHER), "update-action",
         "--action-id", action_id, "--channel", channel,
         "--reference-device", reference_id,
+        "--release-metadata", release_metadata,
     ]
     subprocess.Popen(
         command,

@@ -2,11 +2,66 @@ import fs from "node:fs/promises";
 import vm from "node:vm";
 import { webcrypto } from "node:crypto";
 
+const releaseCommit = "a".repeat(40);
+const releaseFiles = ["relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py", "worker_smoke_test.py", "worker-release-schema.json", "msetup_registration.py", "legacy_relay_bridge.py"];
+const releaseAssets = releaseFiles.map((name) => ({
+  name, size: 10, digest: "sha256:" + "1".repeat(64),
+  browser_download_url: `https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.8/${name}`,
+}));
+const releaseManifest = {
+  schema_version: 3, worker_version: "aot-worker-2026.08.11.8",
+  tag: "worker-v2026.08.11.8", commit_sha: releaseCommit,
+  asset_name: "worker-bundle.zip", asset_size: 20, asset_sha256: "2".repeat(64),
+  minimum_protocol: "github-release-v1", minimum_bootstrap_version: 2,
+  files: releaseAssets.map((asset) => ({
+    path: asset.name, asset_name: asset.name, url: asset.browser_download_url,
+    size: asset.size, sha256: "1".repeat(64), github_digest: asset.digest,
+  })),
+};
+const releaseManifestBytes = new TextEncoder().encode(JSON.stringify(releaseManifest));
+const releaseManifestSha = [...new Uint8Array(await webcrypto.subtle.digest("SHA-256", releaseManifestBytes))]
+  .map((value) => value.toString(16).padStart(2, "0")).join("");
+releaseAssets.push(
+  { name: "worker-bundle.zip", size: 20, digest: "sha256:" + "2".repeat(64), browser_download_url: "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.8/worker-bundle.zip" },
+  { name: "worker-checksums.sha256", size: 20, digest: "sha256:" + "3".repeat(64), browser_download_url: "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.8/worker-checksums.sha256" },
+  { name: "worker-manifest.json", size: releaseManifestBytes.length, digest: `sha256:${releaseManifestSha}`, browser_download_url: "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.8/worker-manifest.json" },
+);
+let releaseMode = "ok";
+const releaseFetch = async (url) => {
+  const value = String(url);
+  if (releaseMode === "rate_limit") return new Response("limited", { status: 403 });
+  if (value.includes("/releases/tags/")) {
+    let assets = releaseMode === "missing_asset"
+      ? releaseAssets.filter((asset) => asset.name !== "worker-bundle.zip")
+      : releaseMode === "duplicate_asset"
+        ? [...releaseAssets, releaseAssets[0]]
+        : releaseAssets;
+    if (releaseMode === "bad_digest" || releaseMode === "bad_size") {
+      assets = releaseAssets.map((asset) => asset.name === "worker-manifest.json"
+        ? { ...asset,
+            digest: releaseMode === "bad_digest" ? "sha256:" + "0".repeat(64) : asset.digest,
+            size: releaseMode === "bad_size" ? asset.size + 1 : asset.size }
+        : asset);
+    }
+    return Response.json({
+      draft: releaseMode === "draft", prerelease: releaseMode === "prerelease",
+      tag_name: releaseMode === "wrong_tag" ? "worker-v0" : "worker-v2026.08.11.8", assets,
+    });
+  }
+  if (value.includes("/git/ref/tags/")) return Response.json({ object: { type: "commit", sha: releaseMode === "wrong_commit" ? "b".repeat(40) : releaseCommit } });
+  if (value.endsWith("/worker-manifest.json")) {
+    if (releaseMode === "manifest_404") return new Response("missing", { status: 404 });
+    if (releaseMode === "partial") return new Response(releaseManifestBytes.slice(0, -1), { status: 200 });
+    return new Response(releaseManifestBytes, { status: 200 });
+  }
+  return new Response("missing", { status: 404 });
+};
+
 const sourceUrl = new URL("./fleet-state.js", import.meta.url);
 const source = await fs.readFile(sourceUrl, "utf8");
 const context = vm.createContext({
   URL, Request, Response, JSON, Map, Set, Object, Array,
-  String, Number, Boolean, Math, Date, console,
+  String, Number, Boolean, Math, Date, console, TextEncoder, TextDecoder, fetch: releaseFetch,
   crypto: webcrypto,
 });
 const loaded = new vm.SourceTextModule(source, {
@@ -70,6 +125,24 @@ const ctx = {
   getTags(socket) { return socket.tags || []; },
 };
 const fleet = new FleetState(ctx, {});
+for (const mode of ["draft", "prerelease", "wrong_tag", "wrong_commit", "missing_asset", "duplicate_asset", "bad_digest", "bad_size", "manifest_404", "partial", "rate_limit"]) {
+  releaseMode = mode;
+  await ctx.storage.delete("worker_release:worker-v2026.08.11.8");
+  try {
+    await fleet.resolveWorkerRelease();
+    throw new Error(`invalid release accepted: ${mode}`);
+  } catch (error) {
+    if (String(error.message).startsWith("invalid release accepted")) throw error;
+  }
+}
+releaseMode = "ok";
+await ctx.storage.delete("worker_release:worker-v2026.08.11.8");
+const resolvedRelease = await fleet.resolveWorkerRelease();
+if (
+  resolvedRelease.tag !== "worker-v2026.08.11.8"
+  || resolvedRelease.commit_sha !== releaseCommit
+  || resolvedRelease.manifest.github_digest !== `sha256:${releaseManifestSha}`
+) throw new Error("exact tagged release was not resolved and digest-pinned");
 const session = "m37-m117-p3";
 const reference = "m37";
 const follower = "m117";
@@ -496,7 +569,7 @@ const acknowledgeLegacy = async (member, actionId) => {
         protocol: "phase4-1", session_id: legacySession,
         reference_device_id: legacyIds[0], follower_device_id: member.device_id,
         action_id: actionId, batch_action: "UPDATE_WORKER",
-        status, worker_version: "aot-worker-2026.08.11.7",
+        status, worker_version: "aot-worker-2026.08.11.8",
       }),
     }));
     if (!response.ok) throw new Error("legacy bridge upgrade ACK rejected");
@@ -570,7 +643,7 @@ for (let index = 1; index <= 40; index += 1) {
   onlineTags.add(`aot:follower:${scaleSession}:${deviceId}`);
   fleet.aotLive.set(`${scaleSession}:${deviceId}`, {
     capabilities: ["dynamic_update_channel"],
-    worker_version: "aot-worker-2026.08.11.7",
+    worker_version: "aot-worker-2026.08.11.8",
   });
 }
 await ctx.storage.put(`aot_session:${scaleSession}`, {
@@ -659,6 +732,8 @@ if (
   capableMessages.length !== 2
   || capableMessages.some((item) =>
     item.channel !== "canary" || item.target_device_ids.length !== 1
+    || item.release?.tag !== "worker-v2026.08.11.8"
+    || /token|authorization|secret/i.test(JSON.stringify(item.release))
   )
 ) {
   throw new Error("capable workers did not receive one standard Canary command");
@@ -692,7 +767,7 @@ for (let index = 0; index < failedCanaryGroup.length; index += 1) {
       reference_device_id: scaleIds[0], follower_device_id: failedCanaryGroup[index].device_id,
       action_id: failedCanaryAction, batch_action: "UPDATE_WORKER",
       status: index === 0 ? "FAILED" : "HEALTHY",
-      worker_version: "aot-worker-2026.08.11.7",
+      worker_version: "aot-worker-2026.08.11.8",
     }),
   }));
   if (!response.ok) throw new Error("canary failure ACK rejected");
@@ -738,7 +813,7 @@ for (const member of [...updateRecord.last_update.active_group]) {
         protocol: "phase4-1", session_id: scaleSession,
         reference_device_id: scaleIds[0], follower_device_id: member.device_id,
         action_id: healthyCanaryAction, batch_action: "UPDATE_WORKER", status,
-        worker_version: "aot-worker-2026.08.11.7",
+        worker_version: "aot-worker-2026.08.11.8",
       }),
     }));
     if (!response.ok) throw new Error(`healthy canary ACK rejected: ${member.device_id}/${status}`);
@@ -780,7 +855,7 @@ while (updateRecord.last_update.active_group) {
           protocol: "phase4-1", session_id: scaleSession,
           reference_device_id: scaleIds[0], follower_device_id: member.device_id,
           action_id: stableActionId, batch_action: "UPDATE_WORKER", status,
-          worker_version: "aot-worker-2026.08.11.7",
+          worker_version: "aot-worker-2026.08.11.8",
         }),
       }));
       if (!response.ok) throw new Error(`Stable ACK rejected: ${member.device_id}/${status}`);
@@ -814,7 +889,7 @@ for (let index = 0; index < failedGroup.length; index += 1) {
       protocol: "phase4-1", session_id: scaleSession,
       reference_device_id: scaleIds[0], follower_device_id: failedGroup[index].device_id,
       action_id: failedActionId, batch_action: "UPDATE_WORKER", status,
-      worker_version: "aot-worker-2026.08.11.7",
+      worker_version: "aot-worker-2026.08.11.8",
     }),
   }));
   if (!response.ok) throw new Error("failed-group ACK rejected");

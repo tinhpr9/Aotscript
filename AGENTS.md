@@ -3,7 +3,18 @@
 These rules apply to every change under `aot-group-control/` and to AOT Hub
 worker actions in `cloudflare-worker/`.
 
-## Versioned releases are mandatory
+## Immutable GitHub Releases are mandatory
+
+- Every release uses an exact `worker-v<version>` tag pointing at the merged
+  `main` commit. Publish it only through `.github/workflows/release-worker.yml`;
+  never reuse, replace, delete, or overwrite a tag or asset.
+- AOT Hub resolves the exact tag through GitHub's REST API, caches it, verifies
+  the tag commit and asset digest, and sends pinned metadata to workers. Never
+  use `releases/latest`, put a GitHub token on a device or in frontend code, or
+  silently fall back to a mutable branch URL.
+- Canary and Stable use the same immutable release asset. Channel controls only
+  rollout membership. Rollbacks select an existing tagged release and must pass
+  Canary again.
 
 - Treat `~/.aot-group-control/bootstrap_launcher.py` and `bootstrap.py` as the
   external supervisor. Worker code belongs in immutable
@@ -21,6 +32,10 @@ worker actions in `cloudflare-worker/`.
 - Do not add machine identity, group, session, secrets, or other device state
   to a release. Those values remain outside releases under the Shouko storage
   directory and must survive updates byte-for-byte.
+- The schema-2 raw manifests exist solely for the one-time upgrade of deployed
+  Worker `2026.08.11.7`, whose bootstrap predates pinned release metadata.
+  Worker `2026.08.11.8` and later must use the schema-3 manifest asset from the
+  exact GitHub Release and must not consult those transition manifests.
 
 ## Safety and compatibility
 

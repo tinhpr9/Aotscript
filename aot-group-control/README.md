@@ -1,5 +1,17 @@
 # AOT Group Control
 
+## Worker releases
+
+Worker `2026.08.11.8` and later update only from an immutable GitHub Release
+resolved by AOT Hub using the exact `worker-v<version>` tag. The Hub verifies
+the tag commit and GitHub asset digests, caches the result, and sends only
+pinned public asset metadata. Devices never call the Releases API and never
+receive a GitHub credential. Canary and Stable use the same release bytes.
+
+The two schema-2 manifests in this directory are a one-time compatibility path
+for already-installed Worker `2026.08.11.7`. New workers neither consult them
+nor fall back to a mutable branch when release resolution or download fails.
+
 Current implementation includes:
 - root Android controller with sanitized UI hierarchy;
 - stable structural fingerprint and semantic selector resolution;
