@@ -444,9 +444,11 @@ if (
   throw new Error("dashboard did not receive disconnect state");
 }
 
-// Legacy workers advertise no dynamic-channel capability. The compatibility
-// bridge sends both valid variants with one action ID only to the two selected
-// sockets, so the old relay accepts exactly one variant via its own dedupe.
+// Legacy .1-.4 workers advertise no dynamic-channel capability. The bridge
+// tries only the selected sockets, then advances through the two historical
+// fixed-channel protocols with distinct transport IDs after no authenticated
+// ACK. A .5 worker succeeds on the primary canary attempt; a fixed-stable
+// worker succeeds on the fallback.
 const generatedDeviceId = (offset) => `m${700 + offset}`;
 const legacySession = "legacy-bridge-session";
 const legacyIds = [1, 2, 3].map(generatedDeviceId);
@@ -466,8 +468,8 @@ const legacySelected = new Set(legacyUpdate.update.selected_device_ids);
 const legacyMessages = socketSends.map((item) => ({
   tag: item.tag, payload: JSON.parse(item.payload),
 }));
-if (!response.ok || legacySelected.size !== 2 || legacyMessages.length !== 4) {
-  throw new Error("legacy two-channel bridge dispatch failed");
+if (!response.ok || legacySelected.size !== 2 || legacyMessages.length !== 2) {
+  throw new Error("legacy primary protocol dispatch failed");
 }
 for (const id of legacyIds) {
   const sent = legacyMessages.filter((item) => item.tag === `aot:follower:${legacySession}:${id}`);
@@ -475,32 +477,50 @@ for (const id of legacyIds) {
     throw new Error("legacy bridge targeted a non-selected device");
   }
   if (legacySelected.has(id)) {
-    const channels = new Set(sent.map((item) => item.payload.channel));
     if (
-      sent.length !== 2 || channels.size !== 2
-      || !channels.has("stable") || !channels.has("canary")
+      sent.length !== 1 || sent[0].payload.channel !== "canary"
       || sent.some((item) => item.payload.target_device_ids.join(",") !== id)
-      || new Set(sent.map((item) => item.payload.action_id)).size !== 1
+      || !sent[0].payload.action_id.endsWith("-p1")
     ) {
-      throw new Error("legacy bridge protocol is not single-target/deduped");
+      throw new Error("legacy primary protocol is not single-target");
     }
   }
 }
 let legacyRecord = await ctx.storage.get(`aot_session:${legacySession}`);
-for (const member of [...legacyRecord.last_update.active_group]) {
+const legacyMembers = [...legacyRecord.last_update.active_group];
+const acknowledgeLegacy = async (member, actionId) => {
   for (const status of ["DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING", "HEALTHY"]) {
     response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         protocol: "phase4-1", session_id: legacySession,
         reference_device_id: legacyIds[0], follower_device_id: member.device_id,
-        action_id: legacyRecord.last_update.action_id, batch_action: "UPDATE_WORKER",
-        status, worker_version: "aot-worker-2026.08.11.6",
+        action_id: actionId, batch_action: "UPDATE_WORKER",
+        status, worker_version: "aot-worker-2026.08.11.7",
       }),
     }));
     if (!response.ok) throw new Error("legacy bridge upgrade ACK rejected");
   }
+};
+await acknowledgeLegacy(legacyMembers[0], `${legacyRecord.last_update.action_id}-p1`);
+legacyRecord = await ctx.storage.get(`aot_session:${legacySession}`);
+legacyRecord.last_update.group_deadline = 1;
+await ctx.storage.put(`aot_session:${legacySession}`, legacyRecord);
+socketSends.length = 0;
+await fleet.alarm();
+const fallbackMessages = socketSends.map((item) => ({
+  tag: item.tag, payload: JSON.parse(item.payload),
+}));
+if (
+  fallbackMessages.length !== 1
+  || fallbackMessages[0].payload.channel !== "stable"
+  || !fallbackMessages[0].payload.action_id.endsWith("-p2")
+  || fallbackMessages[0].tag !== `aot:follower:${legacySession}:${legacyMembers[1].device_id}`
+) {
+  throw new Error("legacy fixed-channel fallback was not sequential and targeted");
 }
+legacyRecord = await ctx.storage.get(`aot_session:${legacySession}`);
+await acknowledgeLegacy(legacyMembers[1], `${legacyRecord.last_update.action_id}-p2`);
 legacyRecord = await ctx.storage.get(`aot_session:${legacySession}`);
 if (legacyRecord.canary_release.status !== "HEALTHY") {
   throw new Error("legacy bridge did not unlock after two HEALTHY workers");
@@ -524,12 +544,19 @@ timeoutRecord.last_update.group_deadline = 1;
 await ctx.storage.put(`aot_session:${legacyTimeoutSession}`, timeoutRecord);
 await fleet.alarm();
 timeoutRecord = await ctx.storage.get(`aot_session:${legacyTimeoutSession}`);
+timeoutRecord.last_update.group_deadline = 1;
+timeoutRecord.last_update.final_deadline = 1;
+await ctx.storage.put(`aot_session:${legacyTimeoutSession}`, timeoutRecord);
+await fleet.alarm();
+timeoutRecord = await ctx.storage.get(`aot_session:${legacyTimeoutSession}`);
 if (
   !Object.values(timeoutRecord.last_update.devices).every((item) =>
-    item.status === "FAILED" && item.reason === "legacy_bridge_no_ack"
+    item.status === "FAILED"
+    && item.reason.includes("phase4-1/UPDATE_WORKER/canary:no_authenticated_ack")
+    && item.reason.includes("phase4-1/UPDATE_WORKER/stable:no_authenticated_ack")
   )
 ) {
-  throw new Error("legacy bridge timeout reason was not retained");
+  throw new Error("legacy protocol/action/channel rejection was not retained");
 }
 
 // Scale POC: 40 connected devices, one direct batch, and 40 accepted/opened ACKs.
@@ -543,7 +570,7 @@ for (let index = 1; index <= 40; index += 1) {
   onlineTags.add(`aot:follower:${scaleSession}:${deviceId}`);
   fleet.aotLive.set(`${scaleSession}:${deviceId}`, {
     capabilities: ["dynamic_update_channel"],
-    worker_version: "aot-worker-2026.08.11.6",
+    worker_version: "aot-worker-2026.08.11.7",
   });
 }
 await ctx.storage.put(`aot_session:${scaleSession}`, {
@@ -665,7 +692,7 @@ for (let index = 0; index < failedCanaryGroup.length; index += 1) {
       reference_device_id: scaleIds[0], follower_device_id: failedCanaryGroup[index].device_id,
       action_id: failedCanaryAction, batch_action: "UPDATE_WORKER",
       status: index === 0 ? "FAILED" : "HEALTHY",
-      worker_version: "aot-worker-2026.08.11.6",
+      worker_version: "aot-worker-2026.08.11.7",
     }),
   }));
   if (!response.ok) throw new Error("canary failure ACK rejected");
@@ -681,6 +708,7 @@ if (response.status !== 409 || lockedStable.error !== "canary_release_failed") {
 
 // A fresh dynamic canary succeeds regardless of Device ID, then Stable skips
 // those same HEALTHY devices at the same worker version.
+socketSends.length = 0;
 response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ protocol: "phase4-1", session_id: scaleSession, kind: "update_canary" }),
@@ -688,6 +716,16 @@ response = await fleet.controlAotHub(new Request("https://test/aot/hub/control",
 updateResponse = await response.json();
 if (!response.ok || updateResponse.update.selected_device_ids.length !== 2) {
   throw new Error("second dynamic canary dispatch failed");
+}
+const priorHealthyId = failedCanaryGroup[1].device_id;
+const priorFailedId = failedCanaryGroup[0].device_id;
+if (
+  !updateResponse.update.selected_device_ids.includes(priorHealthyId)
+  || !updateResponse.update.selected_device_ids.includes(priorFailedId)
+  || socketSends.length !== 1
+  || JSON.parse(socketSends[0].payload).target_device_ids[0] !== priorFailedId
+) {
+  throw new Error("retry did not retain HEALTHY worker and target only FAILED worker");
 }
 const healthyCanaryIds = [...updateResponse.update.selected_device_ids];
 updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
@@ -700,7 +738,7 @@ for (const member of [...updateRecord.last_update.active_group]) {
         protocol: "phase4-1", session_id: scaleSession,
         reference_device_id: scaleIds[0], follower_device_id: member.device_id,
         action_id: healthyCanaryAction, batch_action: "UPDATE_WORKER", status,
-        worker_version: "aot-worker-2026.08.11.6",
+        worker_version: "aot-worker-2026.08.11.7",
       }),
     }));
     if (!response.ok) throw new Error(`healthy canary ACK rejected: ${member.device_id}/${status}`);
@@ -742,7 +780,7 @@ while (updateRecord.last_update.active_group) {
           protocol: "phase4-1", session_id: scaleSession,
           reference_device_id: scaleIds[0], follower_device_id: member.device_id,
           action_id: stableActionId, batch_action: "UPDATE_WORKER", status,
-          worker_version: "aot-worker-2026.08.11.6",
+          worker_version: "aot-worker-2026.08.11.7",
         }),
       }));
       if (!response.ok) throw new Error(`Stable ACK rejected: ${member.device_id}/${status}`);
@@ -776,7 +814,7 @@ for (let index = 0; index < failedGroup.length; index += 1) {
       protocol: "phase4-1", session_id: scaleSession,
       reference_device_id: scaleIds[0], follower_device_id: failedGroup[index].device_id,
       action_id: failedActionId, batch_action: "UPDATE_WORKER", status,
-      worker_version: "aot-worker-2026.08.11.6",
+      worker_version: "aot-worker-2026.08.11.7",
     }),
   }));
   if (!response.ok) throw new Error("failed-group ACK rejected");

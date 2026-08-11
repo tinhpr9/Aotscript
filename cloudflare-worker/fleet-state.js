@@ -19,8 +19,9 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.11.6";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.11.7";
 const AOT_DYNAMIC_CHANNEL_CAPABILITY = "dynamic_update_channel";
+const AOT_LEGACY_PROTOCOL_RETRY_MS = 12 * 1000;
 
 function json(
   value,
@@ -1526,7 +1527,7 @@ export class FleetState
     };
   }
 
-  updateDispatchChannels(sessionId, member, requestedChannel) {
+  updateDispatchProtocols(sessionId, member, requestedChannel) {
     const live = this.aotLive.get(this.aotLiveKey(sessionId, member.device_id));
     let capabilities = Array.isArray(live?.capabilities) ? live.capabilities : [];
     if (!capabilities.includes(AOT_DYNAMIC_CHANNEL_CAPABILITY)) {
@@ -1544,9 +1545,44 @@ export class FleetState
       }
     }
     if (capabilities.includes(AOT_DYNAMIC_CHANNEL_CAPABILITY)) {
-      return [requestedChannel];
+      return [{ name: "phase4-dynamic", action: AOT_UPDATE_ACTION, channel: requestedChannel }];
     }
-    return ["stable", "canary"];
+    // Historical workers 2026.08.11.1-.4 bind UPDATE_WORKER to a local
+    // channel. Try the requested channel first, then the other historical
+    // variant with a distinct transport action ID. This avoids the old relay's
+    // dedupe journal swallowing the fallback after a pre-ACK launch failure.
+    const alternate = requestedChannel === "canary" ? "stable" : "canary";
+    return [requestedChannel, alternate].map((channel, index) => ({
+      name: index === 0 ? "phase4-fixed-primary" : "phase4-fixed-fallback",
+      action: AOT_UPDATE_ACTION,
+      channel,
+    }));
+  }
+
+  updateAttemptActionId(update, device, index) {
+    return `${update.action_id}-p${index + 1}`;
+  }
+
+  sendUpdateAttempt(sessionId, update, member, device) {
+    const index = Number(device.protocol_attempt_index || 0);
+    const attempt = device.protocol_attempts?.[index];
+    if (!attempt) return 0;
+    const transportActionId = this.updateAttemptActionId(update, device, index);
+    device.transport_action_id = transportActionId;
+    device.protocol_mode = attempt.name;
+    device.rejected_protocols = Array.isArray(device.rejected_protocols)
+      ? device.rejected_protocols
+      : [];
+    return this.sendAotPayload(
+      this.aotSocketTag(member.role, sessionId, member.device_id),
+      {
+        type: "aot_batch_action", protocol: "phase4-1", session_id: sessionId,
+        reference_device_id: update.reference_device_id,
+        target_device_ids: [member.device_id], action_id: transportActionId,
+        action: attempt.action, channel: attempt.channel,
+        expires_at: update.final_deadline,
+      }
+    );
   }
 
   aotMembers(record) {
@@ -1568,25 +1604,11 @@ export class FleetState
     const next = (update.groups || []).shift();
     if (!next) return;
     update.active_group = next;
-    update.group_deadline = Date.now() + AOT_UPDATE_TIMEOUT_MS;
+    update.final_deadline = Date.now() + AOT_UPDATE_TIMEOUT_MS;
+    update.group_deadline = Date.now() + AOT_LEGACY_PROTOCOL_RETRY_MS;
     for (const member of next) {
       const device = update.devices[member.device_id];
-      const channels = Array.isArray(device.dispatch_channels) && device.dispatch_channels.length
-        ? device.dispatch_channels
-        : [update.channel];
-      let sent = 0;
-      for (const channel of channels) {
-        sent += this.sendAotPayload(
-          this.aotSocketTag(member.role, sessionId, member.device_id),
-          {
-            type: "aot_batch_action", protocol: "phase4-1", session_id: sessionId,
-            reference_device_id: update.reference_device_id,
-            target_device_ids: [member.device_id], action_id: update.action_id,
-            action: AOT_UPDATE_ACTION, channel,
-            expires_at: update.group_deadline,
-          }
-        );
-      }
+      const sent = this.sendUpdateAttempt(sessionId, update, member, device);
       if (sent === 0) {
         device.status = "FAILED";
         device.history = ["FAILED"];
@@ -1656,16 +1678,39 @@ export class FleetState
         ...(record.update_device_status || {}),
         ...(record.last_update?.devices || {}),
       };
-      selected = onlineMembers.map((member) => ({
+      const previousTrialIds = new Set(
+        record.canary_release?.version === AOT_WORKER_VERSION
+          && Array.isArray(record.canary_release?.device_ids)
+          ? record.canary_release.device_ids.map(String)
+          : []
+      );
+      const ranked = onlineMembers.map((member) => ({
         ...member,
         failed: previousDevices[member.device_id]?.status === "FAILED",
+        healthy: previousDevices[member.device_id]?.status === "HEALTHY"
+          && previousDevices[member.device_id]?.worker_version === AOT_WORKER_VERSION,
+        previous_trial: previousTrialIds.has(member.device_id),
         previous_updated_at: Number(previousDevices[member.device_id]?.updated_at || 0),
         tie_breaker: crypto.randomUUID(),
-      })).sort((left, right) =>
+      }));
+      const retainedHealthy = ranked.filter((item) => item.healthy && item.previous_trial)
+        .sort((left, right) => right.previous_updated_at - left.previous_updated_at)
+        .slice(0, 2);
+      const retainedIds = new Set(retainedHealthy.map((item) => item.device_id));
+      const candidates = ranked.filter((item) => !retainedIds.has(item.device_id) && !item.healthy)
+        .sort((left, right) =>
         Number(right.failed) - Number(left.failed)
         || right.previous_updated_at - left.previous_updated_at
         || left.tie_breaker.localeCompare(right.tie_breaker)
-      ).slice(0, 2).map(({ failed, previous_updated_at, tie_breaker, ...member }) => member);
+      );
+      selected = [...retainedHealthy, ...candidates].slice(0, 2)
+        .map(({ failed, healthy, previous_trial, previous_updated_at, tie_breaker, ...member }) => member);
+      if (selected.length < 2) {
+        return json({
+          ok: false, error: "canary_requires_two_eligible",
+          message: "Cần đủ 2 máy ONLINE chưa lỗi điều kiện cập nhật.",
+        }, 409);
+      }
     } else {
       const gate = record.canary_release;
       if (gate?.status === "FAILED" && gate.version === AOT_WORKER_VERSION) {
@@ -1691,18 +1736,23 @@ export class FleetState
     const online = [];
     const devices = {};
     for (const member of selected) {
-      const skipHealthy = channel === "stable" && alreadyHealthy.has(member.device_id);
+      const previous = record.update_device_status?.[member.device_id];
+      const skipHealthy = (channel === "stable" && alreadyHealthy.has(member.device_id))
+        || (channel === "canary" && previous?.status === "HEALTHY"
+          && previous?.worker_version === AOT_WORKER_VERSION);
       const isConnected = connected(member);
-      const dispatchChannels = skipHealthy
+      const protocolAttempts = skipHealthy
         ? []
-        : this.updateDispatchChannels(sessionId, member, channel);
+        : this.updateDispatchProtocols(sessionId, member, channel);
       devices[member.device_id] = {
         device_id: member.device_id,
         status: skipHealthy ? "HEALTHY" : (isConnected ? "QUEUED" : "SKIPPED_OFFLINE"),
         history: skipHealthy ? ["HEALTHY"] : (isConnected ? ["QUEUED"] : ["SKIPPED_OFFLINE"]),
         worker_version: skipHealthy ? AOT_WORKER_VERSION : "",
-        protocol_mode: dispatchChannels.length > 1 ? "legacy_dual_channel" : "capability_channel",
-        dispatch_channels: dispatchChannels,
+        protocol_mode: protocolAttempts[0]?.name || "already_healthy",
+        protocol_attempts: protocolAttempts,
+        protocol_attempt_index: 0,
+        rejected_protocols: [],
         reason: null,
         updated_at: Date.now(),
       };
@@ -1719,6 +1769,7 @@ export class FleetState
         : [...alreadyHealthy],
       reference_device_id: validDeviceId(record.reference_device_id) || selected[0]?.device_id,
       created_at: Date.now(), devices, groups, active_group: null,
+      final_deadline: null,
     };
     if (channel === "canary") {
       record.canary_release = {
@@ -1729,6 +1780,8 @@ export class FleetState
         updated_at: Date.now(),
       };
     }
+    await this.writeAotSession(sessionId, record);
+    this.refreshCanaryReleaseGate(record);
     await this.writeAotSession(sessionId, record);
     await this.dispatchNextUpdateGroup(sessionId, record);
     return json({ ok: true, update: this.aotUpdateView(record.last_update) });
@@ -2381,10 +2434,26 @@ export class FleetState
         const status = String(body.status || "");
         const workerVersion = String(body.worker_version || "").trim().slice(0, 80);
         const reportedReason = String(body.reason || "").trim().slice(0, 160);
-        if (!allowed.has(status) || !update || update.action_id !== actionId || !device) {
+        const acceptedActionIds = !update || !device
+          ? []
+          : [update.action_id, ...(device.protocol_attempts || []).map((_, index) =>
+              this.updateAttemptActionId(update, device, index)
+            )];
+        if (!allowed.has(status) || !update || !acceptedActionIds.includes(actionId) || !device) {
           return json({ ok: false, error: "invalid_update_ack" }, 400);
         }
         if (!AOT_UPDATE_TERMINAL.has(device.status)) {
+          const attemptIndex = (device.protocol_attempts || []).findIndex((_, index) =>
+            this.updateAttemptActionId(update, device, index) === actionId
+          );
+          if (attemptIndex >= 0) {
+            device.protocol_attempt_index = attemptIndex;
+            const attempt = device.protocol_attempts[attemptIndex];
+            device.protocol_mode = attempt.name;
+            device.accepted_protocol = {
+              protocol: "phase4-1", action: attempt.action, channel: attempt.channel,
+            };
+          }
           const nextStatus = status === "HEALTHY" && workerVersion !== update.version
             ? "FAILED"
             : status;
@@ -2419,7 +2488,7 @@ export class FleetState
           await this.dispatchNextUpdateGroup(sessionId, record);
         }
         await this.broadcastAotHubState(sessionId);
-        return json({ ok: true, action_id: actionId, device_id: followerId, status: device.status });
+        return json({ ok: true, action_id: update.action_id, device_id: followerId, status: device.status });
       }
       const allowed = new Set([
         "ACCEPTED",
@@ -2602,14 +2671,53 @@ export class FleetState
     for (const [key, record] of entries) {
       const update = record?.last_update;
       if (!update?.active_group || Number(update.group_deadline || 0) > Date.now()) continue;
+      let retried = false;
+      if (Number(update.final_deadline || 0) > Date.now()) {
+        for (const member of update.active_group) {
+          const device = update.devices?.[member.device_id];
+          if (!device || device.status !== "QUEUED") continue;
+          const current = device.protocol_attempts?.[device.protocol_attempt_index || 0];
+          const nextIndex = Number(device.protocol_attempt_index || 0) + 1;
+          if (!device.protocol_attempts?.[nextIndex]) continue;
+          device.rejected_protocols = Array.isArray(device.rejected_protocols)
+            ? device.rejected_protocols
+            : [];
+          device.rejected_protocols.push({
+            protocol: "phase4-1", action: current?.action || AOT_UPDATE_ACTION,
+            channel: current?.channel || "", reason: "no_authenticated_ack",
+          });
+          device.protocol_attempt_index = nextIndex;
+          if (this.sendUpdateAttempt(String(key).slice("aot_session:".length), update, member, device) > 0) {
+            retried = true;
+          }
+          device.updated_at = Date.now();
+        }
+      }
+      if (Number(update.final_deadline || 0) > Date.now()) {
+        update.group_deadline = update.final_deadline;
+        const sessionId = String(key).slice("aot_session:".length);
+        await this.writeAotSession(sessionId, record);
+        await this.ctx.storage.setAlarm(update.group_deadline);
+        if (retried) await this.broadcastAotHubState(sessionId);
+        continue;
+      }
       for (const member of update.active_group) {
         const device = update.devices?.[member.device_id];
         if (device && !AOT_UPDATE_TERMINAL.has(device.status)) {
           device.status = "FAILED";
           if (!Array.isArray(device.history)) device.history = [];
           if (!device.history.includes("FAILED")) device.history.push("FAILED");
-          device.reason = device.protocol_mode === "legacy_dual_channel"
-            ? "legacy_bridge_no_ack"
+          const attempts = (device.rejected_protocols || []).concat(
+            (device.protocol_attempts || []).slice(device.protocol_attempt_index || 0, (device.protocol_attempt_index || 0) + 1)
+              .map((attempt) => ({
+                protocol: "phase4-1", action: attempt.action,
+                channel: attempt.channel, reason: "no_authenticated_ack",
+              }))
+          );
+          device.reason = attempts.length
+            ? `protocol_rejected:${attempts.map((item) =>
+                `${item.protocol}/${item.action}/${item.channel}:${item.reason}`
+              ).join(",")}`.slice(0, 160)
             : "worker_ack_timeout";
           device.updated_at = Date.now();
           this.rememberUpdateStatus(record, device);

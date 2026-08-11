@@ -142,7 +142,7 @@ if (
   !scriptMatch[1].includes("target_device_ids: onlineSelected") ||
   !scriptMatch[1].includes("swift_backup_not_foreground") ||
   !scriptMatch[1].includes("item.reason") ||
-  !scriptMatch[1].includes("legacy_bridge_no_ack") ||
+  !scriptMatch[1].includes("protocol_rejected:") ||
   !scriptMatch[1].includes("data.message") ||
   !html.includes('id="updateError" class="error"') ||
   html.includes("Canary:") ||

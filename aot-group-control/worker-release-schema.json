@@ -7,6 +7,7 @@
     "updater.py",
     "e2e.py",
     "worker_smoke_test.py",
+    "legacy_relay_bridge.py",
     "msetup_registration.py",
     "worker-release-schema.json"
   ],
