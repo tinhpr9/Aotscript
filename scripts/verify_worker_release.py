@@ -102,7 +102,11 @@ def verify_release(
         if draft_release_path is None:
             raise ReleaseVerificationError("draft_release_required_for_published_check")
         draft = _load_json(draft_release_path)
-        if release.get("id") != draft.get("id"):
+        published_id = release.get("id")
+        draft_id = draft.get("id")
+        if published_id is None or draft_id is None:
+            raise ReleaseVerificationError("release_identity_missing")
+        if published_id != draft_id:
             raise ReleaseVerificationError("release_identity_changed")
     local_assets = _local_assets(asset_folder)
     remote_assets = _remote_assets(release)

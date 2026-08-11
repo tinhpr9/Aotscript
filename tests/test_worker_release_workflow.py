@@ -56,10 +56,21 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
 
-    def verify(self, release: dict, ref: dict | None = None, *, published: bool = False) -> None:
+    def verify(
+        self,
+        release: dict,
+        ref: dict | None = None,
+        *,
+        published: bool = False,
+        draft_release: dict | None = None,
+    ) -> None:
         release_path = self.write_json("release.json", release)
         ref_path = self.write_json("ref.json", self.ref if ref is None else ref)
-        draft_path = self.write_json("draft.json", self.release) if published else None
+        draft_path = (
+            self.write_json("draft.json", self.release if draft_release is None else draft_release)
+            if published
+            else None
+        )
         MODULE.verify_release(
             commit=self.commit,
             tag=self.tag,
@@ -107,11 +118,18 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         mutable = copy.deepcopy(published)
         mutable["immutable"] = False
         mutations.append((mutable, self.ref, True))
+        missing_published_id = copy.deepcopy(published)
+        missing_published_id.pop("id")
+        mutations.append((missing_published_id, self.ref, True))
         for release, ref, is_published in mutations:
             with self.subTest(release=release, ref=ref, published=is_published), self.assertRaises(
                 MODULE.ReleaseVerificationError
             ):
                 self.verify(release, ref, published=is_published)
+        missing_draft_id = copy.deepcopy(self.release)
+        missing_draft_id.pop("id")
+        with self.assertRaisesRegex(MODULE.ReleaseVerificationError, "release_identity_missing"):
+            self.verify(published, published=True, draft_release=missing_draft_id)
 
     def test_workflow_is_fail_closed_and_never_uses_admin_endpoint(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
