@@ -61,6 +61,12 @@ class MsetupRegistrationTests(unittest.TestCase):
         self.assertEqual(before.st_mtime_ns, after.st_mtime_ns)
         self.assertEqual(before_bytes, self.config.read_bytes())
 
+        custom = dict(data, open_package="org.swiftapps.swiftbackup", custom_schema=7)
+        self.config.write_text(json.dumps(custom, indent=4) + "\n", encoding="utf-8")
+        custom_bytes = self.config.read_bytes()
+        self.assertEqual(module.configure(self.configure_args()), 0)
+        self.assertEqual(self.config.read_bytes(), custom_bytes)
+
     def test_missing_and_multiple_sessions_fail_closed(self):
         for reason in ("no_active_aot_session", "multiple_active_aot_sessions"):
             module.post_json = lambda *_args, _reason=reason, **_kwargs: (_ for _ in ()).throw(

@@ -111,8 +111,18 @@ def write_config_atomic(path: pathlib.Path, config: dict[str, Any]) -> bool:
         existing = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         existing = None
-    if existing == config:
-        return False
+    if isinstance(existing, dict):
+        core_keys = (
+            "device_id", "enabled", "role", "session_id",
+            "reference_device_id",
+        )
+        open_package = existing.get("open_package")
+        open_package_valid = open_package in (None, "") or (
+            isinstance(open_package, str)
+            and re.fullmatch(r"[A-Za-z0-9._]{1,160}", open_package)
+        )
+        if all(existing.get(key) == config.get(key) for key in core_keys) and open_package_valid:
+            return False
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + f".tmp-{os.getpid()}")
     try:
