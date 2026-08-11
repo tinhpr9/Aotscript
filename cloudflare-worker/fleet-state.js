@@ -12,6 +12,9 @@ const COMMAND_MAX_TARGETS = 1000;
 
 
 const AOT_CONTROL_MAX_TARGETS = 128;
+const AOT_BATCH_ACTION = "OPEN_SWIFT_BACKUP";
+const AOT_BATCH_PACKAGE = "org.swiftapps.swiftbackup";
+const AOT_BATCH_TTL_MS = 12 * 1000;
 
 function json(
   value,
@@ -1227,7 +1230,140 @@ export class FleetState
       summary,
       last_control:
         record.last_control || null,
+      last_batch:
+        this.aotBatchView(
+          record.last_batch,
+          now
+        ),
       updated_at: Date.now(),
+    });
+  }
+
+  aotBatchView(batch, now = Date.now()) {
+    if (!batch || typeof batch !== "object") {
+      return null;
+    }
+    const expiresAt = Number(batch.expires_at || 0);
+    const devices = Object.values(batch.devices || {})
+      .filter((item) => item && validDeviceId(item.device_id))
+      .map((item) => {
+        let status = String(item.status || "FAILED");
+        let history = Array.isArray(item.history)
+          ? item.history.map(String).slice(-4)
+          : [];
+        if (
+          ["SENT", "ACCEPTED"].includes(status) &&
+          expiresAt > 0 &&
+          now >= expiresAt
+        ) {
+          status = "TIMEOUT";
+          if (!history.includes("TIMEOUT")) {
+            history = [...history, "TIMEOUT"];
+          }
+        }
+        return {
+          device_id: item.device_id,
+          status,
+          history,
+          display_status: history.join(" → ") || status,
+          updated_at: Number(item.updated_at || batch.created_at || 0),
+        };
+      });
+    devices.sort((left, right) =>
+      String(left.device_id).localeCompare(
+        String(right.device_id),
+        undefined,
+        { numeric: true, sensitivity: "base" }
+      )
+    );
+    return {
+      action_id: String(batch.action_id || ""),
+      action: AOT_BATCH_ACTION,
+      package: AOT_BATCH_PACKAGE,
+      created_at: Number(batch.created_at || 0),
+      expires_at: expiresAt,
+      devices,
+    };
+  }
+
+  async dispatchOpenSwiftBackup(sessionId, record) {
+    const referenceId = validDeviceId(record.reference_device_id);
+    const members = [];
+    if (referenceId) {
+      members.push({ role: "reference", device_id: referenceId });
+    }
+    for (const rawId of Object.keys(record.followers || {})) {
+      const deviceId = validDeviceId(rawId);
+      if (
+        deviceId &&
+        !members.some((item) => item.device_id === deviceId)
+      ) {
+        members.push({ role: "follower", device_id: deviceId });
+      }
+    }
+    const actionId =
+      `swift-${Date.now()}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    const createdAt = Date.now();
+    const expiresAt = createdAt + AOT_BATCH_TTL_MS;
+    const online = [];
+    const devices = {};
+    for (const member of members) {
+      const connected = this.ctx.getWebSockets(
+        this.aotSocketTag(member.role, sessionId, member.device_id)
+      ).length > 0;
+      devices[member.device_id] = {
+        device_id: member.device_id,
+        role: member.role,
+        status: connected ? "SENT" : "SKIPPED_OFFLINE",
+        history: connected ? ["SENT"] : ["SKIPPED_OFFLINE"],
+        updated_at: createdAt,
+      };
+      if (connected) online.push(member);
+    }
+    record.last_batch = {
+      action_id: actionId,
+      action: AOT_BATCH_ACTION,
+      package: AOT_BATCH_PACKAGE,
+      created_at: createdAt,
+      expires_at: expiresAt,
+      devices,
+    };
+    await this.writeAotSession(sessionId, record);
+
+    const targetIds = online.map((item) => item.device_id);
+    const ackReferenceId = referenceId || targetIds[0] || null;
+    let sendFailed = false;
+    if (ackReferenceId) {
+      const payload = {
+        type: "aot_batch_action",
+        protocol: "phase4-1",
+        session_id: sessionId,
+        reference_device_id: ackReferenceId,
+        target_device_ids: targetIds,
+        action_id: actionId,
+        action: AOT_BATCH_ACTION,
+        package: AOT_BATCH_PACKAGE,
+        expires_at: expiresAt,
+      };
+      for (const member of online) {
+        const sent = this.sendAotPayload(
+          this.aotSocketTag(member.role, sessionId, member.device_id),
+          payload
+        );
+        if (sent === 0) {
+          sendFailed = true;
+          devices[member.device_id].status = "FAILED";
+          devices[member.device_id].history.push("FAILED");
+          devices[member.device_id].updated_at = Date.now();
+        }
+      }
+    }
+    if (sendFailed) {
+      await this.writeAotSession(sessionId, record);
+    }
+    return json({
+      ok: true,
+      batch: this.aotBatchView(record.last_batch, createdAt),
     });
   }
 
@@ -1260,6 +1396,10 @@ export class FleetState
       await this.readAotSession(
         sessionId
       );
+
+    if (kind === "open_swift_backup") {
+      return this.dispatchOpenSwiftBackup(sessionId, record);
+    }
 
     if (
       kind === "pause" ||
@@ -1704,9 +1844,12 @@ export class FleetState
     const actionId = String(
       body?.action_id || ""
     ).trim();
+    const isBatch =
+      body?.protocol === "phase4-1" &&
+      body?.batch_action === AOT_BATCH_ACTION;
     if (
       !body ||
-      body.protocol !== "phase3-1" ||
+      (!isBatch && body.protocol !== "phase3-1") ||
       !/^[A-Za-z0-9_-]{1,64}$/.test(
         sessionId
       ) ||
@@ -1729,6 +1872,64 @@ export class FleetState
       await this.readAotSession(
         sessionId
       );
+    if (isBatch) {
+      const allowed = new Set([
+        "ACCEPTED",
+        "OPENED",
+        "FAILED_NOT_INSTALLED",
+        "FAILED",
+        "TIMEOUT",
+        "DUPLICATE",
+      ]);
+      const status = String(body.status || "");
+      const batch = record.last_batch;
+      const device = batch?.devices?.[followerId];
+      if (
+        !allowed.has(status) ||
+        !batch ||
+        batch.action_id !== actionId ||
+        batch.action !== AOT_BATCH_ACTION ||
+        !device ||
+        device.device_id !== followerId
+      ) {
+        return json(
+          { ok: false, error: "invalid_batch_ack" },
+          400
+        );
+      }
+      if (status !== "DUPLICATE") {
+        const terminal = new Set([
+          "OPENED",
+          "FAILED_NOT_INSTALLED",
+          "FAILED",
+          "TIMEOUT",
+          "SKIPPED_OFFLINE",
+        ]);
+        const expired =
+          Number(batch.expires_at || 0) <= Date.now();
+        const nextStatus =
+          expired && !terminal.has(device.status)
+            ? "TIMEOUT"
+            : status;
+        if (!terminal.has(device.status)) {
+          if (!Array.isArray(device.history)) {
+            device.history = [String(device.status || "SENT")];
+          }
+          device.status = nextStatus;
+          if (!device.history.includes(nextStatus)) {
+            device.history.push(nextStatus);
+          }
+          device.updated_at = Date.now();
+        }
+      }
+      await this.writeAotSession(sessionId, record);
+      return json({
+        ok: true,
+        action_id: actionId,
+        device_id: followerId,
+        status: device.status,
+      });
+    }
     const previous =
       record.followers[followerId];
     record.followers[followerId] = {

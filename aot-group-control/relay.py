@@ -42,6 +42,8 @@ MAX_PREVIEW_BYTES = 180 * 1024
 PROCESSED_ACTIONS_MAX = 256
 HUB_PROTOCOL_VERSION = "phase4-1"
 LIVE_STATUS_INTERVAL_SECONDS = 2.5
+SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
+OPEN_SWIFT_BACKUP_ACTION = "OPEN_SWIFT_BACKUP"
 
 
 class AotRelayError(RuntimeError):
@@ -501,6 +503,143 @@ def _execute_action(action: dict[str, Any], precondition: str) -> dict[str, Any]
     raise AotRelayError("unsupported_action_kind")
 
 
+def _send_batch_ack(
+    cfg: dict[str, str],
+    *,
+    session_id: str,
+    reference_device_id: str,
+    device_id: str,
+    action_id: str,
+    status: str,
+    executed: bool,
+) -> None:
+    _send_ack(
+        cfg,
+        {
+            "protocol": HUB_PROTOCOL_VERSION,
+            "session_id": session_id,
+            "reference_device_id": reference_device_id,
+            "follower_device_id": device_id,
+            "action_id": action_id,
+            "batch_action": OPEN_SWIFT_BACKUP_ACTION,
+            "status": status,
+            "executed": executed,
+        },
+    )
+
+
+def _open_swift_backup() -> bool:
+    if controller.foreground_package() == SWIFT_BACKUP_PACKAGE:
+        return False
+    try:
+        package_paths = controller._root_run(
+            "/system/bin/pm path " + SWIFT_BACKUP_PACKAGE
+        ).splitlines()
+    except controller.AotControllerError as exc:
+        raise AotRelayError("swift_backup_not_installed") from exc
+    if not any(line.strip().startswith("package:") for line in package_paths):
+        raise AotRelayError("swift_backup_not_installed")
+    try:
+        _launch_package(SWIFT_BACKUP_PACKAGE)
+    except AotRelayError as exc:
+        if str(exc) == "package_activity_not_resolved":
+            raise AotRelayError("swift_backup_not_installed") from exc
+        raise
+    for _ in range(12):
+        if controller.foreground_package() == SWIFT_BACKUP_PACKAGE:
+            return True
+        time.sleep(0.5)
+    raise AotRelayError("swift_backup_not_foreground")
+
+
+def _handle_batch_action(
+    cfg: dict[str, str],
+    state: dict[str, Any],
+    *,
+    local_id: str,
+    session_id: str,
+    message: dict[str, Any],
+) -> bool:
+    if message.get("type") != "aot_batch_action":
+        return False
+    if (
+        message.get("protocol") != HUB_PROTOCOL_VERSION
+        or normalize_session_id(message.get("session_id")) != session_id
+        or message.get("action") != OPEN_SWIFT_BACKUP_ACTION
+        or message.get("package") != SWIFT_BACKUP_PACKAGE
+        or local_id not in normalize_target_ids(message.get("target_device_ids"))
+    ):
+        return True
+    action_id = normalize_action_id(message.get("action_id"))
+    reference_id = normalize_device_id(message.get("reference_device_id"))
+    if not action_id or not reference_id:
+        return True
+    try:
+        expires_at = int(message.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return True
+    if expires_at <= int(time.time() * 1000):
+        _send_batch_ack(
+            cfg,
+            session_id=session_id,
+            reference_device_id=reference_id,
+            device_id=local_id,
+            action_id=action_id,
+            status="TIMEOUT",
+            executed=False,
+        )
+        return True
+    if action_already_processed(state, action_id):
+        _send_batch_ack(
+            cfg,
+            session_id=session_id,
+            reference_device_id=reference_id,
+            device_id=local_id,
+            action_id=action_id,
+            status="DUPLICATE",
+            executed=False,
+        )
+        return True
+    mark_action_processed(state, action_id)
+    _send_batch_ack(
+        cfg,
+        session_id=session_id,
+        reference_device_id=reference_id,
+        device_id=local_id,
+        action_id=action_id,
+        status="ACCEPTED",
+        executed=False,
+    )
+    try:
+        executed = _open_swift_backup()
+    except (AotRelayError, controller.AotControllerError) as exc:
+        status = (
+            "FAILED_NOT_INSTALLED"
+            if str(exc) == "swift_backup_not_installed"
+            else "FAILED"
+        )
+        _send_batch_ack(
+            cfg,
+            session_id=session_id,
+            reference_device_id=reference_id,
+            device_id=local_id,
+            action_id=action_id,
+            status=status,
+            executed=False,
+        )
+        return True
+    _send_batch_ack(
+        cfg,
+        session_id=session_id,
+        reference_device_id=reference_id,
+        device_id=local_id,
+        action_id=action_id,
+        status="OPENED",
+        executed=executed,
+    )
+    return True
+
+
 
 def normalize_target_ids(values: Any) -> list[str]:
     if not isinstance(values, list):
@@ -897,6 +1036,7 @@ def reference_loop(
     if open_package:
         _launch_package(open_package)
     cfg = load_agent_config()
+    state = _load_state()
     url = websocket_url(
         cfg["worker_report_url"],
         device_id=local_id,
@@ -981,6 +1121,14 @@ def reference_loop(
                 except Exception:
                     continue
                 if not isinstance(message, dict):
+                    continue
+                if _handle_batch_action(
+                    cfg,
+                    state,
+                    local_id=local_id,
+                    session_id=session_id,
+                    message=message,
+                ):
                     continue
                 if (
                     message.get("type")
@@ -1176,6 +1324,14 @@ def follower_loop(
                 except Exception:
                     continue
                 if not isinstance(message, dict):
+                    continue
+                if _handle_batch_action(
+                    cfg,
+                    state,
+                    local_id=local_id,
+                    session_id=session_id,
+                    message=message,
+                ):
                     continue
                 if (
                     message.get("type")

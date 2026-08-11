@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import vm from "node:vm";
+import { webcrypto } from "node:crypto";
 
 const sourceUrl = new URL("./fleet-state.js", import.meta.url);
 const source = await fs.readFile(sourceUrl, "utf8");
 const context = vm.createContext({
   URL, Request, Response, JSON, Map, Set, Object, Array,
   String, Number, Boolean, Math, Date, console,
+  crypto: webcrypto,
 });
 const loaded = new vm.SourceTextModule(source, {
   context,
@@ -39,9 +41,14 @@ class Storage {
 }
 
 const onlineTags = new Set();
+const socketSends = [];
 const ctx = {
   storage: new Storage(),
-  getWebSockets(tag) { return onlineTags.has(tag) ? [{}] : []; },
+  getWebSockets(tag) {
+    return onlineTags.has(tag)
+      ? [{ send(payload) { socketSends.push({ tag, payload, at: Date.now() }); } }]
+      : [];
+  },
 };
 const fleet = new FleetState(ctx, {});
 const session = "m37-m117-p3";
@@ -141,6 +148,91 @@ response = await fleet.getAotHubState(
 state = await response.json();
 if (state.followers[0].status !== "WAITING") {
   throw new Error("stale live status was not WAITING");
+}
+
+// Fixed batch action snapshots connectivity and sends directly to all online sockets.
+const batchSessionRecord = await ctx.storage.get(`aot_session:${session}`);
+batchSessionRecord.followers.m88 = { device_id: "m88" };
+await ctx.storage.put(`aot_session:${session}`, batchSessionRecord);
+socketSends.length = 0;
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    protocol: "phase4-1",
+    session_id: session,
+    kind: "open_swift_backup",
+  }),
+}));
+let batchResponse = await response.json();
+if (!batchResponse.ok || batchResponse.batch.action !== "OPEN_SWIFT_BACKUP") {
+  throw new Error("batch dispatch failed");
+}
+const byId = Object.fromEntries(
+  batchResponse.batch.devices.map((item) => [item.device_id, item])
+);
+if (byId[reference].status !== "SENT" || byId[follower].status !== "SENT") {
+  throw new Error("online devices were not SENT");
+}
+if (byId.m88.status !== "SKIPPED_OFFLINE") {
+  throw new Error("offline device was not skipped");
+}
+if (socketSends.length !== 2) {
+  throw new Error(`expected two near-simultaneous sends, got ${socketSends.length}`);
+}
+if (Math.max(...socketSends.map((item) => item.at)) - Math.min(...socketSends.map((item) => item.at)) > 100) {
+  throw new Error("online batch sends were not near-simultaneous");
+}
+const sentPayloads = socketSends.map((item) => JSON.parse(item.payload));
+if (new Set(sentPayloads.map((item) => item.action_id)).size !== 1) {
+  throw new Error("batch action id was not shared");
+}
+if (sentPayloads.some((item) =>
+  item.package !== "org.swiftapps.swiftbackup" ||
+  item.action !== "OPEN_SWIFT_BACKUP"
+)) {
+  throw new Error("batch action was not fixed to Swift Backup");
+}
+
+const batchActionId = batchResponse.batch.action_id;
+for (const status of ["ACCEPTED", "OPENED"]) {
+  response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      protocol: "phase4-1",
+      session_id: session,
+      reference_device_id: reference,
+      follower_device_id: follower,
+      action_id: batchActionId,
+      batch_action: "OPEN_SWIFT_BACKUP",
+      status,
+      executed: status === "OPENED",
+    }),
+  }));
+  if (!response.ok) throw new Error(`batch ACK ${status} rejected`);
+}
+response = await fleet.getAotHubState(
+  new URL(`https://test/aot/hub/state?session=${session}`)
+);
+state = await response.json();
+const opened = state.last_batch.devices.find((item) => item.device_id === follower);
+if (!opened || opened.display_status !== "SENT → ACCEPTED → OPENED") {
+  throw new Error("batch ACK transition was not retained");
+}
+
+const stored = await ctx.storage.get(`aot_session:${session}`);
+stored.last_batch.devices[reference].status = "ACCEPTED";
+stored.last_batch.devices[reference].history = ["SENT", "ACCEPTED"];
+stored.last_batch.expires_at = Date.now() - 1;
+await ctx.storage.put(`aot_session:${session}`, stored);
+response = await fleet.getAotHubState(
+  new URL(`https://test/aot/hub/state?session=${session}`)
+);
+state = await response.json();
+const timedOut = state.last_batch.devices.find((item) => item.device_id === reference);
+if (!timedOut || timedOut.status !== "TIMEOUT") {
+  throw new Error("batch timeout did not terminate pending state");
 }
 
 console.log("AOT_FLEET_STATE_SELFTEST=OK");
