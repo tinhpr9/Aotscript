@@ -1623,9 +1623,20 @@ function aotHubHtml() {
         return;
       }
       batchResultsEl.innerHTML = batch.devices.map(function (item) {
+        var reasons = {
+          swift_backup_not_installed: "Swift Backup chưa được cài",
+          swift_backup_launcher_unavailable: "Không tìm thấy màn hình mở ứng dụng",
+          swift_backup_launch_failed: "Android từ chối lệnh mở ứng dụng",
+          swift_backup_not_foreground: "Android không đưa Swift Backup lên trước",
+          websocket_send_failed: "Không gửi được lệnh tới máy",
+          worker_ack_timeout: "Worker không phản hồi kịp",
+          device_offline: "Máy đã offline"
+        };
+        var rawReason = String(item.reason || "");
+        var detail = rawReason ? " — " + (reasons[rawReason] || rawReason) : "";
         return '<div class="batch-row"><strong>' + esc(item.device_id) +
           '</strong><span>' + esc(item.display_status || item.status) +
-          '</span></div>';
+          esc(detail) + '</span></div>';
       }).join("");
     }
 

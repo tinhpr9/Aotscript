@@ -264,6 +264,9 @@ let batchResponse = await response.json();
 if (!batchResponse.ok || batchResponse.batch.action !== "OPEN_SWIFT_BACKUP") {
   throw new Error("batch dispatch failed");
 }
+if (batchResponse.batch.expires_at - batchResponse.batch.created_at !== 75000) {
+  throw new Error("batch TTL does not allow cold-start verification");
+}
 const byId = Object.fromEntries(
   batchResponse.batch.devices.map((item) => [item.device_id, item])
 );
@@ -332,6 +335,50 @@ state = await response.json();
 const timedOut = state.last_batch.devices.find((item) => item.device_id === reference);
 if (!timedOut || timedOut.status !== "TIMEOUT") {
   throw new Error("batch timeout did not terminate pending state");
+}
+if (timedOut.reason !== "worker_ack_timeout") {
+  throw new Error("batch timeout reason was not exposed");
+}
+
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    protocol: "phase4-1",
+    session_id: session,
+    kind: "open_swift_backup",
+    target_device_ids: [follower],
+  }),
+}));
+batchResponse = await response.json();
+for (const [status, reason] of [
+  ["ACCEPTED", ""],
+  ["FAILED", "swift_backup_not_foreground"],
+]) {
+  response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      protocol: "phase4-1",
+      session_id: session,
+      reference_device_id: reference,
+      follower_device_id: follower,
+      action_id: batchResponse.batch.action_id,
+      batch_action: "OPEN_SWIFT_BACKUP",
+      status,
+      executed: false,
+      reason,
+    }),
+  }));
+  if (!response.ok) throw new Error(`batch failure ACK ${status} rejected`);
+}
+response = await fleet.getAotHubState(
+  new URL(`https://test/aot/hub/state?session=${session}`)
+);
+state = await response.json();
+const failed = state.last_batch.devices.find((item) => item.device_id === follower);
+if (!failed || failed.reason !== "swift_backup_not_foreground") {
+  throw new Error("batch failure reason was not retained");
 }
 
 // Dashboard sockets use the same hibernating Durable Object and receive ACK/disconnect deltas.

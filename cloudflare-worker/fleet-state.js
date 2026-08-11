@@ -14,7 +14,7 @@ const COMMAND_MAX_TARGETS = 1000;
 const AOT_CONTROL_MAX_TARGETS = 128;
 const AOT_BATCH_ACTION = "OPEN_SWIFT_BACKUP";
 const AOT_BATCH_PACKAGE = "org.swiftapps.swiftbackup";
-const AOT_BATCH_TTL_MS = 12 * 1000;
+const AOT_BATCH_TTL_MS = 75 * 1000;
 const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
@@ -1406,11 +1406,15 @@ export class FleetState
             history = [...history, "TIMEOUT"];
           }
         }
+        const reason = status === "TIMEOUT"
+          ? "worker_ack_timeout"
+          : String(item.reason || "").trim().slice(0, 160);
         return {
           device_id: item.device_id,
           status,
           history,
           display_status: history.join(" → ") || status,
+          reason: reason || null,
           updated_at: Number(item.updated_at || batch.created_at || 0),
         };
       });
@@ -1601,6 +1605,7 @@ export class FleetState
         role: member.role,
         status: connected ? "SENT" : "SKIPPED_OFFLINE",
         history: connected ? ["SENT"] : ["SKIPPED_OFFLINE"],
+        reason: connected ? null : "device_offline",
         updated_at: createdAt,
       };
       if (connected) online.push(member);
@@ -1639,6 +1644,7 @@ export class FleetState
           sendFailed = true;
           devices[member.device_id].status = "FAILED";
           devices[member.device_id].history.push("FAILED");
+          devices[member.device_id].reason = "websocket_send_failed";
           devices[member.device_id].updated_at = Date.now();
         }
       }
@@ -2221,6 +2227,7 @@ export class FleetState
         "DUPLICATE",
       ]);
       const status = String(body.status || "");
+      const reason = String(body.reason || "").trim().slice(0, 160);
       const batch = record.last_batch;
       const device = batch?.devices?.[followerId];
       if (
@@ -2257,6 +2264,15 @@ export class FleetState
           device.status = nextStatus;
           if (!device.history.includes(nextStatus)) {
             device.history.push(nextStatus);
+          }
+          if (["FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT"].includes(nextStatus)) {
+            device.reason = reason || (
+              nextStatus === "TIMEOUT"
+                ? "worker_ack_timeout"
+                : "worker_reported_failure"
+            );
+          } else if (nextStatus === "OPENED") {
+            device.reason = null;
           }
           device.updated_at = Date.now();
         }
