@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -22,7 +23,7 @@ import urllib.request
 from typing import Any, Iterator
 
 BOOTSTRAP_VERSION = 2
-BOOTSTRAP_RELEASE_VERSION = 4
+BOOTSTRAP_RELEASE_VERSION = 5
 ROOT = pathlib.Path(__file__).resolve().parent
 RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
@@ -36,11 +37,7 @@ CONFIG_PATH = STATE_ROOT / "aot_group_config.json"
 DEVICE_ID_PATH = STATE_ROOT / "device_id.txt"
 AGENT_CONFIG_PATH = STATE_ROOT / "agent_config.json"
 LOG_PATH = pathlib.Path("/storage/emulated/0/Download/AOT_Group_Control.log")
-MANIFEST_URLS = {
-    "canary": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-manifest-canary.json",
-    "stable": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-manifest-stable.json",
-}
-VALID_CHANNELS = frozenset(MANIFEST_URLS)
+VALID_CHANNELS = frozenset(("canary", "stable"))
 DEFAULT_STARTUP_CHANNEL = "stable"
 UPDATE_STATUSES = {
     "DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING",
@@ -49,11 +46,12 @@ UPDATE_STATUSES = {
 REQUIRED_FILES = {
     "relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py",
     "worker_smoke_test.py", "worker-release-schema.json",
-    "msetup_registration.py",
+    "msetup_registration.py", "legacy_relay_bridge.py",
 }
 HEALTH_TIMEOUT_SECONDS = 60
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_RELEASE_FILES = 32
+HUB_RELEASE_PROTOCOL = "github-release-v1"
 
 
 class BootstrapError(RuntimeError):
@@ -85,22 +83,30 @@ def _write_json(path: pathlib.Path, value: dict[str, Any]) -> None:
         temp.unlink(missing_ok=True)
 
 
-def _download(url: str, destination: pathlib.Path) -> None:
+def _download(url: str, destination: pathlib.Path, expected_size: int | None = None) -> None:
     parsed = urllib.parse.urlparse(url)
     if (
         parsed.scheme != "https"
-        or parsed.netloc != "raw.githubusercontent.com"
-        or not parsed.path.startswith("/tinhpr9/Aotscript/")
+        or not (
+            (parsed.netloc == "raw.githubusercontent.com" and parsed.path.startswith("/tinhpr9/Aotscript/"))
+            or (parsed.netloc == "github.com" and parsed.path.startswith("/tinhpr9/Aotscript/releases/download/worker-v"))
+        )
     ):
         raise BootstrapError("untrusted_download_url")
     request = urllib.request.Request(url, headers={"User-Agent": "AOT-Worker-Bootstrap"})
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
+            if int(getattr(response, "status", 200)) != 200:
+                raise BootstrapError("download_http_status")
             data = response.read(MAX_FILE_BYTES + 1)
+    except BootstrapError:
+        raise
     except Exception as exc:
         raise BootstrapError("download_failed") from exc
     if len(data) > MAX_FILE_BYTES:
         raise BootstrapError("download_too_large")
+    if expected_size is not None and len(data) != expected_size:
+        raise BootstrapError("download_size_mismatch")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(data)
 
@@ -134,16 +140,27 @@ def validate_manifest(raw: Any, expected_channel: str) -> dict[str, Any]:
         path = _valid_release_path(item.get("path") if isinstance(item, dict) else None)
         url = str(item.get("url") or "") if isinstance(item, dict) else ""
         digest = str(item.get("sha256") or "").lower() if isinstance(item, dict) else ""
+        size = item.get("size") if isinstance(item, dict) else None
+        github_digest = str(item.get("github_digest") or "").lower() if isinstance(item, dict) else ""
         parsed = urllib.parse.urlparse(url)
         if (
             not path or path in paths or parsed.scheme != "https"
-            or parsed.netloc != "raw.githubusercontent.com"
-            or not parsed.path.startswith("/tinhpr9/Aotscript/")
+            or not (
+                (parsed.netloc == "raw.githubusercontent.com" and parsed.path.startswith("/tinhpr9/Aotscript/"))
+                or (parsed.netloc == "github.com" and parsed.path.startswith("/tinhpr9/Aotscript/releases/download/worker-v"))
+            )
             or not re.fullmatch(r"[0-9a-f]{64}", digest)
         ):
             raise BootstrapError("invalid_manifest_file")
         paths.add(path)
-        clean_files.append({"path": path, "url": url, "sha256": digest})
+        clean_item = {"path": path, "url": url, "sha256": digest}
+        if size is not None:
+            if not isinstance(size, int) or size <= 0 or size > MAX_FILE_BYTES:
+                raise BootstrapError("invalid_manifest_file_size")
+            if github_digest not in {"", "sha256:" + digest}:
+                raise BootstrapError("github_digest_mismatch")
+            clean_item.update({"size": size, "github_digest": github_digest})
+        clean_files.append(clean_item)
     if not REQUIRED_FILES.issubset(paths):
         raise BootstrapError("manifest_required_files_missing")
     clean: dict[str, Any] = {
@@ -157,23 +174,76 @@ def validate_manifest(raw: Any, expected_channel: str) -> dict[str, Any]:
         bootstrap_version = bootstrap.get("version")
         url = str(bootstrap.get("url") or "")
         digest = str(bootstrap.get("sha256") or "").lower()
+        size = bootstrap.get("size")
+        github_digest = str(bootstrap.get("github_digest") or "").lower()
         if (
             not isinstance(bootstrap_version, int) or bootstrap_version < 1
-            or not url.startswith("https://raw.githubusercontent.com/tinhpr9/Aotscript/")
+            or not (
+                url.startswith("https://raw.githubusercontent.com/tinhpr9/Aotscript/")
+                or url.startswith("https://github.com/tinhpr9/Aotscript/releases/download/worker-v")
+            )
             or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or (size is not None and (not isinstance(size, int) or size <= 0 or size > MAX_FILE_BYTES))
+            or (size is not None and github_digest not in {"", "sha256:" + digest})
         ):
             raise BootstrapError("invalid_bootstrap_manifest")
         clean["bootstrap"] = {"version": bootstrap_version, "url": url, "sha256": digest}
+        if size is not None:
+            clean["bootstrap"].update({"size": size, "github_digest": github_digest})
     return clean
 
 
-def load_manifest(channel: str) -> dict[str, Any]:
-    if channel not in MANIFEST_URLS:
-        raise BootstrapError("invalid_channel")
-    with tempfile.TemporaryDirectory(prefix="aot-worker-manifest-") as folder:
-        target = pathlib.Path(folder) / "manifest.json"
-        _download(MANIFEST_URLS[channel], target)
-        return validate_manifest(_read_json(target), channel)
+def load_pinned_release(encoded: str, expected_channel: str) -> dict[str, Any]:
+    try:
+        metadata = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+    except Exception as exc:
+        raise BootstrapError("invalid_release_metadata") from exc
+    if not isinstance(metadata, dict):
+        raise BootstrapError("invalid_release_metadata")
+    version = _valid_version(metadata.get("version"))
+    tag = str(metadata.get("tag") or "")
+    commit = str(metadata.get("commit_sha") or "").lower()
+    asset = metadata.get("manifest")
+    if (
+        not version or tag != "worker-v" + version.removeprefix("aot-worker-")
+        or not re.fullmatch(r"[0-9a-f]{40}", commit)
+        or not isinstance(asset, dict)
+        or asset.get("name") != "worker-manifest.json"
+    ):
+        raise BootstrapError("invalid_release_identity")
+    url = str(asset.get("url") or "")
+    size = asset.get("size")
+    digest = str(asset.get("sha256") or "").lower()
+    github_digest = str(asset.get("github_digest") or "").lower()
+    if (
+        not isinstance(size, int) or size <= 0 or size > MAX_FILE_BYTES
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or github_digest not in {"", "sha256:" + digest}
+    ):
+        raise BootstrapError("invalid_release_manifest_asset")
+    with tempfile.TemporaryDirectory(prefix="aot-release-manifest-") as folder:
+        path = pathlib.Path(folder) / "worker-manifest.json"
+        _download(url, path, size)
+        if _sha256(path) != digest:
+            raise BootstrapError("manifest_sha256_mismatch")
+        raw = _read_json(path)
+    if (
+        raw.get("schema_version") != 3 or raw.get("worker_version") != version
+        or raw.get("tag") != tag or raw.get("commit_sha") != commit
+        or raw.get("minimum_protocol") != HUB_RELEASE_PROTOCOL
+    ):
+        raise BootstrapError("release_manifest_identity_mismatch")
+    files = raw.get("files")
+    if not isinstance(files, list):
+        raise BootstrapError("invalid_release_manifest_files")
+    converted = {
+        "schema_version": 2, "version": version, "channel": expected_channel,
+        "minimum_bootstrap_version": int(raw.get("minimum_bootstrap_version") or 0),
+        "files": files,
+    }
+    if raw.get("bootstrap") is not None:
+        converted["bootstrap"] = raw["bootstrap"]
+    return validate_manifest(converted, expected_channel)
 
 
 def _sha256(path: pathlib.Path) -> str:
@@ -203,7 +273,7 @@ def stage_release(manifest: dict[str, Any], action_id: str) -> pathlib.Path:
     try:
         for item in manifest["files"]:
             destination = staging / item["path"]
-            _download(item["url"], destination)
+            _download(item["url"], destination, item.get("size"))
             if _sha256(destination) != item["sha256"]:
                 raise BootstrapError(f"sha256_mismatch:{item['path']}")
         for path in staging.rglob("*.py"):
@@ -433,7 +503,7 @@ def maybe_upgrade_bootstrap(manifest: dict[str, Any]) -> None:
     temp = ROOT / f"bootstrap.py.next-{os.getpid()}"
     backup = ROOT / "bootstrap.py.last_good"
     try:
-        _download(item["url"], temp)
+        _download(item["url"], temp, item.get("size"))
         if _sha256(temp) != item["sha256"]:
             raise BootstrapError("bootstrap_sha256_mismatch")
         py_compile.compile(str(temp), doraise=True)
@@ -462,7 +532,10 @@ def install_manifest(manifest: dict[str, Any], pending: dict[str, Any], report: 
 
 
 def _run_update(config: dict[str, Any], device_id: str, pending: dict[str, Any], report: bool) -> int:
-    manifest = load_manifest(pending["channel"])
+    encoded = str(pending.get("release_metadata") or "")
+    if not encoded:
+        raise BootstrapError("release_metadata_required")
+    manifest = load_pinned_release(encoded, pending["channel"])
     pending["version"] = manifest["version"]
     if report:
         send_status(pending, "DOWNLOADING")
@@ -520,6 +593,7 @@ def action_update(args: argparse.Namespace) -> int:
                 "action_id": args.action_id, "channel": channel,
                 "device_id": device_id, "session_id": str(config["session_id"]),
                 "reference_device_id": args.reference_device,
+                "release_metadata": args.release_metadata,
                 "started_at": int(time.time()),
             }
             return _run_update(config, device_id, pending, True)
@@ -544,33 +618,18 @@ def action_update(args: argparse.Namespace) -> int:
 def startup() -> int:
     with supervisor_lock():
         config, device_id = _config()
-        ensure_legacy_release()
+        current = ensure_legacy_release()
         stop_workers()
-        pending = {
-            "action_id": f"startup-{int(time.time())}-{os.getpid()}",
-            "channel": DEFAULT_STARTUP_CHANNEL, "device_id": device_id,
-            "session_id": str(config["session_id"]),
-            "reference_device_id": str(config.get("reference_device_id") or device_id),
-            "started_at": int(time.time()),
-        }
-        try:
-            return _run_update(config, device_id, pending, False)
-        except BootstrapError:
-            previous = pathlib.Path(str(pending.get("previous_release") or ""))
-            current = _link_target(CURRENT)
-            if previous.is_dir() and current and current != previous:
-                stop_workers()
-                rollback_release(pending)
-            if not _link_target(CURRENT):
-                raise
-            start_worker(config)
-            return 0
+        if current is None:
+            raise BootstrapError("current_release_missing")
+        start_worker(config)
+        return 0
 
 
 def self_test() -> int:
     if (
         BOOTSTRAP_VERSION < 2
-        or set(MANIFEST_URLS) != {"canary", "stable"}
+        or VALID_CHANNELS != {"canary", "stable"}
         or DEFAULT_STARTUP_CHANNEL != "stable"
     ):
         return 1
@@ -598,6 +657,7 @@ def build_parser() -> argparse.ArgumentParser:
     action.add_argument("--action-id", required=True)
     action.add_argument("--channel", choices=("canary", "stable"), required=True)
     action.add_argument("--reference-device", required=True)
+    action.add_argument("--release-metadata", required=True)
     return parser
 
 

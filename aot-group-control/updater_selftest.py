@@ -59,6 +59,7 @@ with tempfile.TemporaryDirectory(prefix="aot-bundle-updater-") as folder:
         "e2e.py": "E2E = 2\n",
         "worker_smoke_test.py": "raise SystemExit(0)\n",
         "msetup_registration.py": "REGISTRATION = 2\n",
+        "legacy_relay_bridge.py": "BRIDGE = 1\n",
         "worker-release-schema.json": json.dumps({"schema_version": 2}),
     }
     for name, value in files.items():
@@ -89,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix="aot-bundle-updater-") as folder:
             ],
         }, "canary")
 
-    module._download = lambda url, destination: destination.write_bytes(
+    module._download = lambda url, destination, expected_size=None: destination.write_bytes(
         (source / pathlib.PurePosixPath(url).name).read_bytes()
     )
 

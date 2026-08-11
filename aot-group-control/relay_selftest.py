@@ -462,6 +462,16 @@ try:
             "session_id": "dynamic-canary", "reference_device_id": update_reference,
             "target_device_ids": [update_reference, update_target], "action_id": "worker-canary-1",
             "action": module.UPDATE_WORKER_ACTION, "channel": "canary",
+            "release": {
+                "protocol": "github-release-v1", "version": module.WORKER_VERSION,
+                "tag": "worker-v2026.08.11.8", "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.8/worker-manifest.json",
+                    "size": 100, "sha256": "b" * 64,
+                    "github_digest": "sha256:" + "b" * 64,
+                },
+            },
             "expires_at": 9999999999999,
         }
         assert module._handle_worker_update(
@@ -470,6 +480,7 @@ try:
         )
         assert len(spawned) == 1
         assert "bootstrap_launcher.py" in " ".join(spawned[0][0])
+        assert "--release-metadata" in spawned[0][0]
         assert module._handle_worker_update(
             state, local_id=update_target, session_id="dynamic-canary",
             reference_device_id=update_reference, message=update_message,
@@ -495,6 +506,14 @@ try:
         )
         assert len(spawned) == 2
         assert not module.action_already_processed(state, "worker-invalid-1")
+        missing_release = dict(update_message, action_id="worker-no-release-1")
+        missing_release.pop("release")
+        assert module._handle_worker_update(
+            state, local_id=update_target, session_id="dynamic-canary",
+            reference_device_id=update_reference, message=missing_release,
+        )
+        assert len(spawned) == 2
+        assert not module.action_already_processed(state, "worker-no-release-1")
 finally:
     module.subprocess.Popen = old_popen
     module.STATE_PATH = old_state_path

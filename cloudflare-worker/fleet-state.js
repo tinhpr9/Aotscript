@@ -19,7 +19,11 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.11.7";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.11.8";
+const AOT_WORKER_TAG = "worker-v2026.08.11.8";
+const AOT_RELEASE_PROTOCOL = "github-release-v1";
+const AOT_RELEASE_REPOSITORY = "tinhpr9/Aotscript";
+const AOT_RELEASE_CACHE_MS = 5 * 60 * 1000;
 const AOT_DYNAMIC_CHANNEL_CAPABILITY = "dynamic_update_channel";
 const AOT_LEGACY_PROTOCOL_RETRY_MS = 12 * 1000;
 
@@ -60,6 +64,88 @@ export class FleetState
     super(ctx, env);
     this.ctx = ctx;
     this.aotLive = new Map();
+  }
+
+  async sha256Hex(bytes) {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  async githubJson(path) {
+    const response = await fetch(`https://api.github.com/repos/${AOT_RELEASE_REPOSITORY}${path}`, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "Aotscript-AOT-Hub" },
+    });
+    if (!response.ok) throw new Error(`github_api_${response.status}`);
+    return response.json();
+  }
+
+  async resolveWorkerRelease() {
+    const cacheKey = `worker_release:${AOT_WORKER_TAG}`;
+    const cached = await this.ctx.storage.get(cacheKey);
+    if (cached?.resolved_at > Date.now() - AOT_RELEASE_CACHE_MS) return cached.value;
+    const release = await this.githubJson(`/releases/tags/${encodeURIComponent(AOT_WORKER_TAG)}`);
+    if (release.draft || release.prerelease || release.tag_name !== AOT_WORKER_TAG) throw new Error("release_not_published");
+    const tagRef = await this.githubJson(`/git/ref/tags/${encodeURIComponent(AOT_WORKER_TAG)}`);
+    let commitSha = String(tagRef?.object?.sha || "").toLowerCase();
+    if (tagRef?.object?.type === "tag") {
+      const tagObject = await this.githubJson(`/git/tags/${commitSha}`);
+      if (tagObject?.object?.type !== "commit") throw new Error("release_tag_not_commit");
+      commitSha = String(tagObject.object.sha || "").toLowerCase();
+    }
+    if (!/^[0-9a-f]{40}$/.test(commitSha)) throw new Error("release_commit_invalid");
+    const byName = new Map();
+    for (const asset of Array.isArray(release.assets) ? release.assets : []) {
+      if (byName.has(asset.name)) throw new Error("release_asset_duplicate");
+      byName.set(asset.name, asset);
+    }
+    for (const name of ["worker-bundle.zip", "worker-manifest.json", "worker-checksums.sha256"]) {
+      if (!byName.has(name)) throw new Error(`release_asset_missing:${name}`);
+    }
+    const manifestAsset = byName.get("worker-manifest.json");
+    const manifestResponse = await fetch(manifestAsset.browser_download_url, { redirect: "follow" });
+    if (!manifestResponse.ok) throw new Error(`release_manifest_http_${manifestResponse.status}`);
+    const manifestBytes = await manifestResponse.arrayBuffer();
+    if (manifestBytes.byteLength !== Number(manifestAsset.size)) throw new Error("release_manifest_size_mismatch");
+    const manifestSha = await this.sha256Hex(manifestBytes);
+    const apiDigest = String(manifestAsset.digest || "").toLowerCase();
+    if (apiDigest && apiDigest !== `sha256:${manifestSha}`) throw new Error("release_manifest_digest_mismatch");
+    const manifest = JSON.parse(new TextDecoder().decode(manifestBytes));
+    if (
+      manifest.schema_version !== 3 || manifest.worker_version !== AOT_WORKER_VERSION
+      || manifest.tag !== AOT_WORKER_TAG || manifest.commit_sha !== commitSha
+      || manifest.minimum_protocol !== AOT_RELEASE_PROTOCOL
+    ) throw new Error("release_manifest_identity_mismatch");
+    const bundleAsset = byName.get("worker-bundle.zip");
+    if (
+      manifest.asset_name !== bundleAsset.name || manifest.asset_size !== bundleAsset.size
+      || `sha256:${manifest.asset_sha256}` !== String(bundleAsset.digest || "").toLowerCase()
+    ) throw new Error("release_bundle_mismatch");
+    const manifestFiles = Array.isArray(manifest.files) ? manifest.files : [];
+    const manifestNames = new Set();
+    for (const item of manifestFiles) {
+      if (manifestNames.has(item.asset_name)) throw new Error("release_manifest_asset_duplicate");
+      manifestNames.add(item.asset_name);
+      const asset = byName.get(item.asset_name);
+      if (
+        !asset || item.url !== asset.browser_download_url || item.size !== asset.size
+        || String(item.github_digest || "").toLowerCase() !== String(asset.digest || "").toLowerCase()
+        || item.github_digest !== `sha256:${item.sha256}`
+      ) throw new Error(`release_asset_mismatch:${item.asset_name || "unknown"}`);
+    }
+    for (const name of ["relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py", "worker_smoke_test.py", "worker-release-schema.json", "msetup_registration.py", "legacy_relay_bridge.py"]) {
+      if (!manifestNames.has(name)) throw new Error(`release_manifest_asset_missing:${name}`);
+    }
+    const value = {
+      protocol: AOT_RELEASE_PROTOCOL, version: AOT_WORKER_VERSION,
+      tag: AOT_WORKER_TAG, commit_sha: commitSha,
+      manifest: {
+        name: manifestAsset.name, url: manifestAsset.browser_download_url,
+        size: manifestAsset.size, sha256: manifestSha,
+        github_digest: apiDigest,
+      },
+    };
+    await this.ctx.storage.put(cacheKey, { resolved_at: Date.now(), value });
+    return value;
   }
 
   deviceKey(deviceId) {
@@ -1580,6 +1666,7 @@ export class FleetState
         reference_device_id: update.reference_device_id,
         target_device_ids: [member.device_id], action_id: transportActionId,
         action: attempt.action, channel: attempt.channel,
+        release: update.release,
         expires_at: update.final_deadline,
       }
     );
@@ -1657,6 +1744,12 @@ export class FleetState
     }
     if (record.last_update?.active_group || (record.last_update?.groups || []).length) {
       return json({ ok: false, error: "worker_update_in_progress" }, 409);
+    }
+    let release;
+    try {
+      release = await this.resolveWorkerRelease();
+    } catch (error) {
+      return json({ ok: false, error: "release_resolution_failed", message: String(error.message || error).slice(0, 160) }, 503);
     }
     const all = this.aotMembers(record);
     const connected = (member) => this.ctx.getWebSockets(
@@ -1764,6 +1857,7 @@ export class FleetState
     record.last_update = {
       action_id: actionId, action: AOT_UPDATE_ACTION, channel,
       version: AOT_WORKER_VERSION,
+      release,
       selected_device_ids: channel === "canary"
         ? selected.map((item) => item.device_id)
         : [...alreadyHealthy],
