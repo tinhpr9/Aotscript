@@ -1,9 +1,4 @@
-# telegram_target_ids=m37,m116,m117
-# telegram_expires_at=1786193399275
-# telegram_command_id=1786106999275-13126473
-IDLE
-
-# telegram_target_ids=m37,m116,m117
-# telegram_expires_at=1786194780926
-# telegram_command_id=1786108380926-a4ebc205
-/script all https://raw.githubusercontent.com/tinhpr9/Aotscript/refs/heads/main/Novagag2
+# telegram_target_ids=m116
+# telegram_expires_at=1786429268766
+# telegram_command_id=1786428968766-d1231320
+UPDATE_DELTA
