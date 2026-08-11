@@ -8,13 +8,14 @@ import subprocess
 import sys
 
 UPDATER_API_VERSION = 2
-CANARY_DEVICES = {"m37", "m117"}
+VALID_CHANNELS = {"canary", "stable"}
 BOOTSTRAP_LAUNCHER = pathlib.Path.home() / ".aot-group-control" / "bootstrap_launcher.py"
 PENDING_PATH = pathlib.Path.home() / ".aot-group-control" / "update_pending.json"
 
 
-def channel_for_device(device_id: str) -> str:
-    return "canary" if str(device_id).lower() in CANARY_DEVICES else "stable"
+def normalize_channel(value: object) -> str | None:
+    channel = str(value or "").strip().lower()
+    return channel if channel in VALID_CHANNELS else None
 
 
 def notify_healthy(action_id: str, version: str) -> bool:

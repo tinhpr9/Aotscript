@@ -1452,7 +1452,7 @@ function aotHubHtml() {
       <button id="refresh">Làm mới</button>
     </div>
     <div class="session">
-      <input id="session" value="m37-m117-p3" autocomplete="off" spellcheck="false">
+      <input id="session" value="" placeholder="Session ID" autocomplete="off" spellcheck="false">
       <button id="apply">Mở</button>
     </div>
     <div class="hint">
@@ -1482,7 +1482,8 @@ function aotHubHtml() {
         <button id="updateCanary">Cập nhật 2 máy thử</button>
         <button id="updateStable">Phát hành cho tất cả</button>
       </div>
-      <div class="hint">Canary: m37 + m117. Stable được phát hành theo nhóm tối đa 5 máy.</div>
+      <div id="updateError" class="error"></div>
+      <div id="updateHint" class="hint">Hai máy thử được chọn động từ các máy ONLINE. Stable theo nhóm tối đa 5 máy.</div>
       <div id="updateResults" class="batch-results"></div>
     </section>
     <nav class="controls">
@@ -1513,6 +1514,8 @@ function aotHubHtml() {
     var batchTargetsEl = document.getElementById("batchTargets");
     var batchResultsEl = document.getElementById("batchResults");
     var updateResultsEl = document.getElementById("updateResults");
+    var updateErrorEl = document.getElementById("updateError");
+    var updateHintEl = document.getElementById("updateHint");
 
     if (tg) {
       tg.ready();
@@ -1585,7 +1588,7 @@ function aotHubHtml() {
         return { ok: false, error: "invalid_response" };
       });
       if (!response.ok || data.ok !== true) {
-        throw new Error(String(data.error || ("HTTP " + response.status)));
+        throw new Error(String(data.message || data.error || ("HTTP " + response.status)));
       }
       return data;
     }
@@ -1645,6 +1648,12 @@ function aotHubHtml() {
         updateResultsEl.innerHTML = '<div class="hint">Chưa có lần cập nhật worker.</div>';
         return;
       }
+      var selected = Array.isArray(update.selected_device_ids)
+        ? update.selected_device_ids.map(String)
+        : [];
+      updateHintEl.textContent = selected.length === 2
+        ? ("Hai máy thử: " + selected.join(" + ") + ". Stable theo nhóm tối đa 5 máy.")
+        : "Hai máy thử được chọn động từ các máy ONLINE. Stable theo nhóm tối đa 5 máy.";
       updateResultsEl.innerHTML = update.devices.map(function (item) {
         return '<div class="batch-row"><strong>' + esc(item.device_id) +
           '</strong><span>' + esc(item.display_status || item.status) + '</span></div>';
@@ -1798,14 +1807,14 @@ function aotHubHtml() {
       var button = document.getElementById(buttonId);
       button.disabled = true;
       try {
-        errorEl.textContent = "";
+        updateErrorEl.textContent = "";
         var data = await api("/aot/hub/api/control", {
           method: "POST",
           body: { session_id: sessionId(), kind: kind }
         });
         renderUpdate(data.update);
       } catch (error) {
-        errorEl.textContent = String(error.message || error);
+        updateErrorEl.textContent = String(error.message || error);
       } finally {
         button.disabled = false;
       }

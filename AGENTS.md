@@ -16,8 +16,8 @@ worker actions in `cloudflare-worker/`.
   Registration changes must also publish `msetup_registration.py`.
 - Each manifest must retain schema version 2, its explicit channel, a unique
   release version, `minimum_bootstrap_version`, and the URL plus SHA-256 of
-  every release file. Canary is permanently limited to `m37` and `m117`;
-  every other device uses stable.
+  every release file. Canary targets are selected dynamically by AOT Hub from
+  the current session's ONLINE devices; never bind a channel to Device IDs.
 - Do not add machine identity, group, session, secrets, or other device state
   to a release. Those values remain outside releases under the Shouko storage
   directory and must survive updates byte-for-byte.
