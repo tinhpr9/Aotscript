@@ -56,6 +56,7 @@ with tempfile.TemporaryDirectory(prefix="aot-bundle-updater-") as folder:
         "updater.py": "UPDATER_API_VERSION = 2\n",
         "e2e.py": "E2E = 2\n",
         "worker_smoke_test.py": "raise SystemExit(0)\n",
+        "msetup_registration.py": "REGISTRATION = 2\n",
         "worker-release-schema.json": json.dumps({"schema_version": 2}),
     }
     for name, value in files.items():

@@ -1014,6 +1014,32 @@ async function handleAotControlHealth(
   });
 }
 
+async function handleAotRegistration(request, env, operation) {
+  if (!isAuthorizedAgentRequest(request, env)) {
+    return noStoreJson({ ok: false, error: "unauthorized" }, 401);
+  }
+  const parsed = await readAotJson(request);
+  if (parsed.error) {
+    return noStoreJson({ ok: false, error: parsed.error }, 400);
+  }
+  const deviceId = normalizeDeviceId(parsed.value.device_id || parsed.value.new_device_id);
+  if (!deviceId) {
+    return noStoreJson({ ok: false, error: "invalid_device_id" }, 400);
+  }
+  if (await isDeviceRevoked(deviceId, env)) {
+    return noStoreJson({ ok: false, error: "device_revoked" }, 410);
+  }
+  const allowed = new Set(["discover", "reset", "verify"]);
+  if (!allowed.has(operation)) {
+    return noStoreJson({ ok: false, error: "invalid_registration_operation" }, 400);
+  }
+  const result = await fleetStateCall(env, `/aot/registration/${operation}`, {
+    method: "POST",
+    body: parsed.value,
+  });
+  return noStoreJson(result.data, result.response.status);
+}
+
 
 const AOT_HUB_PROTOCOL_VERSION = "phase4-1";
 const AOT_HUB_AUTH_MAX_AGE_SECONDS = 60 * 60;
@@ -4876,6 +4902,16 @@ export default {
           request,
           env
         );
+      }
+
+      if (request.method === "POST" && url.pathname === "/aot/control/registration/discover") {
+        return await handleAotRegistration(request, env, "discover");
+      }
+      if (request.method === "POST" && url.pathname === "/aot/control/registration/reset") {
+        return await handleAotRegistration(request, env, "reset");
+      }
+      if (request.method === "POST" && url.pathname === "/aot/control/registration/verify") {
+        return await handleAotRegistration(request, env, "verify");
       }
 
       if (

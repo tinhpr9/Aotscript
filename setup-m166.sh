@@ -312,11 +312,16 @@ SD="/storage/emulated/0"
 DL="$SD/Download"
 SHOUKO_DIR="$DL/Shouko"
 AGENT_CONFIG="$SHOUKO_DIR/agent_config.json"
+AOT_CONFIG="$SHOUKO_DIR/aot_group_config.json"
 PRIVATE_AGENT_CONFIG_DIR="$HOME/.config/aotscript"
 PRIVATE_AGENT_CONFIG="$PRIVATE_AGENT_CONFIG_DIR/agent_config.${DEVICE_ID}.json"
 WORKER_ORIGIN="https://billowing-haze-0cafaotscript-control.tinh1020pr.workers.dev"
 BACKUP="$DL/msetup_settings_before_${STAMP}.txt"
 DISABLED="$HOME/.termux/boot-disabled/$STAMP"
+PREVIOUS_DEVICE_ID="$(
+  tr -d '\r\n ' < "$SHOUKO_DIR/device_id.txt" 2>/dev/null |
+    tr '[:upper:]' '[:lower:]' || true
+)"
 
 KEYS=(
   development_settings_enabled
@@ -1519,6 +1524,96 @@ print("[OK] Worker heartbeat HTTP 200")
 PY
   die "Không xác nhận được heartbeat HTTP 200"
 
+AOT_REGISTER_HELPER="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/aot-msetup-registration.$$"
+rm -f "$AOT_REGISTER_HELPER"
+curl -fsSL \
+  --retry 3 \
+  --connect-timeout 15 \
+  "$RAW/aot-group-control/msetup_registration.py?t=$(date +%s)" \
+  -o "$AOT_REGISTER_HELPER" ||
+    die "Không tải được AOT registration helper"
+
+python -m py_compile "$AOT_REGISTER_HELPER" || {
+  rm -f "$AOT_REGISTER_HELPER"
+  die "AOT registration helper sai cú pháp"
+}
+
+python "$AOT_REGISTER_HELPER" configure \
+  --origin "$WORKER_ORIGIN" \
+  --agent-config "$AGENT_CONFIG" \
+  --aot-config "$AOT_CONFIG" \
+  --device-id "$DEVICE_ID" \
+  --previous-device-id "$PREVIOUS_DEVICE_ID" || {
+    rm -f "$AOT_REGISTER_HELPER"
+    die "Không xác định duy nhất được phiên AOT đang hoạt động"
+  }
+
+if [ -n "$PREVIOUS_DEVICE_ID" ] &&
+   [ "$PREVIOUS_DEVICE_ID" != "$DEVICE_ID" ]; then
+  python "$AOT_REGISTER_HELPER" reset-identity \
+    --origin "$WORKER_ORIGIN" \
+    --agent-config "$AGENT_CONFIG" \
+    --aot-config "$AOT_CONFIG" \
+    --old-device-id "$PREVIOUS_DEVICE_ID" \
+    --new-device-id "$DEVICE_ID" \
+    --state-root "$SHOUKO_DIR" \
+    --runtime-root "$HOME/.aot-group-control" || {
+      rm -f "$AOT_REGISTER_HELPER"
+      die "Không dọn sạch AOT identity cũ"
+    }
+fi
+
+bash "$AGENT_BOOT" || {
+  rm -f "$AOT_REGISTER_HELPER"
+  die "Termuxboot không cài/start được AOT Bootstrap v2"
+}
+
+BOOTSTRAP_STATUS="$(
+  python "$HOME/.aot-group-control/bootstrap_launcher.py" self-test 2>&1
+)" || {
+  rm -f "$AOT_REGISTER_HELPER"
+  die "AOT Bootstrap self-test thất bại"
+}
+printf '%s\n' "$BOOTSTRAP_STATUS" |
+  grep -qx 'AOT_BOOTSTRAP_VERSION=2' || {
+    rm -f "$AOT_REGISTER_HELPER"
+    die "AOT Bootstrap không phải version 2"
+  }
+
+RUNTIME_STATUS="$(
+  python "$HOME/.aot-group-control/current/runtime.py" status 2>&1
+)" || {
+  rm -f "$AOT_REGISTER_HELPER"
+  die "AOT runtime status thất bại"
+}
+printf '%s\n' "$RUNTIME_STATUS"
+printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' || {
+  rm -f "$AOT_REGISTER_HELPER"
+  die "AOT_CONFIG chưa OK"
+}
+printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$' || {
+  rm -f "$AOT_REGISTER_HELPER"
+  die "AOT runtime không có PID relay hợp lệ"
+}
+
+AOT_SERVER_STATUS="$(
+  python "$AOT_REGISTER_HELPER" verify \
+    --origin "$WORKER_ORIGIN" \
+    --agent-config "$AGENT_CONFIG" \
+    --aot-config "$AOT_CONFIG" \
+    --device-id "$DEVICE_ID" \
+    --timeout 30
+)" || {
+    rm -f "$AOT_REGISTER_HELPER"
+    die "Server chưa thấy máy ONLINE trong đúng AOT Hub"
+  }
+printf '%s\n' "$AOT_SERVER_STATUS"
+printf '%s\n' "$AOT_SERVER_STATUS" | grep -qx 'AOT_SERVER_ONLINE=YES' ||
+  die "Relay WebSocket chưa ONLINE trên server"
+printf '%s\n' "$AOT_SERVER_STATUS" | grep -qx 'AOT_HUB_VISIBLE=YES' ||
+  die "Máy chưa xuất hiện trong đúng AOT Hub"
+rm -f "$AOT_REGISTER_HELPER"
+
 echo
 echo "========== HOÀN TẤT =========="
 ok "device_id=$DEVICE_ID"
@@ -1526,6 +1621,8 @@ ok "device_group=$DEVICE_GROUP"
 ok "agent_config.json hợp lệ; secret không được hiển thị"
 ok "Agent đang chạy đúng 1 tiến trình"
 ok "Worker heartbeat HTTP 200"
+ok "AOT_CONFIG=OK và relay có PID"
+ok "Relay WebSocket ONLINE và máy đã xuất hiện trong đúng AOT Hub"
 ok "Lần sau dùng: msetup $DEVICE_ID $DEVICE_GROUP"
 echo "Không reboot máy."
 BASH

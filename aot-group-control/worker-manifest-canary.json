@@ -1,20 +1,21 @@
 {
   "schema_version": 2,
-  "version": "aot-worker-2026.08.11.2",
+  "version": "aot-worker-2026.08.11.3",
   "channel": "canary",
   "minimum_bootstrap_version": 2,
   "bootstrap": {
     "version": 2,
     "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/bootstrap.py",
-    "sha256": "3ab4dd64695cad12ebb437b28f2e558f755520ed809fe9dab6445325c976d9e2"
+    "sha256": "2838513c5b3561ef91acbc2da567c3017b3121456f133e630a7c8bb81540db46"
   },
   "files": [
-    {"path": "relay.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/relay.py", "sha256": "5cc5f24c9b06262b7a26c7c3c05bd7f54665c2d20ad4116f944724cd528e8831"},
-    {"path": "runtime.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/runtime.py", "sha256": "36e74c22b16715fdb3aae5785e8dfd2b4b97d797536ce764bd093da363df7924"},
+    {"path": "relay.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/relay.py", "sha256": "7bd1c2817aaed2936ec541113b7c923af5b8ba35cb2103c4d8b13ff5146604b7"},
+    {"path": "runtime.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/runtime.py", "sha256": "33d104cfc9d963e3e021f23db7f3c5c15f5daefe2defad9b1ee709f881c51aea"},
     {"path": "controller.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/controller.py", "sha256": "e61bae2f72999599fe33666147a517c797302a83ba537a271863bc4bc9cdf198"},
     {"path": "updater.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/updater.py", "sha256": "f5a056b8d14b828c5f03a1308dd0af55a7c13fad247b25a9e4efe7def8c277f5"},
     {"path": "e2e.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/e2e.py", "sha256": "529c17fcbfdd1180cfa63ff4dba0e887523074cff319f55ab5732068749e093d"},
-    {"path": "worker_smoke_test.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker_smoke_test.py", "sha256": "35728f09cf9cdcaa400aea371fe2bd9165ca83910a2ff10accdef826225edb32"},
-    {"path": "worker-release-schema.json", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-release-schema.json", "sha256": "0b778672833e541508e59af83e5b1958ea800fe48c186364b32cb1811f514ea6"}
+    {"path": "worker_smoke_test.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker_smoke_test.py", "sha256": "245ff3aec7dbc66a5a12e2db4893871816c4e867a8ed1861bfce2a1fcd15aee6"},
+    {"path": "worker-release-schema.json", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-release-schema.json", "sha256": "3d4c5419133ef53743b157892cffd6a88d667ca69ee74eb4e80c0608adaf26f1"},
+    {"path": "msetup_registration.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/msetup_registration.py", "sha256": "5180ebf7ef2ef47a24d90a6cc2e0838a3c25f407fb991499b6acc557757f7505"}
   ]
 }

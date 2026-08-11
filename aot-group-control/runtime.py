@@ -27,7 +27,7 @@ DEVICE_GROUP_PATH = pathlib.Path(
 LOG_PATH = pathlib.Path(
     "/storage/emulated/0/Download/AOT_Group_Control.log"
 )
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 
 class AotRuntimeError(RuntimeError):
@@ -79,6 +79,9 @@ def validate_config_data(
     if not isinstance(data, dict):
         raise AotRuntimeError("config_not_object")
     enabled = data.get("enabled") is True
+    configured_device_id = normalize_device_id(data.get("device_id"))
+    if configured_device_id and local_device_id and configured_device_id != local_device_id:
+        raise AotRuntimeError("config_device_id_mismatch")
     role = str(data.get("role") or "").strip().lower()
     if role not in {"reference", "follower"}:
         raise AotRuntimeError("invalid_role")
@@ -104,6 +107,7 @@ def validate_config_data(
             raise AotRuntimeError("invalid_open_package")
     return {
         "version": CONFIG_VERSION,
+        "device_id": configured_device_id or local_device_id,
         "enabled": enabled,
         "role": role,
         "session_id": session_id,
@@ -202,7 +206,11 @@ def _relay_identity_matches(
     relay_path = pathlib.Path(args[relay_index])
     if not relay_path.is_absolute():
         return False
-    is_current = relay_path == RELAY_PATH.resolve()
+    try:
+        resolved_relay_path = relay_path.resolve()
+    except OSError:
+        resolved_relay_path = relay_path
+    is_current = resolved_relay_path == RELAY_PATH.resolve()
     is_legacy = (
         relay_path.parent.parent == ROOT.parent
         and re.fullmatch(
@@ -336,6 +344,7 @@ def configure(args: argparse.Namespace) -> int:
     device_id, group = local_identity()
     data = {
         "version": CONFIG_VERSION,
+        "device_id": device_id,
         "enabled": not args.disabled,
         "role": args.role,
         "session_id": args.session,
