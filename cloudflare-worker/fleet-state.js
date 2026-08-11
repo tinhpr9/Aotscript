@@ -19,7 +19,8 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.11.5";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.11.6";
+const AOT_DYNAMIC_CHANNEL_CAPABILITY = "dynamic_update_channel";
 
 function json(
   value,
@@ -643,6 +644,19 @@ export class FleetState
         key,
         live
       );
+      try {
+        if (typeof socket.serializeAttachment === "function") {
+          socket.serializeAttachment({
+            role: identity.role,
+            session_id: identity.sessionId,
+            device_id: identity.deviceId,
+            worker_version: live.worker_version,
+            capabilities: live.capabilities,
+          });
+        }
+      } catch (error) {
+        // Capability falls back to live status for non-hibernating runtimes.
+      }
       return;
     }
 
@@ -1024,6 +1038,15 @@ export class FleetState
     ) {
       return null;
     }
+    const workerVersion = String(body.worker_version || "").trim();
+    if (workerVersion && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(workerVersion)) {
+      return null;
+    }
+    const capabilities = Array.isArray(body.capabilities)
+      ? [...new Set(body.capabilities.map(String).filter((value) =>
+        /^[a-z][a-z0-9_]{0,63}$/.test(value)
+      ))].slice(0, 16)
+      : [];
     let preview = null;
     if (
       typeof body.preview_b64 ===
@@ -1045,6 +1068,8 @@ export class FleetState
       role: identity.role,
       session_id:
         identity.sessionId,
+      worker_version: workerVersion || null,
+      capabilities,
       package: packageName,
       fingerprint,
       layout_signature:
@@ -1267,6 +1292,10 @@ export class FleetState
         status,
         package:
           live?.package || null,
+        worker_version:
+          live?.worker_version || null,
+        capabilities:
+          Array.isArray(live?.capabilities) ? live.capabilities : [],
         fingerprint:
           live?.fingerprint || null,
         layout_signature:
@@ -1444,6 +1473,8 @@ export class FleetState
       history: Array.isArray(item.history) ? item.history.map(String).slice(-6) : [],
       display_status: (Array.isArray(item.history) ? item.history : []).join(" → ") || String(item.status || "FAILED"),
       worker_version: String(item.worker_version || ""),
+      protocol_mode: String(item.protocol_mode || ""),
+      reason: String(item.reason || "").trim().slice(0, 160) || null,
       updated_at: Number(item.updated_at || update.created_at || 0),
     })).sort((a, b) => a.device_id.localeCompare(b.device_id, undefined, { numeric: true }));
     return {
@@ -1490,8 +1521,32 @@ export class FleetState
     record.update_device_status[device.device_id] = {
       status: String(device.status || "FAILED"),
       worker_version: String(device.worker_version || ""),
+      reason: String(device.reason || "").slice(0, 160),
       updated_at: Number(device.updated_at || Date.now()),
     };
+  }
+
+  updateDispatchChannels(sessionId, member, requestedChannel) {
+    const live = this.aotLive.get(this.aotLiveKey(sessionId, member.device_id));
+    let capabilities = Array.isArray(live?.capabilities) ? live.capabilities : [];
+    if (!capabilities.includes(AOT_DYNAMIC_CHANNEL_CAPABILITY)) {
+      for (const socket of this.ctx.getWebSockets(
+        this.aotSocketTag(member.role, sessionId, member.device_id)
+      )) {
+        try {
+          const attachment = typeof socket.deserializeAttachment === "function"
+            ? socket.deserializeAttachment()
+            : null;
+          if (Array.isArray(attachment?.capabilities)) {
+            capabilities = attachment.capabilities;
+          }
+        } catch (error) {}
+      }
+    }
+    if (capabilities.includes(AOT_DYNAMIC_CHANNEL_CAPABILITY)) {
+      return [requestedChannel];
+    }
+    return ["stable", "canary"];
   }
 
   aotMembers(record) {
@@ -1514,20 +1569,28 @@ export class FleetState
     if (!next) return;
     update.active_group = next;
     update.group_deadline = Date.now() + AOT_UPDATE_TIMEOUT_MS;
-    const targetIds = next.map((item) => item.device_id);
-    const payload = {
-      type: "aot_batch_action", protocol: "phase4-1", session_id: sessionId,
-      reference_device_id: update.reference_device_id,
-      target_device_ids: targetIds, action_id: update.action_id,
-      action: AOT_UPDATE_ACTION, channel: update.channel,
-      expires_at: update.group_deadline,
-    };
     for (const member of next) {
-      const sent = this.sendAotPayload(this.aotSocketTag(member.role, sessionId, member.device_id), payload);
+      const device = update.devices[member.device_id];
+      const channels = Array.isArray(device.dispatch_channels) && device.dispatch_channels.length
+        ? device.dispatch_channels
+        : [update.channel];
+      let sent = 0;
+      for (const channel of channels) {
+        sent += this.sendAotPayload(
+          this.aotSocketTag(member.role, sessionId, member.device_id),
+          {
+            type: "aot_batch_action", protocol: "phase4-1", session_id: sessionId,
+            reference_device_id: update.reference_device_id,
+            target_device_ids: [member.device_id], action_id: update.action_id,
+            action: AOT_UPDATE_ACTION, channel,
+            expires_at: update.group_deadline,
+          }
+        );
+      }
       if (sent === 0) {
-        const device = update.devices[member.device_id];
         device.status = "FAILED";
         device.history = ["FAILED"];
+        device.reason = "websocket_send_failed";
         device.updated_at = Date.now();
         this.rememberUpdateStatus(record, device);
       }
@@ -1549,6 +1612,7 @@ export class FleetState
         if (device && device.status === "QUEUED") {
           device.status = "FAILED";
           device.history = ["FAILED"];
+          device.reason = "rollout_stopped_after_failure";
           device.updated_at = Date.now();
           this.rememberUpdateStatus(record, device);
         }
@@ -1629,11 +1693,17 @@ export class FleetState
     for (const member of selected) {
       const skipHealthy = channel === "stable" && alreadyHealthy.has(member.device_id);
       const isConnected = connected(member);
+      const dispatchChannels = skipHealthy
+        ? []
+        : this.updateDispatchChannels(sessionId, member, channel);
       devices[member.device_id] = {
         device_id: member.device_id,
         status: skipHealthy ? "HEALTHY" : (isConnected ? "QUEUED" : "SKIPPED_OFFLINE"),
         history: skipHealthy ? ["HEALTHY"] : (isConnected ? ["QUEUED"] : ["SKIPPED_OFFLINE"]),
         worker_version: skipHealthy ? AOT_WORKER_VERSION : "",
+        protocol_mode: dispatchChannels.length > 1 ? "legacy_dual_channel" : "capability_channel",
+        dispatch_channels: dispatchChannels,
+        reason: null,
         updated_at: Date.now(),
       };
       if (isConnected && !skipHealthy) online.push(member);
@@ -2117,6 +2187,14 @@ export class FleetState
         `aot-session:${sessionId}`,
       ]
     );
+    try {
+      if (typeof server.serializeAttachment === "function") {
+        server.serializeAttachment({
+          role, session_id: sessionId, device_id: deviceId,
+          worker_version: null, capabilities: [],
+        });
+      }
+    } catch (error) {}
     await this.rememberAotMember(
       sessionId,
       role,
@@ -2302,6 +2380,7 @@ export class FleetState
         const device = update?.devices?.[followerId];
         const status = String(body.status || "");
         const workerVersion = String(body.worker_version || "").trim().slice(0, 80);
+        const reportedReason = String(body.reason || "").trim().slice(0, 160);
         if (!allowed.has(status) || !update || update.action_id !== actionId || !device) {
           return json({ ok: false, error: "invalid_update_ack" }, 400);
         }
@@ -2313,6 +2392,15 @@ export class FleetState
           if (!Array.isArray(device.history)) device.history = [];
           if (!device.history.includes(nextStatus)) device.history.push(nextStatus);
           if (workerVersion) device.worker_version = workerVersion;
+          if (nextStatus === "HEALTHY") {
+            device.reason = null;
+          } else if (nextStatus === "FAILED") {
+            device.reason = status === "HEALTHY"
+              ? "worker_version_mismatch"
+              : (reportedReason || "worker_reported_failure");
+          } else if (nextStatus === "ROLLED_BACK") {
+            device.reason = reportedReason || "health_ack_timeout_rolled_back";
+          }
           device.updated_at = Date.now();
           this.rememberUpdateStatus(record, device);
         }
@@ -2520,6 +2608,9 @@ export class FleetState
           device.status = "FAILED";
           if (!Array.isArray(device.history)) device.history = [];
           if (!device.history.includes("FAILED")) device.history.push("FAILED");
+          device.reason = device.protocol_mode === "legacy_dual_channel"
+            ? "legacy_bridge_no_ack"
+            : "worker_ack_timeout";
           device.updated_at = Date.now();
           this.rememberUpdateStatus(record, device);
         }

@@ -1655,8 +1655,21 @@ function aotHubHtml() {
         ? ("Hai máy thử: " + selected.join(" + ") + ". Stable theo nhóm tối đa 5 máy.")
         : "Hai máy thử được chọn động từ các máy ONLINE. Stable theo nhóm tối đa 5 máy.";
       updateResultsEl.innerHTML = update.devices.map(function (item) {
+        var reasons = {
+          legacy_bridge_no_ack: "Worker cũ không chấp nhận cả hai channel chuyển tiếp",
+          worker_ack_timeout: "Worker không gửi trạng thái cập nhật kịp thời",
+          websocket_send_failed: "WebSocket ngắt trước khi gửi lệnh",
+          rollout_stopped_after_failure: "Đã dừng vì một máy trong nhóm trước FAILED",
+          worker_version_mismatch: "Worker HEALTHY nhưng sai phiên bản phát hành",
+          worker_reported_failure: "Worker báo cập nhật thất bại",
+          health_ack_timeout: "Worker mới không gửi health ACK trong 60 giây",
+          health_ack_timeout_rolled_back: "Không có health ACK; đã rollback"
+        };
+        var rawReason = String(item.reason || "");
+        var detail = rawReason ? " — " + (reasons[rawReason] || rawReason) : "";
         return '<div class="batch-row"><strong>' + esc(item.device_id) +
-          '</strong><span>' + esc(item.display_status || item.status) + '</span></div>';
+          '</strong><span>' + esc(item.display_status || item.status) +
+          esc(detail) + '</span></div>';
       }).join("");
     }
 

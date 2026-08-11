@@ -125,6 +125,7 @@ with tempfile.TemporaryDirectory(prefix="aot-bundle-updater-") as folder:
         assert "sha256_mismatch" in str(exc)
     else:
         raise AssertionError("bad hash accepted")
+    assert module._link_target(module.CURRENT) == legacy
 
     (source / "relay.py").write_text("not python: [", encoding="utf-8")
     try:
@@ -133,6 +134,7 @@ with tempfile.TemporaryDirectory(prefix="aot-bundle-updater-") as folder:
         assert "py_compile_failed" in str(exc)
     else:
         raise AssertionError("bad syntax accepted")
+    assert module._link_target(module.CURRENT) == legacy
 
     with module.supervisor_lock():
         try:

@@ -35,6 +35,10 @@ worker actions in `cloudflare-worker/`.
 - UPDATE_WORKER remains deduplicated and serialized by the supervisor lock.
   Stable rollout groups contain at most five devices, and the next group may
   start only after every device in the current group reports `HEALTHY`.
+- Legacy workers that do not advertise dynamic channel capability may receive
+  both valid channel variants with one action ID and a single-device target.
+  This bridge is capability-based, never identity-based; dedupe guarantees one
+  execution, and capable workers receive only the requested channel.
 - Preserve Durable Object WebSocket Hibernation and event-driven dashboard
   updates. Do not add periodic polling or a new paid service.
 
