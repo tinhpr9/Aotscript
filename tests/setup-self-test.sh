@@ -74,6 +74,48 @@ run_setup_clean() {
     "$@"
 }
 
+launcher_execution_mode() {
+  local launcher="$1" shebang interpreter
+  IFS= read -r shebang < "$launcher" || return 1
+  case "$shebang" in
+    '#!'*) interpreter="${shebang#\#!}" ;;
+    *) return 1 ;;
+  esac
+  interpreter="${interpreter%% *}"
+  [ -n "$interpreter" ] || return 1
+  if [ -x "$interpreter" ]; then
+    printf 'direct\n'
+  elif [ "${CI:-}" = true ] && [ "${RUNNER_OS:-}" = Linux ] &&
+       [ "$(uname -s)" = Linux ]; then
+    printf 'bash\n'
+  else
+    printf 'SETUP_SELF_TEST=FAIL:launcher-interpreter-unavailable:%s\n' \
+      "$interpreter" >&2
+    return 1
+  fi
+}
+
+run_clean_launcher() {
+  local root="$1" host="$2" launcher="$3" mode
+  local -a launcher_env=() command=()
+  shift 3
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+    launcher_env+=("$1")
+    shift
+  done
+  [ "${1:-}" = -- ] || fail clean-launcher-missing-argument-separator
+  shift
+  mode="$(launcher_execution_mode "$launcher")" ||
+    fail clean-launcher-execution-mode
+  case "$mode" in
+    direct) command=("$launcher") ;;
+    bash) command=(bash "$launcher") ;;
+    *) fail clean-launcher-unknown-execution-mode ;;
+  esac
+  run_setup_clean "$root" "$host" env "${launcher_env[@]}" \
+    "${command[@]}" "$@"
+}
+
 bash -n "$SETUP"
 bash -n "$PROVISION"
 [ "$(bash "$SETUP" --validate-id M74)" = m74 ] || fail validation-id
@@ -102,31 +144,48 @@ fresh_launcher="$fresh/prefix/bin/aotsetup"
 [ -f "$fresh_launcher" ] && [ ! -L "$fresh_launcher" ] ||
   fail clean-env-launcher-regular-file
 [ -x "$fresh_launcher" ] || fail clean-env-launcher-executable
+IFS= read -r fresh_launcher_shebang < "$fresh_launcher" ||
+  fail clean-env-launcher-shebang-read
+[ "$fresh_launcher_shebang" = '#!/data/data/com.termux/files/usr/bin/bash' ] ||
+  fail clean-env-launcher-termux-shebang
+fresh_launcher_interpreter="${fresh_launcher_shebang#\#!}"
+fresh_launcher_mode="$(launcher_execution_mode "$fresh_launcher")" ||
+  fail clean-env-launcher-mode
+if [ -x "$fresh_launcher_interpreter" ]; then
+  [ "$fresh_launcher_mode" = direct ] || fail termux-launcher-not-direct
+elif [ "${CI:-}" = true ] && [ "${RUNNER_OS:-}" = Linux ]; then
+  [ "$fresh_launcher_mode" = bash ] || fail ubuntu-launcher-not-bash
+else
+  fail clean-env-launcher-unsupported-environment
+fi
 bash -n "$fresh_launcher" || fail clean-env-launcher-syntax
 grep -Fq 'Launcher local đã được cài và xác minh' \
   "$TMP/launcher-install.out" || fail clean-env-launcher-postcondition
-run_setup_clean "$fresh" fresh-host env \
+run_clean_launcher "$fresh" fresh-host "$fresh_launcher" \
   AOTSCRIPT_SETUP_DRY_RUN=1 \
   AOTSCRIPT_SETUP_DEVICE_ID=m88 \
   AOTSCRIPT_SETUP_GROUP=NOVA \
   AOTSCRIPT_SETUP_CONFIRM=yes \
   AOTSCRIPT_SETUP_CHECKPOINT_ACTION='DA XONG' \
-  bash "$fresh_launcher" > "$TMP/fresh.out"
+  -- > "$TMP/fresh.out"
 [ -d "$TMP" ] || fail clean-env-temp-removed-before-completion
 [ -x "$fresh_launcher" ] || fail clean-env-launcher-missing-after-run
-printf 'AOTSETUP_CLEAN_ENV_LAUNCHER=PASS\n'
 rm -f "$bootstrap"
-run_setup "$fresh" fresh-host env \
+run_clean_launcher "$fresh" fresh-host "$fresh_launcher" \
   AOTSCRIPT_SETUP_DRY_RUN=1 \
   AOTSCRIPT_SETUP_CHECKPOINT_ACTION='DA XONG' \
-  "$fresh/prefix/bin/aotsetup" > "$TMP/local-resume.out"
+  -- > "$TMP/local-resume.out"
 grep -Fq 'Lần sau chỉ chạy aotsetup' "$TMP/local-resume.out" || fail local-launcher-resume
 
 # Explicit update uses a checked local fixture and leaves a valid launcher.
-run_setup "$fresh" fresh-host env \
+run_clean_launcher "$fresh" fresh-host "$fresh_launcher" \
   AOTSCRIPT_SETUP_UPDATE_SOURCE="$SETUP" \
-  "$fresh/prefix/bin/aotsetup" update > "$TMP/update.out"
-bash -n "$fresh/prefix/bin/aotsetup" || fail local-update-syntax
+  -- update > "$TMP/update.out"
+bash -n "$fresh_launcher" || fail local-update-syntax
+[ -d "$TMP" ] || fail clean-env-temp-removed-before-update-completion
+[ -x "$fresh_launcher" ] || fail clean-env-launcher-missing-after-update
+printf 'AOTSETUP_CLEAN_ENV_LAUNCHER=PASS MODE=%s\n' "$fresh_launcher_mode"
+[ "${AOTSCRIPT_SETUP_TEST_CLEAN_LAUNCHER_ONLY:-0}" != 1 ] || exit 0
 
 # Bound complete identity resumes without invoking pkg or curl.
 resume="$TMP/resume"
