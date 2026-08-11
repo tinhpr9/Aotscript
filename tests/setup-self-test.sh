@@ -75,13 +75,21 @@ fresh="$TMP/fresh"
 mkdir -p "$fresh/prefix/bin" "$fresh/storage" "$fresh/home"
 bootstrap="$TMP/bootstrap-once.sh"
 cp -p "$SETUP" "$bootstrap"
+[ ! -e "$fresh/prefix/bin/aotsetup" ] || fail clean-env-launcher-preexists
+run_setup "$fresh" fresh-host bash "$bootstrap" --install-launcher-only \
+  > "$TMP/launcher-install.out"
+[ -x "$fresh/prefix/bin/aotsetup" ] || fail clean-env-launcher-install
+bash -n "$fresh/prefix/bin/aotsetup" || fail clean-env-launcher-syntax
+grep -Fq 'Launcher local đã được cài và xác minh' \
+  "$TMP/launcher-install.out" || fail clean-env-launcher-postcondition
+printf 'AOTSETUP_CLEAN_ENV_LAUNCHER=PASS\n'
 run_setup "$fresh" fresh-host env \
   AOTSCRIPT_SETUP_DRY_RUN=1 \
   AOTSCRIPT_SETUP_DEVICE_ID=m88 \
   AOTSCRIPT_SETUP_GROUP=NOVA \
   AOTSCRIPT_SETUP_CONFIRM=yes \
   AOTSCRIPT_SETUP_CHECKPOINT_ACTION='DA XONG' \
-  bash "$bootstrap" > "$TMP/fresh.out"
+  "$fresh/prefix/bin/aotsetup" > "$TMP/fresh.out"
 [ -x "$fresh/prefix/bin/aotsetup" ] || fail local-launcher-install
 rm -f "$bootstrap"
 run_setup "$fresh" fresh-host env \

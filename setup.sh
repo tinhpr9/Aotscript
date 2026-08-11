@@ -1187,6 +1187,11 @@ main() {
   install_local_launcher "$self_path"
   case "$command" in
     "") ;;
+    --install-launcher-only)
+      [ "$#" = 1 ] || die "--install-launcher-only không nhận tham số khác."
+      emit OK "Launcher local đã được cài và xác minh."
+      return 0
+      ;;
     update)
       [ "$#" = 1 ] || die "aotsetup update không nhận tham số khác."
       update_local_launcher
