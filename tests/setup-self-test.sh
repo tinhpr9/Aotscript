@@ -59,6 +59,21 @@ run_setup() {
     "$@"
 }
 
+run_setup_clean() {
+  local root="$1" host="$2"
+  shift 2
+  env -i \
+    PATH="$PATH" \
+    HOME="$root/home" \
+    XDG_STATE_HOME="$root/state" \
+    PREFIX="$root/prefix" \
+    AOTSCRIPT_SETUP_TEST_MODE=1 \
+    AOTSCRIPT_SETUP_INPUT_MODE=env \
+    AOTSCRIPT_SETUP_STORAGE_ROOT="$root/storage" \
+    AOTSCRIPT_SETUP_HOST_ID="$host" \
+    "$@"
+}
+
 bash -n "$SETUP"
 bash -n "$PROVISION"
 [ "$(bash "$SETUP" --validate-id M74)" = m74 ] || fail validation-id
@@ -76,21 +91,30 @@ mkdir -p "$fresh/prefix/bin" "$fresh/storage" "$fresh/home"
 bootstrap="$TMP/bootstrap-once.sh"
 cp -p "$SETUP" "$bootstrap"
 [ ! -e "$fresh/prefix/bin/aotsetup" ] || fail clean-env-launcher-preexists
-run_setup "$fresh" fresh-host bash "$bootstrap" --install-launcher-only \
-  > "$TMP/launcher-install.out"
-[ -x "$fresh/prefix/bin/aotsetup" ] || fail clean-env-launcher-install
-bash -n "$fresh/prefix/bin/aotsetup" || fail clean-env-launcher-syntax
+if run_setup_clean "$fresh" fresh-host bash "$bootstrap" --install-launcher-only \
+  > "$TMP/launcher-install.out"; then
+  launcher_install_rc=0
+else
+  launcher_install_rc=$?
+fi
+[ "$launcher_install_rc" -eq 0 ] || fail clean-env-launcher-install-rc
+fresh_launcher="$fresh/prefix/bin/aotsetup"
+[ -f "$fresh_launcher" ] && [ ! -L "$fresh_launcher" ] ||
+  fail clean-env-launcher-regular-file
+[ -x "$fresh_launcher" ] || fail clean-env-launcher-executable
+bash -n "$fresh_launcher" || fail clean-env-launcher-syntax
 grep -Fq 'Launcher local đã được cài và xác minh' \
   "$TMP/launcher-install.out" || fail clean-env-launcher-postcondition
-printf 'AOTSETUP_CLEAN_ENV_LAUNCHER=PASS\n'
-run_setup "$fresh" fresh-host env \
+run_setup_clean "$fresh" fresh-host env \
   AOTSCRIPT_SETUP_DRY_RUN=1 \
   AOTSCRIPT_SETUP_DEVICE_ID=m88 \
   AOTSCRIPT_SETUP_GROUP=NOVA \
   AOTSCRIPT_SETUP_CONFIRM=yes \
   AOTSCRIPT_SETUP_CHECKPOINT_ACTION='DA XONG' \
-  "$fresh/prefix/bin/aotsetup" > "$TMP/fresh.out"
-[ -x "$fresh/prefix/bin/aotsetup" ] || fail local-launcher-install
+  bash "$fresh_launcher" > "$TMP/fresh.out"
+[ -d "$TMP" ] || fail clean-env-temp-removed-before-completion
+[ -x "$fresh_launcher" ] || fail clean-env-launcher-missing-after-run
+printf 'AOTSETUP_CLEAN_ENV_LAUNCHER=PASS\n'
 rm -f "$bootstrap"
 run_setup "$fresh" fresh-host env \
   AOTSCRIPT_SETUP_DRY_RUN=1 \
