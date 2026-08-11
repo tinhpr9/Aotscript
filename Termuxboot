@@ -155,7 +155,7 @@ PY_AOT_BOOT_CONFIG
     return 1
   }
 
-  for name in controller.py relay.py runtime.py updater.py e2e.py; do
+  for name in bootstrap_launcher.py bootstrap.py; do
     if ! "$CURL" -fsSL \
       --retry 3 \
       --connect-timeout 15 \
@@ -173,13 +173,19 @@ import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-for name in ("controller.py", "relay.py", "runtime.py", "updater.py", "e2e.py"):
+for name in ("bootstrap_launcher.py", "bootstrap.py"):
     path = root / name
     source = path.read_text(encoding="utf-8")
     compile(source, str(path), "exec")
 PY_AOT_BOOT_COMPILE
   then
     echo "[LỖI] AOT runtime tải về sai cú pháp."
+    rm -rf "$stage"
+    return 1
+  fi
+
+  if ! "$PYTHON" "$stage/bootstrap.py" self-test >/dev/null 2>&1; then
+    echo "[LỖI] AOT bootstrap không vượt qua self-test."
     rm -rf "$stage"
     return 1
   fi
@@ -192,11 +198,17 @@ import sys
 src = pathlib.Path(sys.argv[1])
 dst = pathlib.Path(sys.argv[2])
 
-for name in ("controller.py", "relay.py", "runtime.py", "updater.py", "e2e.py"):
+for name in ("bootstrap_launcher.py", "bootstrap.py"):
     source = src / name
     temp = dst / ("." + name + ".boot.tmp")
     temp.write_bytes(source.read_bytes())
     compile(temp.read_text(encoding="utf-8"), str(temp), "exec")
+    if name == "bootstrap.py":
+        active = dst / name
+        backup = dst / "bootstrap.py.last_good"
+        if active.is_file():
+            backup.write_bytes(active.read_bytes())
+            compile(backup.read_text(encoding="utf-8"), str(backup), "exec")
     os.replace(temp, dst / name)
 PY_AOT_BOOT_REPLACE
   then
@@ -207,13 +219,10 @@ PY_AOT_BOOT_REPLACE
 
   rm -rf "$stage"
   chmod 700 \
-    "$AOT_RUNTIME_DIR/controller.py" \
-    "$AOT_RUNTIME_DIR/relay.py" \
-    "$AOT_RUNTIME_DIR/runtime.py" \
-    "$AOT_RUNTIME_DIR/updater.py" \
-    "$AOT_RUNTIME_DIR/e2e.py"
+    "$AOT_RUNTIME_DIR/bootstrap_launcher.py" \
+    "$AOT_RUNTIME_DIR/bootstrap.py"
 
-  if "$PYTHON" "$AOT_RUNTIME_DIR/runtime.py" auto-start >> "$AOT_LOG" 2>&1; then
+  if "$PYTHON" "$AOT_RUNTIME_DIR/bootstrap_launcher.py" start >> "$AOT_LOG" 2>&1; then
     echo "[OK] AOT Group Control auto-start đã xử lý."
   else
     echo "[WARN] AOT Group Control auto-start thất bại; xem $AOT_LOG"

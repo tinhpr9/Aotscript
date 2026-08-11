@@ -10,7 +10,6 @@ import signal
 import subprocess
 import sys
 import time
-import importlib.util
 from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -29,24 +28,10 @@ LOG_PATH = pathlib.Path(
     "/storage/emulated/0/Download/AOT_Group_Control.log"
 )
 CONFIG_VERSION = 1
-UPDATER_PATH = ROOT / "updater.py"
 
 
 class AotRuntimeError(RuntimeError):
     pass
-
-
-def _load_updater():
-    spec = importlib.util.spec_from_file_location("aot_worker_updater_runtime", UPDATER_PATH)
-    if spec is None or spec.loader is None:
-        raise AotRuntimeError("updater_import_failed")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-updater = _load_updater()
 
 
 def _read_small(path: pathlib.Path) -> str:
@@ -330,17 +315,6 @@ def start_runtime(config: dict[str, Any]) -> int | None:
     if len(running) > 1:
         stopped = stop_runtime(config)
         print("AOT_RUNTIME_DUPLICATES_STOPPED=" + ",".join(map(str, stopped)))
-    pending = None
-    try:
-        device_id, _group = local_identity()
-        pending = updater.prepare_update(
-            device_id,
-            f"startup-{int(time.time())}-{os.getpid()}",
-        )
-        if pending:
-            validate_runtime_files()
-    except updater.UpdateError as exc:
-        print(f"AOT_WORKER_UPDATE=FAILED:{exc}")
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with LOG_PATH.open("ab") as log:
         process = subprocess.Popen(
@@ -355,20 +329,6 @@ def start_runtime(config: dict[str, Any]) -> int | None:
     if process.poll() is not None:
         raise AotRuntimeError("relay_exited_immediately")
     print(f"AOT_RUNTIME=STARTED:{process.pid}")
-    if pending and not updater.wait_for_health(pending):
-        try:
-            os.kill(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        updater.rollback(pending)
-        with LOG_PATH.open("ab") as log:
-            restored = subprocess.Popen(
-                relay_command(config), stdin=subprocess.DEVNULL,
-                stdout=log, stderr=subprocess.STDOUT,
-                start_new_session=True, close_fds=True,
-            )
-        print(f"AOT_WORKER_UPDATE=ROLLED_BACK:{restored.pid}")
-        return restored.pid
     return process.pid
 
 

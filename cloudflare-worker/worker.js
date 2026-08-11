@@ -890,7 +890,7 @@ async function handleAotControlAck(
     ["OPEN_SWIFT_BACKUP", "UPDATE_WORKER"].includes(batchAction);
   const allowedStatus = new Set(
     batchAction === "UPDATE_WORKER"
-      ? ["DOWNLOADING", "VERIFIED", "UPDATED", "ROLLED_BACK", "FAILED"]
+      ? ["DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING", "HEALTHY", "ROLLED_BACK", "FAILED"]
       : isBatch
       ? [
           "ACCEPTED",
