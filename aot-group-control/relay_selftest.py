@@ -276,4 +276,96 @@ assert len(control_payloads) == 1
 assert control_payloads[0]["status"] == "error"
 assert control_payloads[0]["reason"] == "semantic_target_not_found"
 
+# The fixed batch action reuses ACK/dedupe and never enters capture/replay.
+batch_acks = []
+old_send_ack = module._send_ack
+old_foreground_package = module.controller.foreground_package
+old_batch_root_run = module.controller._root_run
+old_launch_package = module._launch_package
+old_state_path = module.STATE_PATH
+try:
+    with tempfile.TemporaryDirectory() as tmp:
+        module.STATE_PATH = pathlib.Path(tmp) / "batch-state.json"
+        state = module._load_state()
+        module._send_ack = lambda _cfg, ack: batch_acks.append(dict(ack))
+        module.controller.foreground_package = (
+            lambda: module.SWIFT_BACKUP_PACKAGE
+        )
+
+        def unexpected_launch(_package):
+            raise AssertionError("already-open Swift Backup was relaunched")
+
+        module._launch_package = unexpected_launch
+        message = {
+            "type": "aot_batch_action",
+            "protocol": module.HUB_PROTOCOL_VERSION,
+            "session_id": "m37-m117-p3",
+            "reference_device_id": "m37",
+            "target_device_ids": ["m37", "m117"],
+            "action_id": "swift-fixture-1",
+            "action": module.OPEN_SWIFT_BACKUP_ACTION,
+            "package": module.SWIFT_BACKUP_PACKAGE,
+            "expires_at": 9999999999999,
+        }
+        assert module._handle_batch_action(
+            {}, state, local_id="m117", session_id="m37-m117-p3",
+            message=message,
+        )
+        assert [ack["status"] for ack in batch_acks] == [
+            "ACCEPTED", "OPENED"
+        ]
+        assert all(ack["follower_device_id"] == "m117" for ack in batch_acks)
+        assert all(ack["action_id"] == "swift-fixture-1" for ack in batch_acks)
+        assert batch_acks[-1]["executed"] is False
+
+        batch_acks.clear()
+        assert module._handle_batch_action(
+            {}, state, local_id="m117", session_id="m37-m117-p3",
+            message=message,
+        )
+        assert [ack["status"] for ack in batch_acks] == ["DUPLICATE"]
+
+        batch_acks.clear()
+        closed = dict(message, action_id="swift-fixture-2")
+        foreground_values = iter([
+            "com.android.settings",
+            module.SWIFT_BACKUP_PACKAGE,
+        ])
+        module.controller.foreground_package = lambda: next(foreground_values)
+        module.controller._root_run = lambda _command: (
+            "package:/data/app/org.swiftapps.swiftbackup/base.apk\n"
+        )
+        launched = []
+        module._launch_package = lambda package: launched.append(package)
+        assert module._handle_batch_action(
+            {}, state, local_id="m117", session_id="m37-m117-p3",
+            message=closed,
+        )
+        assert launched == [module.SWIFT_BACKUP_PACKAGE]
+        assert [ack["status"] for ack in batch_acks] == [
+            "ACCEPTED", "OPENED"
+        ]
+        assert batch_acks[-1]["executed"] is True
+
+        batch_acks.clear()
+        missing = dict(message, action_id="swift-fixture-3")
+        module.controller.foreground_package = lambda: "com.android.settings"
+        module.controller._root_run = lambda _command: ""
+        module._launch_package = lambda _package: (_ for _ in ()).throw(
+            module.AotRelayError("package_activity_not_resolved")
+        )
+        assert module._handle_batch_action(
+            {}, state, local_id="m117", session_id="m37-m117-p3",
+            message=missing,
+        )
+        assert [ack["status"] for ack in batch_acks] == [
+            "ACCEPTED", "FAILED_NOT_INSTALLED"
+        ]
+finally:
+    module._send_ack = old_send_ack
+    module.controller.foreground_package = old_foreground_package
+    module.controller._root_run = old_batch_root_run
+    module._launch_package = old_launch_package
+    module.STATE_PATH = old_state_path
+
 print("AOT_RELAY_SELFTEST=OK")

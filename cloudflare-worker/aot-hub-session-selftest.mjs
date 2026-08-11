@@ -73,7 +73,8 @@ function loadDashboard(storage) {
   const elementIds = [
     "session", "error", "reference", "followers", "lastControl",
     "online", "synced", "out", "offline", "refresh", "apply",
-    "pause", "resume", "back", "up", "down",
+    "pause", "resume", "back", "up", "down", "openSwift",
+    "batchResults",
   ];
   const elements = new Map(
     elementIds.map((id) => [id, {
@@ -129,6 +130,14 @@ const invalidStorage = new LocalStorage(
 elements = loadDashboard(invalidStorage);
 if (elements.get("session").value !== defaultMatch[1]) {
   throw new Error("invalid stored session overrode fallback");
+}
+
+if (
+  !html.includes("Batch → Mở Swift Backup") ||
+  !scriptMatch[1].includes('kind: "open_swift_backup"') ||
+  !scriptMatch[1].includes("renderBatch(data.last_batch)")
+) {
+  throw new Error("fixed Swift Backup batch UI is missing");
 }
 
 console.log("AOT_HUB_SESSION_SELFTEST=OK");

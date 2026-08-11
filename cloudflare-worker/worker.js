@@ -885,13 +885,27 @@ async function handleAotControlAck(
     body.action_id
   );
   const status = String(body.status || "");
-  const allowedStatus = new Set([
-    "success",
-    "duplicate",
-    "out_of_sync",
-    "expired",
-    "error",
-  ]);
+  const isBatch =
+    body.protocol === AOT_HUB_PROTOCOL_VERSION &&
+    body.batch_action === "OPEN_SWIFT_BACKUP";
+  const allowedStatus = new Set(
+    isBatch
+      ? [
+          "ACCEPTED",
+          "OPENED",
+          "FAILED_NOT_INSTALLED",
+          "FAILED",
+          "TIMEOUT",
+          "DUPLICATE",
+        ]
+      : [
+          "success",
+          "duplicate",
+          "out_of_sync",
+          "expired",
+          "error",
+        ]
+  );
   let preview = null;
   if (
     typeof body.preview_b64 === "string" &&
@@ -914,7 +928,7 @@ async function handleAotControlAck(
     preview = body.preview_b64;
   }
   if (
-    body.protocol !== AOT_PROTOCOL_VERSION ||
+    (!isBatch && body.protocol !== AOT_PROTOCOL_VERSION) ||
     !sessionId ||
     !referenceId ||
     !followerId ||
@@ -927,7 +941,9 @@ async function handleAotControlAck(
     );
   }
   const clean = {
-    protocol: AOT_PROTOCOL_VERSION,
+    protocol: isBatch
+      ? AOT_HUB_PROTOCOL_VERSION
+      : AOT_PROTOCOL_VERSION,
     session_id: sessionId,
     reference_device_id: referenceId,
     follower_device_id: followerId,
@@ -936,6 +952,9 @@ async function handleAotControlAck(
     executed: body.executed === true,
     screen_changed: body.screen_changed === true,
   };
+  if (isBatch) {
+    clean.batch_action = "OPEN_SWIFT_BACKUP";
+  }
   for (const key of [
     "before_fingerprint",
     "after_fingerprint",
@@ -1348,6 +1367,23 @@ function aotHubHtml() {
       font-size: 12px;
       margin: 8px 0;
     }
+    .batch {
+      margin-top: 14px;
+      padding: 12px;
+    }
+    .batch-results {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+      font: 12px ui-monospace,SFMono-Regular,Consolas,monospace;
+    }
+    .batch-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-top: 1px solid #2b2f39;
+      padding-top: 6px;
+    }
     @media (max-width: 560px) {
       .summary {
         grid-template-columns: repeat(2,minmax(0,1fr));
@@ -1382,6 +1418,11 @@ function aotHubHtml() {
     <h2 style="font-size:16px;margin:16px 0 8px">FOLLOWERS</h2>
     <section id="followers" class="grid"></section>
     <div id="lastControl" class="hint"></div>
+    <section class="card batch">
+      <button id="openSwift">Batch → Mở Swift Backup</button>
+      <div class="hint">Chỉ gửi OPEN_SWIFT_BACKUP tới các máy đang kết nối.</div>
+      <div id="batchResults" class="batch-results"></div>
+    </section>
     <nav class="controls">
       <button id="pause">PAUSE</button>
       <button id="resume">RESUME</button>
@@ -1403,6 +1444,7 @@ function aotHubHtml() {
     var referenceEl = document.getElementById("reference");
     var followersEl = document.getElementById("followers");
     var lastControlEl = document.getElementById("lastControl");
+    var batchResultsEl = document.getElementById("batchResults");
 
     if (tg) {
       tg.ready();
@@ -1506,6 +1548,18 @@ function aotHubHtml() {
         '</div></article>';
     }
 
+    function renderBatch(batch) {
+      if (!batch || !Array.isArray(batch.devices)) {
+        batchResultsEl.innerHTML = '<div class="hint">Chưa có batch.</div>';
+        return;
+      }
+      batchResultsEl.innerHTML = batch.devices.map(function (item) {
+        return '<div class="batch-row"><strong>' + esc(item.device_id) +
+          '</strong><span>' + esc(item.display_status || item.status) +
+          '</span></div>';
+      }).join("");
+    }
+
     function render(data) {
       currentState = data;
       var summary = data.summary || {};
@@ -1524,6 +1578,7 @@ function aotHubHtml() {
         ? ("Control: " + String(last.status || "-") +
            (last.reason ? " — " + String(last.reason) : ""))
         : "";
+      renderBatch(data.last_batch);
       var image = document.getElementById("referencePreview");
       if (image) {
         image.addEventListener("click", function (event) {
@@ -1580,6 +1635,27 @@ function aotHubHtml() {
       }
     }
 
+    async function openSwiftBackupBatch() {
+      var button = document.getElementById("openSwift");
+      button.disabled = true;
+      try {
+        errorEl.textContent = "";
+        var data = await api("/aot/hub/api/control", {
+          method: "POST",
+          body: {
+            session_id: sessionId(),
+            kind: "open_swift_backup"
+          }
+        });
+        renderBatch(data.batch);
+        window.setTimeout(loadState, 250);
+      } catch (error) {
+        errorEl.textContent = String(error.message || error);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     function startPolling() {
       if (timer) {
         window.clearInterval(timer);
@@ -1600,6 +1676,7 @@ function aotHubHtml() {
     document.getElementById("back").onclick = function () {
       sendControl("back");
     };
+    document.getElementById("openSwift").onclick = openSwiftBackupBatch;
     document.getElementById("up").onclick = function () {
       sendControl("swipe", {
         x1: 0.5, y1: 0.75, x2: 0.5, y2: 0.28, duration_ms: 300
@@ -1692,7 +1769,12 @@ function normalizeAotHubControl(body) {
     return null;
   }
   if (
-    ["pause", "resume", "back"].includes(kind)
+    [
+      "pause",
+      "resume",
+      "back",
+      "open_swift_backup",
+    ].includes(kind)
   ) {
     return {
       session_id: sessionId,
