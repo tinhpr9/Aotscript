@@ -17,6 +17,8 @@ import tempfile
 import termios
 import time
 
+from launcher_test_support import launcher_command
+
 
 SETUP = pathlib.Path(os.environ.get("AOTSCRIPT_SETUP_UNDER_TEST", "setup.sh")).resolve()
 TIMEOUT = 12
@@ -419,8 +421,9 @@ def test_update_while_waiting(root: pathlib.Path) -> None:
         owner.read_until(b"Device ID")
         wait_lock(case, "WAITING_INPUT")
         launcher = case / "prefix/bin/aotsetup"
+        command = launcher_command(launcher, ["update"])
         result = subprocess.run(
-            [str(launcher), "update"],
+            command,
             env={
                 **base_env(case),
                 "AOTSCRIPT_SETUP_UPDATE_SOURCE": str(SETUP),
@@ -432,6 +435,7 @@ def test_update_while_waiting(root: pathlib.Path) -> None:
             check=False,
         )
         assert result.returncode == 0, result.stderr
+        assert "aotsetup đã update từ main" in result.stdout
         assert owner.process.poll() is None
         assert wait_lock(case, "WAITING_INPUT")
         owner.send(b"\x03")
@@ -457,6 +461,11 @@ def main() -> None:
             test_non_aot_not_killed,
             test_update_while_waiting,
         ]
+        selected = os.environ.get("AOTSCRIPT_TERMINAL_LOCK_TEST_FILTER", "")
+        if selected:
+            tests = [test for test in tests if test.__name__ == selected]
+            if not tests:
+                raise AssertionError(f"unknown terminal-lock test filter: {selected}")
         for test in tests:
             test(root)
     print(f"AOTSETUP_TERMINAL_LOCK_TESTS={len(PASSED)}_PASS")
