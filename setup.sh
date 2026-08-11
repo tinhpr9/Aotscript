@@ -3,9 +3,9 @@ set -Eeuo pipefail
 
 AOTSETUP_LOCAL_LAUNCHER_V1=1
 VERSION="one-command-setup-v2"
-PROVISION_VERSION="phase21-one-brain-core-v1"
+PROVISION_VERSION="phase22-aot-registration-v1"
 # All provision/wizard/setup children use this exact tested revision.
-PROVISION_REF="850a92c1e44ca3384260bc1c61ad3f0a4aca9aa6"
+PROVISION_REF="d8faf6bb78469c2e8728ed17be38369b4442fc48"
 PROVISION_SHA256="a4435be33a5e4336004de9ce392935dc71f4ae62748a9340921f9b318aaa4965"
 RAW_BASE="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
 MAIN_SETUP_URL="https://raw.githubusercontent.com/tinhpr9/Aotscript/main/setup.sh"
