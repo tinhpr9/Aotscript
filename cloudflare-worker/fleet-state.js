@@ -653,9 +653,19 @@ export class FleetState
   }
 
 
-  webSocketClose() {}
+  async webSocketClose(socket) {
+    const identity = this.parseAotSocketIdentity(socket);
+    if (identity) {
+      this.aotLive.delete(
+        this.aotLiveKey(identity.sessionId, identity.deviceId)
+      );
+      await this.broadcastAotHubState(identity.sessionId);
+    }
+  }
 
-  webSocketError() {}
+  async webSocketError(socket) {
+    await this.webSocketClose(socket);
+  }
 
 
 
@@ -684,6 +694,24 @@ export class FleetState
       }
     }
     return sent;
+  }
+
+  aotDashboardTag(sessionId) {
+    return `aot-dashboard:${sessionId}`;
+  }
+
+  async broadcastAotHubState(sessionId) {
+    const response = await this.getAotHubState(
+      new URL(
+        `https://fleet-state.internal/aot/hub/state?session=${encodeURIComponent(sessionId)}`
+      )
+    );
+    if (!response.ok) return 0;
+    const state = await response.json();
+    return this.sendAotPayload(
+      this.aotDashboardTag(sessionId),
+      { type: "aot_hub_state", ...state }
+    );
   }
 
 
@@ -1286,7 +1314,7 @@ export class FleetState
     };
   }
 
-  async dispatchOpenSwiftBackup(sessionId, record) {
+  async dispatchOpenSwiftBackup(sessionId, record, requestedTargetIds) {
     const referenceId = validDeviceId(record.reference_device_id);
     const members = [];
     if (referenceId) {
@@ -1301,13 +1329,32 @@ export class FleetState
         members.push({ role: "follower", device_id: deviceId });
       }
     }
+    const memberById = new Map(
+      members.map((item) => [item.device_id, item])
+    );
+    const targets = [];
+    const seen = new Set();
+    for (const rawId of requestedTargetIds) {
+      const deviceId = validDeviceId(rawId);
+      if (!deviceId || seen.has(deviceId) || !memberById.has(deviceId)) {
+        return json(
+          { ok: false, error: "invalid_batch_target", device_id: String(rawId || "") },
+          400
+        );
+      }
+      seen.add(deviceId);
+      targets.push(memberById.get(deviceId));
+    }
+    if (targets.length < 1 || targets.length > AOT_CONTROL_MAX_TARGETS) {
+      return json({ ok: false, error: "invalid_batch_targets" }, 400);
+    }
     const actionId =
       `swift-${Date.now()}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
     const createdAt = Date.now();
     const expiresAt = createdAt + AOT_BATCH_TTL_MS;
     const online = [];
     const devices = {};
-    for (const member of members) {
+    for (const member of targets) {
       const connected = this.ctx.getWebSockets(
         this.aotSocketTag(member.role, sessionId, member.device_id)
       ).length > 0;
@@ -1398,7 +1445,10 @@ export class FleetState
       );
 
     if (kind === "open_swift_backup") {
-      return this.dispatchOpenSwiftBackup(sessionId, record);
+      const requested = Array.isArray(body.target_device_ids)
+        ? body.target_device_ids
+        : [];
+      return this.dispatchOpenSwiftBackup(sessionId, record, requested);
     }
 
     if (
@@ -1623,6 +1673,24 @@ export class FleetState
         targets.length,
     });
   }
+
+  async connectAotDashboard(url, request) {
+    const sessionId = String(url.searchParams.get("session") || "").trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) {
+      return json({ ok: false, error: "invalid_session_id" }, 400);
+    }
+    if (
+      String(request.headers.get("Upgrade") || "").toLowerCase() !==
+      "websocket"
+    ) {
+      return json({ ok: false, error: "upgrade_required" }, 426);
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.ctx.acceptWebSocket(server, [this.aotDashboardTag(sessionId)]);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
   async connectAotWebSocket(
     url,
     request
@@ -1700,6 +1768,7 @@ export class FleetState
       role,
       deviceId
     );
+    await this.broadcastAotHubState(sessionId);
     return new Response(null, {
       status: 101,
       webSocket: client,
@@ -1923,6 +1992,7 @@ export class FleetState
         }
       }
       await this.writeAotSession(sessionId, record);
+      await this.broadcastAotHubState(sessionId);
       return json({
         ok: true,
         action_id: actionId,
@@ -1953,6 +2023,7 @@ export class FleetState
       sessionId,
       record
     );
+    await this.broadcastAotHubState(sessionId);
 
     if (
       typeof body.preview_b64 ===
@@ -2104,6 +2175,13 @@ export class FleetState
       return this.controlAotHub(
         request
       );
+    }
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/aot/hub/dashboard-ws"
+    ) {
+      return this.connectAotDashboard(url, request);
     }
 
 
