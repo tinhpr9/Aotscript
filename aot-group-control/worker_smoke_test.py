@@ -36,11 +36,11 @@ if updater.channel_for_device("m38") != "stable":
 load("aot_release_smoke_controller", "controller.py")
 load("aot_release_smoke_runtime", "runtime.py")
 relay = load("aot_release_smoke_relay", "relay.py")
-if relay.WORKER_VERSION != "aot-worker-2026.08.11.2":
+if relay.WORKER_VERSION != "aot-worker-2026.08.11.3":
     raise SystemExit("worker_version_mismatch")
 
 relay_source = (ROOT / "relay.py").read_text(encoding="utf-8")
-if 'WORKER_VERSION = "aot-worker-2026.08.11.2"' not in relay_source:
+if 'WORKER_VERSION = "aot-worker-2026.08.11.3"' not in relay_source:
     raise SystemExit("worker_version_mismatch")
 if "FILTER_RESTORE_DATA" in relay_source:
     raise SystemExit("forbidden_restore_action")

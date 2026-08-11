@@ -47,6 +47,7 @@ UPDATE_STATUSES = {
 REQUIRED_FILES = {
     "relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py",
     "worker_smoke_test.py", "worker-release-schema.json",
+    "msetup_registration.py",
 }
 HEALTH_TIMEOUT_SECONDS = 60
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -291,6 +292,9 @@ def _config() -> tuple[dict[str, Any], str]:
     device_id = DEVICE_ID_PATH.read_text(encoding="utf-8").strip().lower()
     if not re.fullmatch(r"m[1-9]\d{0,5}", device_id):
         raise BootstrapError("invalid_device_id")
+    configured_device_id = str(config.get("device_id") or "").strip().lower()
+    if configured_device_id != device_id:
+        raise BootstrapError("worker_config_identity_mismatch")
     role = str(config.get("role") or "")
     session = str(config.get("session_id") or "")
     if config.get("enabled") is not True or role not in {"reference", "follower"}:
@@ -559,6 +563,14 @@ def startup() -> int:
 def self_test() -> int:
     if BOOTSTRAP_VERSION < 2 or channel_for_device("m37") != "canary" or channel_for_device("m38") != "stable":
         return 1
+    print(f"AOT_BOOTSTRAP_VERSION={BOOTSTRAP_VERSION}")
+    return 0
+
+
+def stop_supervised_worker() -> int:
+    with supervisor_lock():
+        stop_workers()
+        PENDING_PATH.unlink(missing_ok=True)
     return 0
 
 
@@ -566,6 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AOT versioned worker supervisor")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("start")
+    sub.add_parser("stop")
     sub.add_parser("self-test")
     health = sub.add_parser("health")
     health.add_argument("--action-id", required=True)
@@ -588,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
             return action_update(args)
         if args.command == "start":
             return startup()
+        if args.command == "stop":
+            return stop_supervised_worker()
         return 2
     except BootstrapError as exc:
         print("AOT_BOOTSTRAP=FAILED")

@@ -49,8 +49,22 @@ const socketSends = [];
 const ctx = {
   storage: new Storage(),
   getWebSockets(tag) {
+    if (String(tag).startsWith("aot-session:")) {
+      const sessionId = String(tag).slice("aot-session:".length);
+      return [...onlineTags]
+        .filter((value) => value.startsWith("aot:") && value.includes(`:${sessionId}:`))
+        .map((value) => ({
+          tags: [value, tag],
+          send(payload) { socketSends.push({ tag: value, payload, at: Date.now() }); },
+          close() { onlineTags.delete(value); },
+        }));
+    }
     return onlineTags.has(tag)
-      ? [{ send(payload) { socketSends.push({ tag, payload, at: Date.now() }); } }]
+      ? [{
+          tags: [tag],
+          send(payload) { socketSends.push({ tag, payload, at: Date.now() }); },
+          close() { onlineTags.delete(tag); },
+        }]
       : [];
   },
   getTags(socket) { return socket.tags || []; },
@@ -68,6 +82,67 @@ await ctx.storage.put(`aot_session:${session}`, {
   last_control: null,
 });
 onlineTags.add(`aot:reference:${session}:${reference}`);
+onlineTags.add(`aot:follower:${session}:${follower}`);
+
+// msetup discovers exactly one active session and verifies actual Hub presence.
+let response = await fleet.discoverAotRegistration(new Request("https://test/aot/registration/discover", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ device_id: "m200" }),
+}));
+let registration = await response.json();
+if (!response.ok || registration.role !== "follower" || registration.session_id !== session || registration.reference_device_id !== reference) {
+  throw new Error("fresh AOT registration discovery failed");
+}
+response = await fleet.discoverAotRegistration(new Request("https://test/aot/registration/discover", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ device_id: follower }),
+}));
+registration = await response.json();
+if (!response.ok || registration.role !== "follower") {
+  throw new Error("idempotent AOT registration discovery failed");
+}
+response = await fleet.verifyAotRegistration(new Request("https://test/aot/registration/verify", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ device_id: follower, role: "follower", session_id: session, reference_device_id: reference }),
+}));
+if (!response.ok) throw new Error("online registered device was not verified");
+response = await fleet.verifyAotRegistration(new Request("https://test/aot/registration/verify", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ device_id: "m200", role: "follower", session_id: session, reference_device_id: reference }),
+}));
+if (response.status !== 409) throw new Error("server-unseen device was accepted");
+
+const secondSession = "other-active";
+await ctx.storage.put(`aot_session:${secondSession}`, {
+  version: 1, session_id: secondSession, reference_device_id: "m50", followers: {},
+});
+onlineTags.add(`aot:reference:${secondSession}:m50`);
+response = await fleet.discoverAotRegistration(new Request("https://test/aot/registration/discover", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ device_id: "m200" }),
+}));
+if (response.status !== 409) throw new Error("multiple active sessions were not rejected");
+onlineTags.delete(`aot:reference:${secondSession}:m50`);
+onlineTags.delete(`aot:reference:${session}:${reference}`);
+response = await fleet.discoverAotRegistration(new Request("https://test/aot/registration/discover", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ device_id: "m200" }),
+}));
+if (response.status !== 404) throw new Error("missing active session was not rejected");
+onlineTags.add(`aot:reference:${session}:${reference}`);
+
+response = await fleet.resetAotIdentity(new Request("https://test/aot/registration/reset", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ old_device_id: follower, new_device_id: "m200", session_id: session, role: "follower" }),
+}));
+if (!response.ok) throw new Error("clone identity reset failed");
+let resetRecord = await ctx.storage.get(`aot_session:${session}`);
+if (resetRecord.followers[follower] || onlineTags.has(`aot:follower:${session}:${follower}`)) {
+  throw new Error("old clone AOT state survived identity reset");
+}
+// Restore the fixture follower for the existing synchronization tests.
+resetRecord.followers[follower] = { device_id: follower };
+await ctx.storage.put(`aot_session:${session}`, resetRecord);
 onlineTags.add(`aot:follower:${session}:${follower}`);
 
 function live(deviceId, role, overrides = {}) {
@@ -110,7 +185,7 @@ if (!sanitized || sanitized.coordinate_ready !== true) {
 
 fleet.aotLive.set(`${session}:${reference}`, live(reference, "reference"));
 fleet.aotLive.set(`${session}:${follower}`, live(follower, "follower"));
-let response = await fleet.getAotHubState(
+response = await fleet.getAotHubState(
   new URL(`https://test/aot/hub/state?session=${session}`)
 );
 let state = await response.json();

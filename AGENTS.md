@@ -13,6 +13,7 @@ worker actions in `cloudflare-worker/`.
   manifests, and publish the complete release file set. At minimum that set is
   `relay.py`, `runtime.py`, `controller.py`, `updater.py`, `e2e.py`,
   `worker_smoke_test.py`, and `worker-release-schema.json`.
+  Registration changes must also publish `msetup_registration.py`.
 - Each manifest must retain schema version 2, its explicit channel, a unique
   release version, `minimum_bootstrap_version`, and the URL plus SHA-256 of
   every release file. Canary is permanently limited to `m37` and `m117`;
