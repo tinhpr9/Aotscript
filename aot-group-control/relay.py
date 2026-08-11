@@ -23,6 +23,7 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parent
 CONTROLLER_PATH = ROOT / "controller.py"
+UPDATER_PATH = ROOT / "updater.py"
 AGENT_CONFIG_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/agent_config.json"
 )
@@ -44,6 +45,8 @@ HUB_PROTOCOL_VERSION = "phase4-1"
 LIVE_STATUS_INTERVAL_SECONDS = 2.5
 SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
 OPEN_SWIFT_BACKUP_ACTION = "OPEN_SWIFT_BACKUP"
+UPDATE_WORKER_ACTION = "UPDATE_WORKER"
+WORKER_VERSION = "aot-relay-2026.08.11.1"
 
 
 class AotRelayError(RuntimeError):
@@ -64,6 +67,19 @@ def _load_controller():
 
 
 controller = _load_controller()
+
+
+def _load_updater():
+    spec = importlib.util.spec_from_file_location("aot_worker_updater", UPDATER_PATH)
+    if spec is None or spec.loader is None:
+        raise AotRelayError("updater_import_failed")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+updater = _load_updater()
 
 
 def _read_small(path: pathlib.Path) -> str:
@@ -640,6 +656,56 @@ def _handle_batch_action(
     return True
 
 
+def _handle_worker_update(
+    state: dict[str, Any],
+    *,
+    local_id: str,
+    session_id: str,
+    reference_device_id: str,
+    message: dict[str, Any],
+) -> bool:
+    if message.get("type") != "aot_batch_action" or message.get("action") != UPDATE_WORKER_ACTION:
+        return False
+    if (
+        message.get("protocol") != HUB_PROTOCOL_VERSION
+        or normalize_session_id(message.get("session_id")) != session_id
+        or local_id not in normalize_target_ids(message.get("target_device_ids"))
+    ):
+        return True
+    action_id = normalize_action_id(message.get("action_id"))
+    channel = str(message.get("channel") or "")
+    reference_id = normalize_device_id(message.get("reference_device_id"))
+    if not action_id or not reference_id or reference_id != reference_device_id:
+        return True
+    try:
+        if int(message.get("expires_at") or 0) <= int(time.time() * 1000):
+            return True
+    except (TypeError, ValueError):
+        return True
+    if channel != updater.channel_for_device(local_id):
+        return True
+    if action_already_processed(state, action_id):
+        return True
+    mark_action_processed(state, action_id)
+    relay_command = [sys.executable, "-u", str(pathlib.Path(__file__).resolve()), *sys.argv[1:]]
+    command = [
+        sys.executable, "-u", str(UPDATER_PATH), "action",
+        "--device-id", local_id, "--action-id", action_id,
+        "--channel", channel, "--session", session_id,
+        "--reference-device", reference_id,
+        "--parent-pid", str(os.getpid()), *relay_command,
+    ]
+    subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+    return True
+
+
 
 def normalize_target_ids(values: Any) -> list[str]:
     if not isinstance(values, list):
@@ -1058,6 +1124,10 @@ def reference_loop(
             print(
                 "AOT_REFERENCE_CHANNEL=CONNECTED"
             )
+            try:
+                updater.acknowledge_online(session_id, local_id, local_id)
+            except Exception:
+                pass
             previous_sha = None
             previous_sha = _send_live_status(
                 sock,
@@ -1121,6 +1191,14 @@ def reference_loop(
                 except Exception:
                     continue
                 if not isinstance(message, dict):
+                    continue
+                if _handle_worker_update(
+                    state,
+                    local_id=local_id,
+                    session_id=session_id,
+                    reference_device_id=local_id,
+                    message=message,
+                ):
                     continue
                 if _handle_batch_action(
                     cfg,
@@ -1254,6 +1332,12 @@ def follower_loop(
             print(
                 "AOT_FOLLOWER_CHANNEL=CONNECTED"
             )
+            try:
+                updater.acknowledge_online(
+                    session_id, reference_device, local_id
+                )
+            except Exception:
+                pass
             previous_sha = None
             try:
                 previous_sha = _send_live_status(
@@ -1324,6 +1408,14 @@ def follower_loop(
                 except Exception:
                     continue
                 if not isinstance(message, dict):
+                    continue
+                if _handle_worker_update(
+                    state,
+                    local_id=local_id,
+                    session_id=session_id,
+                    reference_device_id=reference_device,
+                    message=message,
+                ):
                     continue
                 if _handle_batch_action(
                     cfg,

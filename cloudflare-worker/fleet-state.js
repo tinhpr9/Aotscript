@@ -15,6 +15,10 @@ const AOT_CONTROL_MAX_TARGETS = 128;
 const AOT_BATCH_ACTION = "OPEN_SWIFT_BACKUP";
 const AOT_BATCH_PACKAGE = "org.swiftapps.swiftbackup";
 const AOT_BATCH_TTL_MS = 12 * 1000;
+const AOT_UPDATE_ACTION = "UPDATE_WORKER";
+const AOT_UPDATE_GROUP_SIZE = 5;
+const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
+const AOT_UPDATE_TERMINAL = new Set(["UPDATED", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
 
 function json(
   value,
@@ -1263,6 +1267,7 @@ export class FleetState
           record.last_batch,
           now
         ),
+      last_update: this.aotUpdateView(record.last_update),
       updated_at: Date.now(),
     });
   }
@@ -1312,6 +1317,98 @@ export class FleetState
       expires_at: expiresAt,
       devices,
     };
+  }
+
+  aotUpdateView(update) {
+    if (!update || typeof update !== "object") return null;
+    const devices = Object.values(update.devices || {}).map((item) => ({
+      device_id: String(item.device_id || ""),
+      status: String(item.status || "FAILED"),
+      history: Array.isArray(item.history) ? item.history.map(String).slice(-6) : [],
+      display_status: (Array.isArray(item.history) ? item.history : []).join(" → ") || String(item.status || "FAILED"),
+      updated_at: Number(item.updated_at || update.created_at || 0),
+    })).sort((a, b) => a.device_id.localeCompare(b.device_id, undefined, { numeric: true }));
+    return {
+      action_id: String(update.action_id || ""),
+      action: AOT_UPDATE_ACTION,
+      channel: String(update.channel || ""),
+      created_at: Number(update.created_at || 0),
+      devices,
+    };
+  }
+
+  aotMembers(record) {
+    const members = [];
+    const referenceId = validDeviceId(record.reference_device_id);
+    if (referenceId) members.push({ role: "reference", device_id: referenceId });
+    for (const rawId of Object.keys(record.followers || {})) {
+      const deviceId = validDeviceId(rawId);
+      if (deviceId && !members.some((item) => item.device_id === deviceId)) {
+        members.push({ role: "follower", device_id: deviceId });
+      }
+    }
+    return members;
+  }
+
+  async dispatchNextUpdateGroup(sessionId, record) {
+    const update = record.last_update;
+    if (!update || update.active_group) return;
+    const next = (update.groups || []).shift();
+    if (!next) return;
+    update.active_group = next;
+    update.group_deadline = Date.now() + AOT_UPDATE_TIMEOUT_MS;
+    const targetIds = next.map((item) => item.device_id);
+    const payload = {
+      type: "aot_batch_action", protocol: "phase4-1", session_id: sessionId,
+      reference_device_id: update.reference_device_id,
+      target_device_ids: targetIds, action_id: update.action_id,
+      action: AOT_UPDATE_ACTION, channel: update.channel,
+      expires_at: update.group_deadline,
+    };
+    for (const member of next) {
+      const sent = this.sendAotPayload(this.aotSocketTag(member.role, sessionId, member.device_id), payload);
+      if (sent === 0) {
+        const device = update.devices[member.device_id];
+        device.status = "SKIPPED_OFFLINE";
+        device.history = ["SKIPPED_OFFLINE"];
+        device.updated_at = Date.now();
+      }
+    }
+    await this.writeAotSession(sessionId, record);
+    await this.ctx.storage.setAlarm(update.group_deadline);
+    await this.broadcastAotHubState(sessionId);
+  }
+
+  async startWorkerUpdate(sessionId, record, channel) {
+    const all = this.aotMembers(record);
+    const selected = channel === "canary"
+      ? all.filter((item) => ["m37", "m117"].includes(String(item.device_id).toLowerCase()))
+      : all.filter((item) => !["m37", "m117"].includes(String(item.device_id).toLowerCase()));
+    if (channel === "canary" && selected.length !== 2) {
+      return json({ ok: false, error: "canary_devices_not_in_session" }, 409);
+    }
+    const online = [];
+    const devices = {};
+    for (const member of selected) {
+      const connected = this.ctx.getWebSockets(this.aotSocketTag(member.role, sessionId, member.device_id)).length > 0;
+      devices[member.device_id] = {
+        device_id: member.device_id,
+        status: connected ? "QUEUED" : "SKIPPED_OFFLINE",
+        history: connected ? [] : ["SKIPPED_OFFLINE"], updated_at: Date.now(),
+      };
+      if (connected) online.push(member);
+    }
+    const actionId = `worker-${channel}-${Date.now()}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    const groups = [];
+    for (let i = 0; i < online.length; i += AOT_UPDATE_GROUP_SIZE) groups.push(online.slice(i, i + AOT_UPDATE_GROUP_SIZE));
+    record.last_update = {
+      action_id: actionId, action: AOT_UPDATE_ACTION, channel,
+      reference_device_id: validDeviceId(record.reference_device_id) || selected[0]?.device_id,
+      created_at: Date.now(), devices, groups, active_group: null,
+    };
+    await this.writeAotSession(sessionId, record);
+    await this.dispatchNextUpdateGroup(sessionId, record);
+    return json({ ok: true, update: this.aotUpdateView(record.last_update) });
   }
 
   async dispatchOpenSwiftBackup(sessionId, record, requestedTargetIds) {
@@ -1450,6 +1547,8 @@ export class FleetState
         : [];
       return this.dispatchOpenSwiftBackup(sessionId, record, requested);
     }
+    if (kind === "update_canary") return this.startWorkerUpdate(sessionId, record, "canary");
+    if (kind === "update_stable") return this.startWorkerUpdate(sessionId, record, "stable");
 
     if (
       kind === "pause" ||
@@ -1913,9 +2012,9 @@ export class FleetState
     const actionId = String(
       body?.action_id || ""
     ).trim();
-    const isBatch =
-      body?.protocol === "phase4-1" &&
-      body?.batch_action === AOT_BATCH_ACTION;
+    const batchAction = String(body?.batch_action || "");
+    const isBatch = body?.protocol === "phase4-1" &&
+      [AOT_BATCH_ACTION, AOT_UPDATE_ACTION].includes(batchAction);
     if (
       !body ||
       (!isBatch && body.protocol !== "phase3-1") ||
@@ -1942,6 +2041,30 @@ export class FleetState
         sessionId
       );
     if (isBatch) {
+      if (batchAction === AOT_UPDATE_ACTION) {
+        const allowed = new Set(["DOWNLOADING", "VERIFIED", "UPDATED", "ROLLED_BACK", "FAILED"]);
+        const update = record.last_update;
+        const device = update?.devices?.[followerId];
+        const status = String(body.status || "");
+        if (!allowed.has(status) || !update || update.action_id !== actionId || !device) {
+          return json({ ok: false, error: "invalid_update_ack" }, 400);
+        }
+        if (!AOT_UPDATE_TERMINAL.has(device.status)) {
+          device.status = status;
+          if (!Array.isArray(device.history)) device.history = [];
+          if (!device.history.includes(status)) device.history.push(status);
+          device.updated_at = Date.now();
+        }
+        const activeIds = (update.active_group || []).map((item) => item.device_id);
+        if (activeIds.length && activeIds.every((id) => AOT_UPDATE_TERMINAL.has(update.devices[id]?.status))) {
+          update.active_group = null;
+          update.group_deadline = null;
+        }
+        await this.writeAotSession(sessionId, record);
+        if (!update.active_group) await this.dispatchNextUpdateGroup(sessionId, record);
+        await this.broadcastAotHubState(sessionId);
+        return json({ ok: true, action_id: actionId, device_id: followerId, status: device.status });
+      }
       const allowed = new Set([
         "ACCEPTED",
         "OPENED",
@@ -2106,6 +2229,29 @@ export class FleetState
       ok: true,
       delivered: sent,
     });
+  }
+
+  async alarm() {
+    const entries = await this.ctx.storage.list({ prefix: "aot_session:" });
+    for (const [key, record] of entries) {
+      const update = record?.last_update;
+      if (!update?.active_group || Number(update.group_deadline || 0) > Date.now()) continue;
+      for (const member of update.active_group) {
+        const device = update.devices?.[member.device_id];
+        if (device && !AOT_UPDATE_TERMINAL.has(device.status)) {
+          device.status = "FAILED";
+          if (!Array.isArray(device.history)) device.history = [];
+          if (!device.history.includes("FAILED")) device.history.push("FAILED");
+          device.updated_at = Date.now();
+        }
+      }
+      update.active_group = null;
+      update.group_deadline = null;
+      const sessionId = String(key).slice("aot_session:".length);
+      await this.writeAotSession(sessionId, record);
+      await this.dispatchNextUpdateGroup(sessionId, record);
+      await this.broadcastAotHubState(sessionId);
+    }
   }
 
   async setRevocation(

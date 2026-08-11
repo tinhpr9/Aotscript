@@ -368,4 +368,41 @@ finally:
     module._launch_package = old_launch_package
     module.STATE_PATH = old_state_path
 
+# UPDATE_WORKER is channel-bound, expires, and is deduped before spawning updater.
+old_popen = module.subprocess.Popen
+old_state_path = module.STATE_PATH
+spawned = []
+try:
+    with tempfile.TemporaryDirectory() as tmp:
+        module.STATE_PATH = pathlib.Path(tmp) / "update-state.json"
+        state = module._load_state()
+        module.subprocess.Popen = lambda command, **kwargs: spawned.append((command, kwargs))
+        update_message = {
+            "type": "aot_batch_action", "protocol": module.HUB_PROTOCOL_VERSION,
+            "session_id": "m37-m117-p3", "reference_device_id": "m37",
+            "target_device_ids": ["m37", "m117"], "action_id": "worker-canary-1",
+            "action": module.UPDATE_WORKER_ACTION, "channel": "canary",
+            "expires_at": 9999999999999,
+        }
+        assert module._handle_worker_update(
+            state, local_id="m117", session_id="m37-m117-p3",
+            reference_device_id="m37", message=update_message,
+        )
+        assert len(spawned) == 1
+        assert "updater.py" in " ".join(spawned[0][0])
+        assert module._handle_worker_update(
+            state, local_id="m117", session_id="m37-m117-p3",
+            reference_device_id="m37", message=update_message,
+        )
+        assert len(spawned) == 1
+        wrong_channel = dict(update_message, action_id="worker-stable-1", channel="stable")
+        assert module._handle_worker_update(
+            state, local_id="m117", session_id="m37-m117-p3",
+            reference_device_id="m37", message=wrong_channel,
+        )
+        assert len(spawned) == 1
+finally:
+    module.subprocess.Popen = old_popen
+    module.STATE_PATH = old_state_path
+
 print("AOT_RELAY_SELFTEST=OK")

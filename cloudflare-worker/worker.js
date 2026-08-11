@@ -885,11 +885,13 @@ async function handleAotControlAck(
     body.action_id
   );
   const status = String(body.status || "");
-  const isBatch =
-    body.protocol === AOT_HUB_PROTOCOL_VERSION &&
-    body.batch_action === "OPEN_SWIFT_BACKUP";
+  const batchAction = String(body.batch_action || "");
+  const isBatch = body.protocol === AOT_HUB_PROTOCOL_VERSION &&
+    ["OPEN_SWIFT_BACKUP", "UPDATE_WORKER"].includes(batchAction);
   const allowedStatus = new Set(
-    isBatch
+    batchAction === "UPDATE_WORKER"
+      ? ["DOWNLOADING", "VERIFIED", "UPDATED", "ROLLED_BACK", "FAILED"]
+      : isBatch
       ? [
           "ACCEPTED",
           "OPENED",
@@ -953,7 +955,11 @@ async function handleAotControlAck(
     screen_changed: body.screen_changed === true,
   };
   if (isBatch) {
-    clean.batch_action = "OPEN_SWIFT_BACKUP";
+    clean.batch_action = batchAction;
+    if (batchAction === "UPDATE_WORKER") {
+      clean.worker_version = String(body.worker_version || "").slice(0, 80);
+      clean.channel = ["canary", "stable"].includes(body.channel) ? body.channel : "";
+    }
   }
   for (const key of [
     "before_fingerprint",
@@ -1446,6 +1452,12 @@ function aotHubHtml() {
       <div class="hint">Chỉ gửi OPEN_SWIFT_BACKUP tới các máy đang kết nối.</div>
       <div id="batchTargets" class="batch-targets"></div>
       <div id="batchResults" class="batch-results"></div>
+      <div class="batch-actions" style="margin-top:14px">
+        <button id="updateCanary">Cập nhật 2 máy thử</button>
+        <button id="updateStable">Phát hành cho tất cả</button>
+      </div>
+      <div class="hint">Canary: m37 + m117. Stable được phát hành theo nhóm tối đa 5 máy.</div>
+      <div id="updateResults" class="batch-results"></div>
     </section>
     <nav class="controls">
       <button id="pause">PAUSE</button>
@@ -1474,6 +1486,7 @@ function aotHubHtml() {
     var lastControlEl = document.getElementById("lastControl");
     var batchTargetsEl = document.getElementById("batchTargets");
     var batchResultsEl = document.getElementById("batchResults");
+    var updateResultsEl = document.getElementById("updateResults");
 
     if (tg) {
       tg.ready();
@@ -1590,6 +1603,17 @@ function aotHubHtml() {
       }).join("");
     }
 
+    function renderUpdate(update) {
+      if (!update || !Array.isArray(update.devices)) {
+        updateResultsEl.innerHTML = '<div class="hint">Chưa có lần cập nhật worker.</div>';
+        return;
+      }
+      updateResultsEl.innerHTML = update.devices.map(function (item) {
+        return '<div class="batch-row"><strong>' + esc(item.device_id) +
+          '</strong><span>' + esc(item.display_status || item.status) + '</span></div>';
+      }).join("");
+    }
+
     function sessionDevices(data) {
       var devices = [];
       if (data && data.reference) devices.push(data.reference);
@@ -1649,6 +1673,7 @@ function aotHubHtml() {
         : "";
       renderBatchTargets(data);
       renderBatch(data.last_batch);
+      renderUpdate(data.last_update);
       var image = document.getElementById("referencePreview");
       if (image) {
         image.addEventListener("click", function (event) {
@@ -1732,6 +1757,23 @@ function aotHubHtml() {
       }
     }
 
+    async function updateWorkers(kind, buttonId) {
+      var button = document.getElementById(buttonId);
+      button.disabled = true;
+      try {
+        errorEl.textContent = "";
+        var data = await api("/aot/hub/api/control", {
+          method: "POST",
+          body: { session_id: sessionId(), kind: kind }
+        });
+        renderUpdate(data.update);
+      } catch (error) {
+        errorEl.textContent = String(error.message || error);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     function scheduleDashboardReconnect(generation) {
       if (generation !== socketGeneration || !auth) return;
       var base = Math.min(30000, 1000 * Math.pow(2, reconnectAttempt));
@@ -1803,6 +1845,12 @@ function aotHubHtml() {
       renderBatchTargets(currentState);
     };
     document.getElementById("openSwift").onclick = openSwiftBackupBatch;
+    document.getElementById("updateCanary").onclick = function () {
+      updateWorkers("update_canary", "updateCanary");
+    };
+    document.getElementById("updateStable").onclick = function () {
+      updateWorkers("update_stable", "updateStable");
+    };
     document.getElementById("up").onclick = function () {
       sendControl("swipe", {
         x1: 0.5, y1: 0.75, x2: 0.5, y2: 0.28, duration_ms: 300
@@ -1929,6 +1977,8 @@ function normalizeAotHubControl(body) {
       "resume",
       "back",
       "open_swift_backup",
+      "update_canary",
+      "update_stable",
     ].includes(kind)
   ) {
     const control = {

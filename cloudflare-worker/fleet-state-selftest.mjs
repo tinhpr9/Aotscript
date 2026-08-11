@@ -38,6 +38,10 @@ class Storage {
   async get(key) { return this.values.get(key); }
   async put(key, value) { this.values.set(key, value); }
   async delete(key) { this.values.delete(key); }
+  async list(options = {}) {
+    return new Map([...this.values].filter(([key]) => String(key).startsWith(options.prefix || "")));
+  }
+  async setAlarm(value) { this.alarm = value; }
 }
 
 const onlineTags = new Set();
@@ -367,6 +371,62 @@ for (const deviceId of scaleIds) {
 }
 if (openedAcks !== 40) {
   throw new Error("did not accept 40 OPENED ACKs");
+}
+
+// Worker rollout reuses the same hibernating DO and never fans out beyond five.
+socketSends.length = 0;
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ protocol: "phase4-1", session_id: scaleSession, kind: "update_stable" }),
+}));
+let updateResponse = await response.json();
+if (!response.ok || updateResponse.update.channel !== "stable") {
+  throw new Error("stable update dispatch failed");
+}
+if (socketSends.filter((item) => item.tag.startsWith("aot:follower:")).length > 5) {
+  throw new Error("worker rollout exceeded group size five");
+}
+let updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+const updateActionId = updateRecord.last_update.action_id;
+let updatedCount = 0;
+while (updateRecord.last_update.active_group) {
+  const active = [...updateRecord.last_update.active_group];
+  if (active.length > 5) throw new Error("active update group exceeded five");
+  for (const member of active) {
+    for (const status of ["DOWNLOADING", "VERIFIED", "UPDATED"]) {
+      response = await fleet.dispatchAotAck(new Request("https://test/aot/ack", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protocol: "phase4-1", session_id: scaleSession,
+          reference_device_id: scaleIds[0], follower_device_id: member.device_id,
+          action_id: updateActionId, batch_action: "UPDATE_WORKER", status,
+        }),
+      }));
+      if (!response.ok) throw new Error(`update ACK rejected: ${member.device_id}/${status}`);
+    }
+    updatedCount += 1;
+  }
+  updateRecord = await ctx.storage.get(`aot_session:${scaleSession}`);
+}
+if (updatedCount !== 39) {
+  throw new Error(`stable channel updated ${updatedCount}, expected 39`);
+}
+for (const id of ["m37", "m117"]) {
+  if (updateRecord.last_update.devices[id]) throw new Error("canary device entered stable rollout");
+}
+if (!source.includes("async alarm()") || !source.includes("AOT_UPDATE_GROUP_SIZE = 5")) {
+  throw new Error("durable rollout timeout/group guard missing");
+}
+
+onlineTags.add(`aot:follower:${session}:${follower}`);
+socketSends.length = 0;
+response = await fleet.controlAotHub(new Request("https://test/aot/hub/control", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ protocol: "phase4-1", session_id: session, kind: "update_canary" }),
+}));
+updateResponse = await response.json();
+if (!response.ok || updateResponse.update.devices.length !== 2 || socketSends.filter((item) => item.tag.startsWith("aot:") && !item.tag.startsWith("aot-dashboard:")).length !== 2) {
+  throw new Error("m37+m117 canary dispatch failed");
 }
 
 console.log("AOT_FLEET_STATE_SELFTEST=OK");
