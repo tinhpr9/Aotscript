@@ -1,4 +1,4 @@
-# telegram_target_ids=m116
-# telegram_expires_at=1786429268766
-# telegram_command_id=1786428968766-d1231320
+# telegram_target_ids=m74,m88,m116,m117,m118,m153,m154
+# telegram_expires_at=1786430099074
+# telegram_command_id=1786429799074-4b42bdff
 UPDATE_DELTA
