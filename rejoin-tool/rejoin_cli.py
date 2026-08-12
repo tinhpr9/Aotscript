@@ -172,8 +172,10 @@ def interactive_menu():
             pkg = input("Package name: ").strip()
             en = input("Enable? (y/n): ").strip().lower()
             if pkg:
-                ConfigManager.set_package_enabled(pkg, en == "y")
-                print(f"Updated {pkg}")
+                if ConfigManager.set_package_enabled(pkg, en == "y"):
+                    print(f"Updated {pkg}")
+                else:
+                    print(f"Failed to update {pkg}")
         elif choice == "6":
             install_boot()
         elif choice == "7":
@@ -249,18 +251,24 @@ def main():
             print("Usage: rejoin add <package> <url>")
     elif cmd == "remove":
         if args.args:
-            ConfigManager.remove_package(args.args[0])
-            print(f"Removed {args.args[0]}")
+            if ConfigManager.remove_package(args.args[0]):
+                print(f"Removed {args.args[0]}")
+            else:
+                print(f"Failed to remove {args.args[0]}")
         else:
             print("Usage: rejoin remove <package>")
     elif cmd == "enable":
         if args.args:
-            ConfigManager.set_package_enabled(args.args[0], True)
-            print(f"Enabled {args.args[0]}")
+            if ConfigManager.set_package_enabled(args.args[0], True):
+                print(f"Enabled {args.args[0]}")
+            else:
+                print(f"Failed to enable {args.args[0]}")
     elif cmd == "disable":
         if args.args:
-            ConfigManager.set_package_enabled(args.args[0], False)
-            print(f"Disabled {args.args[0]}")
+            if ConfigManager.set_package_enabled(args.args[0], False):
+                print(f"Disabled {args.args[0]}")
+            else:
+                print(f"Failed to disable {args.args[0]}")
     elif cmd == "discover":
         from rejoin_core import discover_roblox_packages
         packages = discover_roblox_packages()

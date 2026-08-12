@@ -493,11 +493,22 @@ sys.exit(0 if success else 1)
         self.assertFalse(ConfigManager.add_package("pkg1", "123"))
         mock_print.assert_any_call("Error: config.json is malformed. Please fix or remove it.")
 
-        ConfigManager.remove_package("pkg1")
-        ConfigManager.set_package_enabled("pkg1", True)
+        self.assertFalse(ConfigManager.remove_package("pkg1"))
+        self.assertFalse(ConfigManager.set_package_enabled("pkg1", True))
 
         with open(rejoin_core.CONFIG_FILE, "r") as f:
             self.assertEqual(f.read(), "{ invalid json ")
+
+    def test_mutation_returns_accurate_status(self):
+        ConfigManager.add_package("pkg1", "123")
+
+        # valid package -> success
+        self.assertTrue(ConfigManager.set_package_enabled("pkg1", False))
+        self.assertTrue(ConfigManager.remove_package("pkg1"))
+
+        # missing package -> failure
+        self.assertFalse(ConfigManager.set_package_enabled("pkg_missing", True))
+        self.assertFalse(ConfigManager.remove_package("pkg_missing"))
 
 if __name__ == '__main__':
     unittest.main()

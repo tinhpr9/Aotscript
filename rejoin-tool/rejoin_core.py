@@ -166,28 +166,32 @@ class ConfigManager:
         return True
 
     @staticmethod
-    def remove_package(package: str):
+    def remove_package(package: str) -> bool:
         try:
             config = ConfigManager.load_config(strict=True)
         except ValueError as e:
             print(str(e))
-            return
+            return False
 
         if "packages" in config and package in config["packages"]:
             del config["packages"][package]
             ConfigManager.save_config(config)
+            return True
+        return False
 
     @staticmethod
-    def set_package_enabled(package: str, enabled: bool):
+    def set_package_enabled(package: str, enabled: bool) -> bool:
         try:
             config = ConfigManager.load_config(strict=True)
         except ValueError as e:
             print(str(e))
-            return
+            return False
 
         if "packages" in config and package in config["packages"]:
             config["packages"][package]["enabled"] = enabled
             ConfigManager.save_config(config)
+            return True
+        return False
 
 class Monitor:
     def __init__(self, env: SystemEnvironment, stop_event=None):
