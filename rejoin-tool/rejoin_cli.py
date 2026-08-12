@@ -24,6 +24,7 @@ def get_pid():
     return None
 
 def start_daemon():
+    ConfigManager.ensure_dir()
     pid = get_pid()
     if pid:
         print(f"Monitor is already running (PID: {pid}).")
@@ -31,8 +32,15 @@ def start_daemon():
     print("Starting auto-rejoin monitor in background...")
     script_dir = os.path.dirname(os.path.abspath(__file__))
     log_file = os.path.join(CONFIG_DIR, "rejoin.log")
-    cmd = f"nohup python3 {script_dir}/rejoin_daemon.py > {log_file} 2>&1 &"
-    os.system(cmd)
+
+    with open(log_file, "a") as f:
+        subprocess.Popen(
+            ["python3", os.path.join(script_dir, "rejoin_daemon.py")],
+            stdout=f,
+            stderr=f,
+            start_new_session=True
+        )
+
     import time
     for _ in range(10):
         time.sleep(0.5)
@@ -60,13 +68,13 @@ def print_status():
         print(f"[RUNNING] Monitor is active (PID: {pid})")
     else:
         print("[STOPPED] Monitor is not active")
-    
+
     config = ConfigManager.load_config()
     packages = config.get("packages", {})
     if not packages:
         print("No packages configured.")
         return
-    
+
     import json
     state = {}
     if os.path.exists(STATUS_FILE):
@@ -110,7 +118,7 @@ def uninstall_boot():
 def print_logs():
     log_file = os.path.join(CONFIG_DIR, "rejoin.log")
     if os.path.exists(log_file):
-        os.system(f"tail -n 20 {log_file}")
+        subprocess.run(["tail", "-n", "20", log_file])
     else:
         print("Log file not found.")
 
@@ -134,10 +142,12 @@ def interactive_menu():
             stop_daemon()
         elif choice == "3":
             pkg = input("Package name (e.g., com.tinh.vv.hi): ").strip()
-            url = input("Join URL (e.g., roblox://...): ").strip()
+            url = input("Join URL (e.g., roblox://... or Game ID): ").strip()
             if pkg and url:
-                ConfigManager.add_package(pkg, url)
-                print(f"Added {pkg}")
+                if ConfigManager.add_package(pkg, url):
+                    print(f"Added {pkg}")
+                else:
+                    print("Failed to add package.")
         elif choice == "4":
             print_status()
         elif choice == "5":
@@ -163,8 +173,10 @@ def interactive_menu():
                 if add == 'y':
                     url = input("Join URL (e.g., roblox://... or Game ID): ").strip()
                     for p in packages:
-                        ConfigManager.add_package(p, url)
-                        print(f"Added {p}")
+                        if ConfigManager.add_package(p, url):
+                            print(f"Added {p}")
+                        else:
+                            print(f"Failed to add {p}")
         elif choice == "9" or not choice:
             break
         else:
@@ -173,14 +185,14 @@ def interactive_menu():
 def main():
     parser = argparse.ArgumentParser(description="Rejoin Tool")
     parser.add_argument("command", nargs="?", choices=[
-        "setup", "packages", "add", "remove", "enable", "disable", 
+        "setup", "packages", "add", "remove", "enable", "disable",
         "start", "stop", "status", "logs", "install-boot", "uninstall-boot", "discover"
     ], help="Command to run")
-    
+
     parser.add_argument("args", nargs=argparse.REMAINDER)
-    
+
     args = parser.parse_args()
-    
+
     if not args.command:
         interactive_menu()
         return
@@ -206,8 +218,10 @@ def main():
         if len(args.args) >= 2:
             pkg = args.args[0]
             url = " ".join(args.args[1:])
-            ConfigManager.add_package(pkg, url)
-            print(f"Added {pkg}")
+            if ConfigManager.add_package(pkg, url):
+                print(f"Added {pkg}")
+            else:
+                print("Failed to add package.")
         else:
             print("Usage: rejoin add <package> <url>")
     elif cmd == "remove":
@@ -235,8 +249,10 @@ def main():
                 print(f" - {p}")
                 if args.args:
                     url = " ".join(args.args)
-                    ConfigManager.add_package(p, url)
-                    print(f"   Added {p} with URL {url}")
+                    if ConfigManager.add_package(p, url):
+                        print(f"   Added {p} with URL {url}")
+                    else:
+                        print(f"   Failed to add {p}")
 
 if __name__ == "__main__":
     main()

@@ -5,6 +5,7 @@ import time
 import logging
 import shlex
 import re
+import fcntl
 from datetime import datetime
 
 CONFIG_DIR = "/storage/emulated/0/Download/AotRejoin"
@@ -19,7 +20,9 @@ DEFAULT_CONFIG = {
         "open_delay_sec": 10,
         "retry_delay_sec": 10,
         "max_retries": 3,
-        "cooldown_after_success_sec": 30
+        "cooldown_after_success_sec": 30,
+        "delay_between_packages_sec": 5,
+        "package_prefix": "com.roblox"
     }
 }
 
@@ -91,10 +94,22 @@ class ConfigManager:
         os.replace(tmp_file, CONFIG_FILE)
 
     @staticmethod
-    def add_package(package: str, url: str):
+    def add_package(package: str, url: str) -> bool:
+        if not re.match(r'^[a-zA-Z0-9_.]+$', package):
+            return False
+
+        formatted_url = url
+        if 'roblox.com' not in url and url.isdigit():
+            formatted_url = f"roblox://placeID={url}"
+        elif 'roblox.com' not in url and not url.startswith('roblox://'):
+            return False
+
         config = ConfigManager.load_config()
-        config["packages"][package] = {"join_url": url, "enabled": True}
+        if "packages" not in config:
+            config["packages"] = {}
+        config["packages"][package] = {"join_url": formatted_url, "enabled": True}
         ConfigManager.save_config(config)
+        return True
 
     @staticmethod
     def remove_package(package: str):
@@ -175,6 +190,9 @@ class Monitor:
                         self.state[pkg]["retries"] = 0
                         self.state[pkg]["last_success"] = time.time()
                         self.env.log(logging.INFO, f"[{pkg}] Verified RUNNING after launch.")
+                        delay_seq = settings.get("delay_between_packages_sec", 5)
+                        if delay_seq > 0:
+                            self.env.sleep(delay_seq)
                     else:
                         self.env.log(logging.WARNING, f"[{pkg}] Launched but process not found.")
                         self.state[pkg]["status"] = "LAUNCH_ERROR"
@@ -216,8 +234,12 @@ def is_rejoin_daemon(pid: int) -> bool:
         return False
 
 def discover_roblox_packages() -> list:
+    config = ConfigManager.load_config()
+    prefix = config.get("settings", {}).get("package_prefix", "com.roblox")
+    if not re.match(r'^[a-zA-Z0-9_.]+$', prefix):
+        return []
     try:
-        result = subprocess.run(["su", "-c", "pm list packages com.roblox"], capture_output=True, text=True)
+        result = subprocess.run(["su", "-c", f"pm list packages {shlex.quote(prefix)}"], capture_output=True, text=True, timeout=10)
         packages = []
         for line in result.stdout.strip().splitlines():
             if line.startswith("package:"):
@@ -226,31 +248,34 @@ def discover_roblox_packages() -> list:
     except Exception:
         return []
 
+_lock_fd = None
+
 def acquire_lock() -> bool:
+    global _lock_fd
     ConfigManager.ensure_dir()
-    if os.path.exists(LOCK_FILE):
-        try:
-            with open(LOCK_FILE, "r") as f:
-                pid = int(f.read().strip())
-            # check if pid is still running
-            os.kill(pid, 0)
-            if is_rejoin_daemon(pid):
-                return False # Lock is held by running process
-        except (ValueError, OSError):
-            pass # Process dead or invalid pid, we can take lock
-    with open(LOCK_FILE, "w") as f:
-        f.write(str(os.getpid()))
-    return True
+    try:
+        fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+        _lock_fd = fd
+        return True
+    except (BlockingIOError, OSError):
+        if 'fd' in locals():
+            os.close(fd)
+        return False
 
 def release_lock():
-    if os.path.exists(LOCK_FILE):
+    global _lock_fd
+    if _lock_fd is not None:
         try:
-            with open(LOCK_FILE, "r") as f:
-                pid = int(f.read().strip())
-            if pid == os.getpid():
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+            os.close(_lock_fd)
+            if os.path.exists(LOCK_FILE):
                 os.remove(LOCK_FILE)
         except Exception:
             pass
+        _lock_fd = None
 
 def init_logging():
     ConfigManager.ensure_dir()

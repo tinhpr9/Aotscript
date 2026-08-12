@@ -40,24 +40,37 @@ class MockEnv(SystemEnvironment):
 class TestRejoin(unittest.TestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
+        self.old_config_dir = rejoin_core.CONFIG_DIR
+        self.old_config_file = rejoin_core.CONFIG_FILE
+        self.old_lock_file = rejoin_core.LOCK_FILE
+        self.old_log_file = rejoin_core.LOG_FILE
+
         rejoin_core.CONFIG_DIR = self.test_dir
         rejoin_core.CONFIG_FILE = os.path.join(self.test_dir, "config.json")
         rejoin_core.LOCK_FILE = os.path.join(self.test_dir, "monitor.lock")
         rejoin_core.LOG_FILE = os.path.join(self.test_dir, "rejoin.log")
 
+        if rejoin_core._lock_fd is not None:
+            rejoin_core.release_lock()
+
     def tearDown(self):
-        for f in [rejoin_core.CONFIG_FILE, rejoin_core.LOCK_FILE, rejoin_core.LOG_FILE, rejoin_core.CONFIG_FILE + ".tmp"]:
-            if os.path.exists(f):
-                os.remove(f)
+        rejoin_core.release_lock()
+        rejoin_core.CONFIG_DIR = self.old_config_dir
+        rejoin_core.CONFIG_FILE = self.old_config_file
+        rejoin_core.LOCK_FILE = self.old_lock_file
+        rejoin_core.LOG_FILE = self.old_log_file
+
+        for f in os.listdir(self.test_dir):
+            os.remove(os.path.join(self.test_dir, f))
         os.rmdir(self.test_dir)
 
     def test_config_load_save(self):
         conf = ConfigManager.load_config()
         self.assertIn("packages", conf)
-        ConfigManager.add_package("pkg1", "url1")
+        ConfigManager.add_package("pkg1", "roblox://url1")
         conf2 = ConfigManager.load_config()
         self.assertIn("pkg1", conf2["packages"])
-        self.assertEqual(conf2["packages"]["pkg1"]["join_url"], "url1")
+        self.assertEqual(conf2["packages"]["pkg1"]["join_url"], "roblox://url1")
         self.assertTrue(conf2["packages"]["pkg1"]["enabled"])
 
         ConfigManager.set_package_enabled("pkg1", False)
@@ -73,16 +86,16 @@ class TestRejoin(unittest.TestCase):
         self.assertIn("packages", conf) # Falls back to default
 
     def test_duplicate_package(self):
-        ConfigManager.add_package("pkg1", "url1")
-        ConfigManager.add_package("pkg1", "url2")
+        ConfigManager.add_package("pkg1", "roblox://url1")
+        ConfigManager.add_package("pkg1", "roblox://url2")
         conf = ConfigManager.load_config()
         self.assertEqual(len(conf["packages"]), 1)
-        self.assertEqual(conf["packages"]["pkg1"]["join_url"], "url2")
+        self.assertEqual(conf["packages"]["pkg1"]["join_url"], "roblox://url2")
 
     def test_process_running(self):
         env = MockEnv()
         env.running_processes.add("pkg1")
-        ConfigManager.add_package("pkg1", "url1")
+        ConfigManager.add_package("pkg1", "roblox://url1")
         monitor = Monitor(env)
         monitor.run_once()
         self.assertEqual(monitor.state["pkg1"]["status"], "RUNNING")
@@ -91,7 +104,7 @@ class TestRejoin(unittest.TestCase):
     def test_launch_success(self):
         env = MockEnv()
         env.simulate_process_start = True
-        ConfigManager.add_package("pkg1", "url1")
+        ConfigManager.add_package("pkg1", "roblox://url1")
         monitor = Monitor(env)
         monitor.run_once()
         self.assertEqual(monitor.state["pkg1"]["status"], "RUNNING")
@@ -99,7 +112,7 @@ class TestRejoin(unittest.TestCase):
 
     def test_launch_false_success(self):
         env = MockEnv()
-        ConfigManager.add_package("pkg1", "url1")
+        ConfigManager.add_package("pkg1", "roblox://url1")
         monitor = Monitor(env)
         monitor.run_once()
         self.assertEqual(monitor.state["pkg1"]["status"], "LAUNCH_ERROR")
@@ -113,7 +126,7 @@ class TestRejoin(unittest.TestCase):
     def test_launch_fail_and_max_retry(self):
         env = MockEnv()
         env.launch_returns = False
-        ConfigManager.add_package("pkg1", "url1")
+        ConfigManager.add_package("pkg1", "roblox://url1")
         monitor = Monitor(env)
 
         # We need to simulate time passing for retry delay
@@ -135,43 +148,46 @@ class TestRejoin(unittest.TestCase):
         env = MockEnv()
         env.simulate_process_start = True
         env.launch_returns = {"fail_pkg": False, "ok_pkg": True}
-        ConfigManager.add_package("fail_pkg", "url1")
-        ConfigManager.add_package("ok_pkg", "url2")
+        ConfigManager.add_package("fail_pkg", "roblox://url1")
+        ConfigManager.add_package("ok_pkg", "roblox://url2")
         monitor = Monitor(env)
 
         monitor.run_once()
         self.assertEqual(monitor.state["fail_pkg"]["status"], "LAUNCH_ERROR")
         self.assertEqual(monitor.state["ok_pkg"]["status"], "RUNNING")
 
-    @patch('os.kill')
-    @patch('rejoin_core.is_rejoin_daemon')
-    def test_duplicate_monitor_lock(self, mock_is_daemon, mock_kill):
+    def test_duplicate_monitor_lock_atomic(self):
         # First acquire should succeed
         self.assertTrue(rejoin_core.acquire_lock())
 
-        # Simulate another process holds lock (os.kill succeeds)
-        with open(rejoin_core.LOCK_FILE, "w") as f:
-            f.write("99999\n")
+        # Second acquire in same process might succeed depending on OS flock behavior,
+        # but let's test isolation by spawning a new process
+        import subprocess
+        import sys
 
-        mock_kill.return_value = None
+        script = f"""
+import sys
+sys.path.append('{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}')
+import rejoin_core
+rejoin_core.CONFIG_DIR = '{self.test_dir}'
+rejoin_core.LOCK_FILE = '{rejoin_core.LOCK_FILE}'
+success = rejoin_core.acquire_lock()
+sys.exit(0 if success else 1)
+"""
+        # Spawning another process to acquire the lock should fail (exit code 1)
+        res = subprocess.run([sys.executable, "-c", script])
+        self.assertEqual(res.returncode, 1)
 
-        # If it is the daemon, we fail to acquire lock
-        mock_is_daemon.return_value = True
-        self.assertFalse(rejoin_core.acquire_lock())
-
-        # If it is NOT the daemon (stale/reused PID), we CAN acquire lock
-        mock_is_daemon.return_value = False
-        self.assertTrue(rejoin_core.acquire_lock())
-
-        # Simulate dead process (os.kill raises OSError)
-        mock_kill.side_effect = OSError
-        self.assertTrue(rejoin_core.acquire_lock())
         rejoin_core.release_lock()
+
+        # After release, it should succeed
+        res = subprocess.run([sys.executable, "-c", script])
+        self.assertEqual(res.returncode, 0)
 
     def test_cooldown_after_success(self):
         env = MockEnv()
         env.simulate_process_start = True
-        ConfigManager.add_package("pkg1", "url1")
+        ConfigManager.add_package("pkg1", "roblox://url1")
         monitor = Monitor(env)
 
         mock_time = 100
