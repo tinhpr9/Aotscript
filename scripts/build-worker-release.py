@@ -24,18 +24,36 @@ def digest(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _reproduction_metadata(folder: pathlib.Path | None) -> tuple[str | None, dict[str, zipfile.ZipInfo]]:
+    if folder is None:
+        return None, {}
+    manifest = json.loads((folder / "worker-manifest.json").read_text(encoding="utf-8"))
+    built_at = manifest.get("built_at")
+    if not isinstance(built_at, str) or not built_at:
+        raise SystemExit("release_reproduction_built_at_invalid")
+    with zipfile.ZipFile(folder / "worker-bundle.zip") as archive:
+        infos = {info.filename: info for info in archive.infolist()}
+    expected = set(FILES + SUPERVISOR)
+    if set(infos) != expected:
+        raise SystemExit("release_reproduction_zip_entries_invalid")
+    return built_at, infos
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--output", required=True, type=pathlib.Path)
+    parser.add_argument("--source-root", type=pathlib.Path, default=ROOT)
+    parser.add_argument("--reproduce-metadata-from", type=pathlib.Path)
     args = parser.parse_args()
     if not re.fullmatch(r"2026\.08\.11\.8", args.version):
         raise SystemExit("release_version_mismatch")
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
         raise SystemExit("release_commit_invalid")
     worker_version = "aot-worker-" + args.version
-    source = (SOURCE / "relay.py").read_text(encoding="utf-8")
+    source_dir = args.source_root / "aot-group-control"
+    source = (source_dir / "relay.py").read_text(encoding="utf-8")
     if f'WORKER_VERSION = "{worker_version}"' not in source:
         raise SystemExit("code_worker_version_mismatch")
     output = args.output
@@ -45,8 +63,9 @@ def main() -> int:
     tag = "worker-v" + args.version
     base = f"https://github.com/tinhpr9/Aotscript/releases/download/{tag}"
     assets = []
+    built_at, zip_infos = _reproduction_metadata(args.reproduce_metadata_from)
     for name in FILES + SUPERVISOR:
-        source_path = SOURCE / name
+        source_path = source_dir / name
         target = output / name
         shutil.copyfile(source_path, target)
         sha = digest(target)
@@ -58,7 +77,21 @@ def main() -> int:
     bundle = output / "worker-bundle.zip"
     with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in FILES + SUPERVISOR:
-            archive.write(output / name, arcname=name)
+            if zip_infos:
+                original = zip_infos[name]
+                info = zipfile.ZipInfo(name, original.date_time)
+                info.compress_type = original.compress_type
+                info.comment = original.comment
+                info.extra = original.extra
+                info.create_system = original.create_system
+                info.create_version = original.create_version
+                info.extract_version = original.extract_version
+                info.external_attr = original.external_attr
+                info.internal_attr = original.internal_attr
+                info.flag_bits = original.flag_bits
+                archive.writestr(info, (output / name).read_bytes())
+            else:
+                archive.write(output / name, arcname=name)
     manifest = {
         "schema_version": 3,
         "worker_version": worker_version,
@@ -69,7 +102,7 @@ def main() -> int:
         "asset_sha256": digest(bundle),
         "minimum_protocol": "github-release-v1",
         "minimum_bootstrap_version": 2,
-        "built_at": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "built_at": built_at or datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "files": [item for item in assets if item["path"] in FILES],
         "bootstrap": next(item for item in assets if item["path"] == "bootstrap.py") | {"version": 5},
     }

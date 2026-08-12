@@ -73,27 +73,62 @@ def _remote_assets(release: dict[str, Any]) -> dict[str, tuple[int, str]]:
     return assets
 
 
+def validate_draft(
+    *, release: dict[str, Any], releases: list[Any], release_id: int, tag: str
+) -> str:
+    """Validate one resumable mutable draft and return its pinned target commit."""
+    if release.get("id") != release_id:
+        raise ReleaseVerificationError("release_identity_mismatch")
+    if release.get("draft") is not True or release.get("immutable") is not False:
+        raise ReleaseVerificationError("release_not_resumable_draft")
+    if release.get("tag_name") != tag:
+        raise ReleaseVerificationError("release_tag_mismatch")
+    commit = release.get("target_commitish")
+    if not isinstance(commit, str) or len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
+        raise ReleaseVerificationError("release_target_commit_invalid")
+    matching = [item for item in releases if isinstance(item, dict) and item.get("tag_name") == tag]
+    if len(matching) != 1 or matching[0].get("id") != release_id:
+        raise ReleaseVerificationError("release_tag_not_unique")
+    return commit
+
+
+def require_no_release_with_tag(releases: list[Any], tag: str) -> None:
+    if any(isinstance(item, dict) and item.get("tag_name") == tag for item in releases):
+        raise ReleaseVerificationError("release_with_tag_already_exists")
+
+
+def _load_release_pages(path: pathlib.Path) -> list[Any]:
+    try:
+        pages = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleaseVerificationError(f"invalid_release_pages:{path}") from exc
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ReleaseVerificationError("release_pages_not_lists")
+    return [item for page in pages for item in page]
+
+
 def verify_release(
     *,
     commit: str,
     tag: str,
     asset_folder: pathlib.Path,
     release_path: pathlib.Path,
-    ref_path: pathlib.Path,
+    ref_path: pathlib.Path | None,
     published: bool,
     draft_release_path: pathlib.Path | None = None,
 ) -> None:
     """Verify exact ref, release identity, publication state, and every asset."""
     release = _load_json(release_path)
-    ref = _load_json(ref_path)
+    ref = _load_json(ref_path) if ref_path is not None else None
     expected_ref = f"refs/tags/{tag}"
     if release.get("tag_name") != tag or release.get("target_commitish") != commit:
         raise ReleaseVerificationError("release_tag_or_commit_mismatch")
-    if ref.get("ref") != expected_ref:
-        raise ReleaseVerificationError("tag_ref_name_mismatch")
-    ref_object = ref.get("object")
-    if not isinstance(ref_object, dict) or ref_object.get("type") != "commit" or ref_object.get("sha") != commit:
-        raise ReleaseVerificationError("tag_ref_commit_mismatch")
+    if published:
+        if ref is None or ref.get("ref") != expected_ref:
+            raise ReleaseVerificationError("tag_ref_name_mismatch")
+        ref_object = ref.get("object")
+        if not isinstance(ref_object, dict) or ref_object.get("type") != "commit" or ref_object.get("sha") != commit:
+            raise ReleaseVerificationError("tag_ref_commit_mismatch")
     if release.get("draft") is not (not published):
         raise ReleaseVerificationError("release_draft_state_mismatch")
     if published:
@@ -120,10 +155,19 @@ def main(argv: list[str]) -> int:
     if len(argv) == 4 and argv[1] == "require-absent":
         require_absent_status(argv[2], int(argv[3]))
         return 0
+    if len(argv) == 4 and argv[1] == "require-no-tagged-release":
+        releases = _load_release_pages(pathlib.Path(argv[2]))
+        require_no_release_with_tag(releases, argv[3])
+        return 0
+    if len(argv) == 6 and argv[1] == "validate-draft":
+        release = _load_json(pathlib.Path(argv[2]))
+        releases = _load_release_pages(pathlib.Path(argv[3]))
+        print(validate_draft(release=release, releases=releases, release_id=int(argv[4]), tag=argv[5]))
+        return 0
     if len(argv) not in {8, 9} or argv[1] != "verify":
         raise SystemExit(
             "usage: verify_worker_release.py require-absent LABEL STATUS | "
-            "verify COMMIT TAG ASSET_DIR RELEASE_JSON REF_JSON draft|published [DRAFT_JSON]"
+            "verify COMMIT TAG ASSET_DIR RELEASE_JSON REF_JSON|- draft|published [DRAFT_JSON]"
         )
     state = argv[7]
     if state not in {"draft", "published"}:
@@ -133,7 +177,7 @@ def main(argv: list[str]) -> int:
         tag=argv[3],
         asset_folder=pathlib.Path(argv[4]),
         release_path=pathlib.Path(argv[5]),
-        ref_path=pathlib.Path(argv[6]),
+        ref_path=None if argv[6] == "-" else pathlib.Path(argv[6]),
         published=state == "published",
         draft_release_path=pathlib.Path(argv[8]) if len(argv) == 9 else None,
     )

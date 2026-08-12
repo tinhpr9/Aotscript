@@ -7,6 +7,10 @@ on:
         description: Exact worker version without prefixes
         required: true
         type: string
+      resume_release_id:
+        description: Existing draft release ID to verify and publish without uploading again
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -22,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Validate version and run self-tests
         env:
@@ -45,10 +49,12 @@ jobs:
           python3 -m unittest discover -s tests -v
           timeout 300 bash tests/setup-self-test.sh
 
-      - name: Fail if tag or release already exists
+      - name: Resolve create or resume state fail-closed
+        id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: worker-v${{ inputs.version }}
+          RESUME_RELEASE_ID: ${{ inputs.resume_release_id }}
         run: |
           set -euo pipefail
           check_absent() {
@@ -65,29 +71,99 @@ jobs:
           }
           check_absent tag "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}"
           check_absent release "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}"
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > release-pages.json
+          if [[ -n "$RESUME_RELEASE_ID" ]]; then
+            [[ "$RESUME_RELEASE_ID" =~ ^[1-9][0-9]*$ ]] || { echo "resume_release_id must be a positive integer" >&2; exit 64; }
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${RESUME_RELEASE_ID}" > draft.json
+            target_commit="$(python3 scripts/verify_worker_release.py validate-draft \
+              draft.json release-pages.json "$RESUME_RELEASE_ID" "$TAG")"
+            printf 'mode=resume\nrelease_id=%s\ntarget_commit=%s\n' \
+              "$RESUME_RELEASE_ID" "$target_commit" >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/verify_worker_release.py require-no-tagged-release \
+              release-pages.json "$TAG"
+            printf 'mode=create\ntarget_commit=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Build immutable assets once
+      - name: Build immutable assets from pinned target
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_MODE: ${{ steps.prepare.outputs.mode }}
+          RELEASE_ID: ${{ steps.prepare.outputs.release_id }}
+          TARGET_COMMIT: ${{ steps.prepare.outputs.target_commit }}
         run: |
           set -euo pipefail
-          python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --output dist
+          if [[ "$RELEASE_MODE" == resume ]]; then
+            mkdir remote-dist
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > draft.json
+            python3 - draft.json > asset-ids.tsv <<'PY'
+          import json, pathlib, re, sys
+          release = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          for asset in release.get("assets", []):
+              name, asset_id = asset.get("name"), asset.get("id")
+              if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", name) or not isinstance(asset_id, int):
+                  raise SystemExit("invalid_release_asset_identity")
+              print(f"{asset_id}\t{name}")
+          PY
+            while IFS=$'\t' read -r asset_id asset_name; do
+              gh api -H 'Accept: application/octet-stream' \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "remote-dist/${asset_name}"
+            done < asset-ids.tsv
+            git worktree add --detach target-worktree "$TARGET_COMMIT"
+            python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \
+              --commit "$TARGET_COMMIT" --source-root target-worktree \
+              --reproduce-metadata-from remote-dist --output dist
+          else
+            python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \
+              --commit "$TARGET_COMMIT" --output dist
+          fi
 
-      - name: Create draft, upload once, verify, and publish
+      - name: Create or verify draft by ID, then publish by ID
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: worker-v${{ inputs.version }}
           RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_MODE: ${{ steps.prepare.outputs.mode }}
+          RESUME_RELEASE_ID: ${{ steps.prepare.outputs.release_id }}
+          TARGET_COMMIT: ${{ steps.prepare.outputs.target_commit }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "AOT Worker ${RELEASE_VERSION}" --notes "Immutable AOT Worker ${RELEASE_VERSION}" --draft
-          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > release.json
-          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > release-ref.json
+          if [[ "$RELEASE_MODE" == create ]]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+              -f tag_name="$TAG" -f target_commitish="$TARGET_COMMIT" \
+              -f name="AOT Worker ${RELEASE_VERSION}" \
+              -f body="Immutable AOT Worker ${RELEASE_VERSION}" -F draft=true > draft.json
+            RELEASE_ID="$(python3 -c 'import json; print(json.load(open("draft.json"))["id"])')"
+            [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]] || exit 65
+            for asset in dist/*; do
+              gh api --method POST -H 'Content-Type: application/octet-stream' --input "$asset" \
+                "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=$(basename "$asset")" > /dev/null
+            done
+          else
+            RELEASE_ID="$RESUME_RELEASE_ID"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > draft.json
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > release-pages.json
+          verified_target="$(python3 scripts/verify_worker_release.py validate-draft \
+            draft.json release-pages.json "$RELEASE_ID" "$TAG")"
+          [[ "$verified_target" == "$TARGET_COMMIT" ]] || { echo "draft target changed" >&2; exit 66; }
           python3 scripts/verify_worker_release.py verify \
-            "$GITHUB_SHA" "$TAG" dist release.json release-ref.json draft
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > published.json
+            "$TARGET_COMMIT" "$TAG" dist draft.json - draft
+          cp draft.json verified-draft.json
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false > /dev/null
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > published-by-id.json
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > published-by-tag.json
           gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > published-ref.json
           python3 scripts/verify_worker_release.py verify \
-            "$GITHUB_SHA" "$TAG" dist published.json published-ref.json published release.json
+            "$TARGET_COMMIT" "$TAG" dist published-by-id.json published-ref.json published verified-draft.json
+          python3 scripts/verify_worker_release.py verify \
+            "$TARGET_COMMIT" "$TAG" dist published-by-tag.json published-ref.json published verified-draft.json
+          python3 - "$RELEASE_ID" <<'PY'
+          import json, sys
+          expected = int(sys.argv[1])
+          by_id = json.load(open("published-by-id.json"))
+          by_tag = json.load(open("published-by-tag.json"))
+          if by_id.get("id") != expected or by_tag.get("id") != expected:
+              raise SystemExit("published_release_identity_mismatch")
+          PY
