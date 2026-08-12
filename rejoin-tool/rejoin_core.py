@@ -200,7 +200,12 @@ class Monitor:
         self.state = {} # package -> {"retries": 0, "status": "UNKNOWN", "last_launch": 0}
 
     def run_once(self):
-        config = ConfigManager.load_config()
+        try:
+            config = ConfigManager.load_config(strict=True)
+        except ValueError as e:
+            self.env.log(logging.ERROR, str(e))
+            raise
+
         settings = config.get("settings", DEFAULT_CONFIG["settings"])
         packages = config.get("packages", {})
 
@@ -284,9 +289,14 @@ class Monitor:
         while True:
             if self.stop_event and self.stop_event():
                 break
-            self.run_once()
-            self.save_state()
-            config = ConfigManager.load_config()
+
+            try:
+                self.run_once()
+                self.save_state()
+                config = ConfigManager.load_config(strict=True)
+            except ValueError:
+                self.env.log(logging.ERROR, "Monitor stopping due to configuration error.")
+                break
 
             interval_raw = config.get("settings", {}).get("check_interval_sec", 30)
             try:

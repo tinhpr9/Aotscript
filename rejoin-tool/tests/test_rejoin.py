@@ -510,5 +510,26 @@ sys.exit(0 if success else 1)
         self.assertFalse(ConfigManager.set_package_enabled("pkg_missing", True))
         self.assertFalse(ConfigManager.remove_package("pkg_missing"))
 
+    def test_malformed_config_monitor_fails_closed(self):
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write("{ invalid json ")
+
+        env = MockEnv()
+        monitor = Monitor(env)
+
+        with self.assertRaises(ValueError):
+            monitor.run_once()
+
+        monitor.run_loop()
+
+        with open(rejoin_core.CONFIG_FILE, "r") as f:
+            self.assertEqual(f.read(), "{ invalid json ")
+
+        self.assertEqual(len(monitor.state), 0)
+
+        os.remove(rejoin_core.CONFIG_FILE)
+        monitor.run_once()
+        self.assertTrue(os.path.exists(rejoin_core.CONFIG_FILE))
+
 if __name__ == '__main__':
     unittest.main()
