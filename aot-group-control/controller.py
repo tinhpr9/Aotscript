@@ -80,6 +80,8 @@ class UiNode:
     scrollable: bool
     password: bool
     selected: bool = False
+    text: str = ""
+    content_description: str = ""
 
     def public(self) -> dict[str, Any]:
         return {
@@ -525,6 +527,8 @@ def parse_ui_xml(xml_text: str) -> list[UiNode]:
                     scrollable=_bool_attr(child.attrib.get("scrollable")),
                     password=_bool_attr(child.attrib.get("password")),
                     selected=_bool_attr(child.attrib.get("selected")),
+                    text=child.attrib.get("text", ""),
+                    content_description=child.attrib.get("content-desc", ""),
                 )
             )
             walk(child, index)
@@ -962,6 +966,80 @@ def tap_selector(
         "before_fingerprint": before["fingerprint"],
         "after_fingerprint": after["fingerprint"],
         "screen_changed": before["fingerprint"] != after["fingerprint"],
+    }
+
+
+SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
+SWIFT_APPS_RESOURCE_IDS = (
+    "org.swiftapps.swiftbackup:id/apps",
+    "org.swiftapps.swiftbackup:id/nav_apps",
+    "org.swiftapps.swiftbackup:id/navigation_apps",
+)
+
+
+def _apps_semantic_matches(nodes: list[UiNode]) -> list[UiNode]:
+    matches: dict[int, UiNode] = {}
+    for node in nodes:
+        semantic = (
+            node.resource_id in SWIFT_APPS_RESOURCE_IDS
+            or node.text == "Apps"
+            or node.content_description == "Apps"
+        )
+        if not semantic:
+            continue
+        target = _clickable_target(nodes, node)
+        matches[target.index] = target
+    return list(matches.values())
+
+
+def swift_apps_screen_open(nodes: list[UiNode]) -> bool:
+    selected = [
+        node for node in nodes
+        if node.selected and (
+            node.resource_id in SWIFT_APPS_RESOURCE_IDS
+            or node.text == "Apps"
+            or node.content_description == "Apps"
+        )
+    ]
+    markers = [
+        node for node in nodes
+        if node.resource_id.endswith(("apps_list", "apps_recycler", "apps_screen"))
+    ]
+    return len(selected) == 1 or len(markers) == 1
+
+
+def open_swift_apps() -> dict[str, Any]:
+    if foreground_package() != SWIFT_BACKUP_PACKAGE:
+        raise AotControllerError("swift_backup_not_foreground")
+    before_xml = dump_ui_xml()
+    before_nodes = parse_ui_xml(before_xml)
+    before_fingerprint = ui_fingerprint(SWIFT_BACKUP_PACKAGE, before_nodes)
+    matches = _apps_semantic_matches(before_nodes)
+    if len(matches) != 1:
+        raise AotControllerError(
+            "swift_apps_selector_not_found" if not matches
+            else "swift_apps_selector_ambiguous"
+        )
+    target = matches[0]
+    check_nodes = parse_ui_xml(dump_ui_xml())
+    check_fingerprint = ui_fingerprint(SWIFT_BACKUP_PACKAGE, check_nodes)
+    if check_fingerprint != before_fingerprint:
+        raise AotControllerError("swift_apps_precondition_changed")
+    check_matches = _apps_semantic_matches(check_nodes)
+    if len(check_matches) != 1:
+        raise AotControllerError("swift_apps_precondition_changed")
+    _tap_xy(*check_matches[0].bounds.center)
+    time.sleep(0.35)
+    if foreground_package() != SWIFT_BACKUP_PACKAGE:
+        raise AotControllerError("swift_apps_postcondition_failed")
+    after_nodes = parse_ui_xml(dump_ui_xml())
+    if not swift_apps_screen_open(after_nodes):
+        raise AotControllerError("swift_apps_postcondition_failed")
+    return {
+        "action": "OPEN_SWIFT_APPS",
+        "executed": True,
+        "before_fingerprint": before_fingerprint,
+        "after_fingerprint": ui_fingerprint(SWIFT_BACKUP_PACKAGE, after_nodes),
     }
 
 

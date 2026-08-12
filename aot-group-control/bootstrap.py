@@ -23,7 +23,7 @@ import urllib.request
 from typing import Any, Iterator
 
 BOOTSTRAP_VERSION = 2
-BOOTSTRAP_RELEASE_VERSION = 5
+BOOTSTRAP_RELEASE_VERSION = 6
 ROOT = pathlib.Path(__file__).resolve().parent
 RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
@@ -368,19 +368,13 @@ def _config() -> tuple[dict[str, Any], str]:
     configured_device_id = str(config.get("device_id") or "").strip().lower()
     if configured_device_id != device_id:
         raise BootstrapError("worker_config_identity_mismatch")
-    role = str(config.get("role") or "")
-    session = str(config.get("session_id") or "")
-    if config.get("enabled") is not True or role not in {"reference", "follower"}:
+    if config.get("enabled") is not True:
         raise BootstrapError("invalid_worker_config")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session):
-        raise BootstrapError("invalid_worker_session")
     return config, device_id
 
 
 def relay_command(config: dict[str, Any]) -> list[str]:
-    command = [sys.executable, "-u", str(CURRENT / "relay.py"), str(config["role"]), "--session", str(config["session_id"])]
-    if config["role"] == "follower":
-        command.extend(["--reference-device", str(config.get("reference_device_id") or "")])
+    command = [sys.executable, "-u", str(CURRENT / "relay.py"), "fleet"]
     if config.get("open_package"):
         command.extend(["--open-package", str(config["open_package"])])
     return command
@@ -438,9 +432,8 @@ def send_status(pending: dict[str, Any], status: str) -> None:
         raise BootstrapError("invalid_update_status")
     endpoint, secret = _agent_endpoint()
     payload = json.dumps({
-        "protocol": "phase4-1", "session_id": pending["session_id"],
-        "reference_device_id": pending["reference_device_id"],
-        "follower_device_id": pending["device_id"], "action_id": pending["action_id"],
+        "protocol": "fleet-batch-v1", "device_id": pending["device_id"],
+        "action_id": pending["action_id"],
         "batch_action": "UPDATE_WORKER", "status": status,
         "worker_version": pending.get("version"), "channel": pending.get("channel"),
         "reason": str(pending.get("failure_reason") or "")[:160],
@@ -591,8 +584,7 @@ def action_update(args: argparse.Namespace) -> int:
                 raise BootstrapError("invalid_update_channel")
             pending = {
                 "action_id": args.action_id, "channel": channel,
-                "device_id": device_id, "session_id": str(config["session_id"]),
-                "reference_device_id": args.reference_device,
+                "device_id": device_id,
                 "release_metadata": args.release_metadata,
                 "started_at": int(time.time()),
             }

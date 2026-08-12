@@ -123,18 +123,10 @@ except Exception:
 if not isinstance(data, dict) or data.get("enabled") is not True:
     raise SystemExit(1)
 
-role = str(data.get("role") or "").strip().lower()
-session = str(data.get("session_id") or "").strip()
-reference = str(data.get("reference_device_id") or "").strip().lower()
+device_id = str(data.get("device_id") or "").strip().lower()
 package = data.get("open_package")
 
-if role not in {"reference", "follower"}:
-    raise SystemExit(1)
-
-if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session):
-    raise SystemExit(1)
-
-if role == "follower" and not re.fullmatch(r"m[1-9]\d{0,5}", reference):
+if not re.fullmatch(r"m[1-9]\d{0,5}", device_id):
     raise SystemExit(1)
 
 if package not in (None, ""):
