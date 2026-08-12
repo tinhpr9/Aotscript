@@ -6,6 +6,8 @@ import logging
 import shlex
 import re
 import fcntl
+import math
+import contextlib
 from datetime import datetime
 
 CONFIG_DIR = "/storage/emulated/0/Download/AotRejoin"
@@ -108,6 +110,29 @@ class ConfigManager:
             os.makedirs(CONFIG_DIR, exist_ok=True)
 
     @staticmethod
+    @contextlib.contextmanager
+    def transaction_lock():
+        ConfigManager.ensure_dir()
+        if not os.path.exists(RUNTIME_DIR):
+            os.makedirs(RUNTIME_DIR, exist_ok=True)
+        tx_lock_file = os.path.join(RUNTIME_DIR, "config_tx.lock")
+        fd = None
+        try:
+            fd = os.open(tx_lock_file, os.O_RDWR | os.O_CREAT, 0o644)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            if fd is not None:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+
+    @staticmethod
     def format_and_validate_url(url):
         import urllib.parse
         if not isinstance(url, str):
@@ -200,45 +225,55 @@ class ConfigManager:
         if not formatted_url:
             return False
 
-        try:
-            config = ConfigManager.load_config(strict=True)
-        except ValueError as e:
-            print(str(e))
-            return False
+        with ConfigManager.transaction_lock():
+            try:
+                config = ConfigManager.load_config(strict=True)
+            except ValueError as e:
+                print(str(e))
+                return False
 
-        if "packages" not in config:
-            config["packages"] = {}
-        config["packages"][package] = {"join_url": formatted_url, "enabled": True}
-        ConfigManager.save_config(config)
-        return True
+            if "packages" not in config:
+                config["packages"] = {}
+            config["packages"][package] = {"join_url": formatted_url, "enabled": True}
+            ConfigManager.save_config(config)
+            return True
 
     @staticmethod
     def remove_package(package: str) -> bool:
-        try:
-            config = ConfigManager.load_config(strict=True)
-        except ValueError as e:
-            print(str(e))
-            return False
+        with ConfigManager.transaction_lock():
+            try:
+                config = ConfigManager.load_config(strict=True)
+            except ValueError as e:
+                print(str(e))
+                return False
 
-        if "packages" in config and package in config["packages"]:
-            del config["packages"][package]
-            ConfigManager.save_config(config)
-            return True
-        return False
+            if "packages" in config and package in config["packages"]:
+                del config["packages"][package]
+                ConfigManager.save_config(config)
+                return True
+            return False
 
     @staticmethod
     def set_package_enabled(package: str, enabled: bool) -> bool:
-        try:
-            config = ConfigManager.load_config(strict=True)
-        except ValueError as e:
-            print(str(e))
+        if not isinstance(enabled, bool):
             return False
 
-        if "packages" in config and package in config["packages"]:
-            config["packages"][package]["enabled"] = enabled
-            ConfigManager.save_config(config)
-            return True
-        return False
+        with ConfigManager.transaction_lock():
+            try:
+                config = ConfigManager.load_config(strict=True)
+            except ValueError as e:
+                print(str(e))
+                return False
+
+            if "packages" in config and package in config["packages"]:
+                if enabled:
+                    join_url = config["packages"][package].get("join_url", "")
+                    if not ConfigManager.format_and_validate_url(join_url):
+                        return False
+                config["packages"][package]["enabled"] = enabled
+                ConfigManager.save_config(config)
+                return True
+            return False
 
 class Monitor:
     def __init__(self, env: SystemEnvironment, stop_event=None):
@@ -262,8 +297,12 @@ class Monitor:
 
         def safe_get_num(key, default_val, min_val=0):
             val = settings.get(key, default_val)
+            if isinstance(val, bool):
+                return default_val
             try:
                 val = float(val)
+                if not math.isfinite(val):
+                    return default_val
                 return max(val, min_val)
             except (TypeError, ValueError):
                 return default_val
@@ -362,11 +401,18 @@ class Monitor:
                 settings = {}
 
             interval_raw = settings.get("check_interval_sec", 30)
-            try:
-                interval = int(float(interval_raw))
-                interval = max(interval, 1)
-            except (TypeError, ValueError):
+            if isinstance(interval_raw, bool):
                 interval = 30
+            else:
+                try:
+                    interval = float(interval_raw)
+                    if not math.isfinite(interval):
+                        interval = 30
+                    else:
+                        interval = int(interval)
+                        interval = max(interval, 1)
+                except (TypeError, ValueError):
+                    interval = 30
 
             # Sleep in small increments to allow responsive stop
             for _ in range(interval):

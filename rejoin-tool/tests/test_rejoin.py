@@ -664,7 +664,100 @@ sys.exit(0 if success else 1)
             except StopIteration:
                 pass
 
-        # if it didn't crash, safe numbers worked
+    def test_finite_numeric_settings(self):
+        env = MockEnv()
+        monitor = Monitor(env, lambda: False)
+        import math
+
+        # Test nan/inf/booleans
+        conf = {
+            "settings": {
+                "check_interval_sec": float('inf'),
+                "max_retries": float('nan'),
+                "retry_delay_sec": float('-inf'),
+                "cooldown_after_success_sec": True,
+                "open_delay_sec": False,
+                "delay_between_packages_sec": "inf"
+            },
+            "packages": {
+                "pkg1": {"enabled": True, "join_url": "123"}
+            }
+        }
+        def fake_load_config(*args, **kwargs):
+            fake_load_config.calls += 1
+            if fake_load_config.calls > 2:
+                raise StopIteration("STOP")
+            return conf
+        fake_load_config.calls = 0
+
+        with patch.object(ConfigManager, 'load_config', side_effect=fake_load_config):
+            try:
+                monitor.run_loop()
+            except StopIteration:
+                pass
+
+    def test_disabled_package_mutation(self):
+        # 1. Invalid URL in disabled package is fine
+        ConfigManager.ensure_dir()
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
+
+        # 2. Attempt to enable it should fail
+        self.assertFalse(ConfigManager.set_package_enabled("pkg1", True))
+
+        # 3. Check JSON preservation
+        with open(rejoin_core.CONFIG_FILE, "r") as f:
+            self.assertEqual(f.read(), '{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
+
+    def test_non_bool_enabled(self):
+        ConfigManager.ensure_dir()
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"packages": {"pkg1": {"enabled": false, "join_url": "123"}}}')
+
+        self.assertFalse(ConfigManager.set_package_enabled("pkg1", "yes"))
+        with open(rejoin_core.CONFIG_FILE, "r") as f:
+            self.assertEqual(f.read(), '{"packages": {"pkg1": {"enabled": false, "join_url": "123"}}}')
+
+    def test_concurrent_mutations(self):
+        ConfigManager.ensure_dir()
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"packages": {}}')
+
+        import multiprocessing
+        def worker_add(pkg):
+            import rejoin_core
+            rejoin_core.ConfigManager.add_package(pkg, "123")
+
+        p1 = multiprocessing.Process(target=worker_add, args=("pkg1",))
+        p2 = multiprocessing.Process(target=worker_add, args=("pkg2",))
+
+        p1.start()
+        p2.start()
+        p1.join()
+        p2.join()
+
+        config = ConfigManager.load_config(strict=True)
+        self.assertIn("pkg1", config["packages"])
+        self.assertIn("pkg2", config["packages"])
+
+        def worker_conflict():
+            import rejoin_core
+            rejoin_core.ConfigManager.add_package("pkg3", "123")
+
+        def worker_remove():
+            import rejoin_core
+            rejoin_core.ConfigManager.remove_package("pkg1")
+
+        p3 = multiprocessing.Process(target=worker_conflict)
+        p4 = multiprocessing.Process(target=worker_remove)
+        p3.start()
+        p4.start()
+        p3.join()
+        p4.join()
+
+        config = ConfigManager.load_config(strict=True)
+        self.assertIn("pkg3", config["packages"])
+        self.assertNotIn("pkg1", config["packages"])
 
 if __name__ == '__main__':
     unittest.main()
