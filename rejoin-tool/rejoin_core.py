@@ -435,15 +435,51 @@ def discover_roblox_packages() -> list:
     if not isinstance(prefix, str) or not re.match(r'^[a-zA-Z0-9_.]+$', prefix):
         prefix = "com.roblox"
 
+    packages = set()
+
+    def _parse_query(output: str, target_activities: set):
+        lines = output.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith("name="):
+                name = line.split("=", 1)[1]
+                if name in target_activities:
+                    if i + 1 < len(lines):
+                        next_line = lines[i + 1].strip()
+                        if next_line.startswith("packageName="):
+                            packages.add(next_line.split("=", 1)[1])
+            i += 1
+
+    cmd_launcher = "cmd package query-activities --user 0 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER"
+    cmd_view = "cmd package query-activities --user 0 -a android.intent.action.VIEW -d roblox://placeID=1"
+
     try:
-        result = subprocess.run(["su", "-c", f"pm list packages {shlex.quote(prefix)}"], capture_output=True, text=True, timeout=10)
-        packages = []
-        for line in result.stdout.strip().splitlines():
-            if line.startswith("package:"):
-                packages.append(line.replace("package:", "").strip())
-        return packages
-    except Exception:
-        return []
+        res_launcher = subprocess.run(["su", "-c", cmd_launcher], capture_output=True, text=True, timeout=10)
+        res_view = subprocess.run(["su", "-c", cmd_view], capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("Package manager query timed out") from e
+    except Exception as e:
+        raise RuntimeError("Failed to query package manager") from e
+
+    if res_launcher.returncode != 0 and res_view.returncode != 0:
+        err = res_launcher.stderr.strip() or res_view.stderr.strip() or "Unknown package manager error"
+        raise RuntimeError(f"Package manager error: {err}")
+
+    _parse_query(res_launcher.stdout, {"com.roblox.client.startup.ActivitySplash"})
+    _parse_query(res_view.stdout, {"com.roblox.client.ActivityProtocolLaunch"})
+
+    if prefix:
+        try:
+            res_prefix = subprocess.run(["su", "-c", f"pm list packages {shlex.quote(prefix)}"], capture_output=True, text=True, timeout=10)
+            if res_prefix.returncode == 0:
+                for line in res_prefix.stdout.strip().splitlines():
+                    if line.startswith("package:"):
+                        packages.add(line.replace("package:", "").strip())
+        except Exception:
+            pass
+
+    return sorted(list(packages))
 
 _lock_fd = None
 

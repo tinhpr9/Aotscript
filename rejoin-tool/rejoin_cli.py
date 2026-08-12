@@ -206,7 +206,11 @@ def interactive_menu():
             print(json.dumps(safe_config, indent=2))
         elif choice == "8":
             from rejoin_core import discover_roblox_packages
-            packages = discover_roblox_packages()
+            try:
+                packages = discover_roblox_packages()
+            except RuntimeError as e:
+                print(str(e))
+                continue
             if not packages:
                 print("No Roblox packages found.")
             else:
@@ -288,7 +292,11 @@ def main():
                 print(f"Failed to disable {args.args[0]}")
     elif cmd == "discover":
         from rejoin_core import discover_roblox_packages
-        packages = discover_roblox_packages()
+        try:
+            packages = discover_roblox_packages()
+        except RuntimeError as e:
+            print(str(e))
+            return
         if not packages:
             print("No Roblox packages found.")
         else:

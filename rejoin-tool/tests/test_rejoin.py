@@ -813,5 +813,97 @@ sys.exit(0 if success else 1)
         config = ConfigManager.load_config(strict=True)
         self.assertIn("pkg_race_1", config["packages"])
 
+class TestDiscovery(unittest.TestCase):
+    def setUp(self):
+        ConfigManager.ensure_dir()
+        if os.path.exists(rejoin_core.CONFIG_FILE):
+            os.remove(rejoin_core.CONFIG_FILE)
+
+    def _mock_subprocess(self, launcher_stdout="", launcher_code=0, view_stdout="", view_code=0, prefix_stdout="", prefix_code=0, launcher_exc=None, view_exc=None, prefix_exc=None):
+        def _run(args, **kwargs):
+            cmd = args[2] if len(args) > 2 else ""
+            res = unittest.mock.Mock()
+            if "android.intent.category.LAUNCHER" in cmd:
+                if launcher_exc: raise launcher_exc
+                res.stdout = launcher_stdout
+                res.returncode = launcher_code
+                res.stderr = ""
+            elif "roblox://placeID" in cmd:
+                if view_exc: raise view_exc
+                res.stdout = view_stdout
+                res.returncode = view_code
+                res.stderr = ""
+            elif "pm list packages" in cmd:
+                if prefix_exc: raise prefix_exc
+                res.stdout = prefix_stdout
+                res.returncode = prefix_code
+                res.stderr = ""
+            else:
+                res.stdout = ""
+                res.returncode = 0
+                res.stderr = ""
+            return res
+        return _run
+
+    @unittest.mock.patch("subprocess.run")
+    def test_standard_package(self, mock_run):
+        mock_run.side_effect = self._mock_subprocess(
+            launcher_stdout="name=com.roblox.client.startup.ActivitySplash\npackageName=com.roblox.client"
+        )
+        self.assertEqual(rejoin_core.discover_roblox_packages(), ["com.roblox.client"])
+
+    @unittest.mock.patch("subprocess.run")
+    def test_arbitrary_clone_package(self, mock_run):
+        mock_run.side_effect = self._mock_subprocess(
+            launcher_stdout="name=com.roblox.client.startup.ActivitySplash\npackageName=com.tinh.clone"
+        )
+        self.assertEqual(rejoin_core.discover_roblox_packages(), ["com.tinh.clone"])
+
+    @unittest.mock.patch("subprocess.run")
+    def test_multiple_clones_and_duplicate(self, mock_run):
+        mock_run.side_effect = self._mock_subprocess(
+            launcher_stdout="name=com.roblox.client.startup.ActivitySplash\npackageName=com.tinh.clone\nname=com.roblox.client.startup.ActivitySplash\npackageName=com.clone.two\n",
+            view_stdout="name=com.roblox.client.ActivityProtocolLaunch\npackageName=com.tinh.clone\n"
+        )
+        self.assertEqual(rejoin_core.discover_roblox_packages(), sorted(["com.tinh.clone", "com.clone.two"]))
+
+    @unittest.mock.patch("subprocess.run")
+    def test_unrelated_app_excluded(self, mock_run):
+        mock_run.side_effect = self._mock_subprocess(
+            launcher_stdout="name=com.android.settings.Settings\npackageName=com.android.settings"
+        )
+        self.assertEqual(rejoin_core.discover_roblox_packages(), [])
+
+    @unittest.mock.patch("subprocess.run")
+    def test_command_timeout(self, mock_run):
+        import subprocess
+        mock_run.side_effect = self._mock_subprocess(launcher_exc=subprocess.TimeoutExpired(cmd="su", timeout=10))
+        with self.assertRaisesRegex(RuntimeError, "Package manager query timed out"):
+            rejoin_core.discover_roblox_packages()
+
+    @unittest.mock.patch("subprocess.run")
+    def test_command_failure(self, mock_run):
+        mock_run.side_effect = self._mock_subprocess(launcher_code=255, view_code=255)
+        with self.assertRaisesRegex(RuntimeError, "Package manager error"):
+            rejoin_core.discover_roblox_packages()
+
+    @unittest.mock.patch("subprocess.run")
+    def test_empty_successful(self, mock_run):
+        mock_run.side_effect = self._mock_subprocess(launcher_stdout="", view_stdout="")
+        self.assertEqual(rejoin_core.discover_roblox_packages(), [])
+
+    @unittest.mock.patch("subprocess.run")
+    def test_malformed_output(self, mock_run):
+        mock_run.side_effect = self._mock_subprocess(launcher_stdout="random\ngarbage\npackageName=unknown")
+        self.assertEqual(rejoin_core.discover_roblox_packages(), [])
+
+    @unittest.mock.patch("subprocess.run")
+    def test_invalid_prefix_configured(self, mock_run):
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"settings": {"package_prefix": "invalid!"}}')
+        mock_run.side_effect = self._mock_subprocess(prefix_stdout="package:com.roblox.client")
+        self.assertEqual(rejoin_core.discover_roblox_packages(), ["com.roblox.client"])
+
+
 if __name__ == '__main__':
     unittest.main()
