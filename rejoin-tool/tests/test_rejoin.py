@@ -209,5 +209,113 @@ sys.exit(0 if success else 1)
             monitor.run_once() # should launch again
             self.assertEqual(len(env.launch_history), 2)
 
+    @patch('subprocess.run')
+    def test_timeouts_and_fallback(self, mock_run):
+        import subprocess
+        env = SystemEnvironment()
+        env.sleep = MagicMock()
+
+        # 1. pidof timeout
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="pidof", timeout=5)
+        self.assertFalse(env.is_process_running("com.roblox"))
+
+        # 2. explicit success does not use fallback
+        mock_run.reset_mock()
+        def fake_run_success(*args, **kwargs):
+            res = MagicMock()
+            res.returncode = 0
+            res.stdout = "Starting: Intent"
+            res.stderr = ""
+            return res
+
+        mock_run.side_effect = fake_run_success
+        self.assertTrue(env.launch_intent("com.roblox", "roblox://123"))
+        fallback_called = False
+        for call in mock_run.call_args_list:
+            cmd = call[0][0][2]
+            if "-p 'com.roblox'" in cmd or "-p com.roblox" in cmd:
+                fallback_called = True
+        self.assertFalse(fallback_called, "Fallback should not be called if explicit succeeds")
+
+        # 3. splash timeout fails safely and uses fallback
+        mock_run.reset_mock()
+        def fake_run_splash_timeout(*args, **kwargs):
+            cmd = args[0][2]
+            if "ActivitySplash" in cmd:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=10)
+            res = MagicMock()
+            res.returncode = 0
+            res.stdout = "Starting: Intent"
+            res.stderr = ""
+            return res
+
+        mock_run.side_effect = fake_run_splash_timeout
+        self.assertTrue(env.launch_intent("com.roblox", "roblox://123"))
+        fallback_called = False
+        for call in mock_run.call_args_list:
+            cmd = call[0][0][2]
+            if "-p com.roblox" in cmd:
+                fallback_called = True
+        self.assertTrue(fallback_called, "Fallback should be called if splash times out")
+
+        # 4. protocol timeout fails safely
+        mock_run.reset_mock()
+        def fake_run_protocol_timeout(*args, **kwargs):
+            cmd = args[0][2]
+            if "ActivityProtocolLaunch" in cmd:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=10)
+            res = MagicMock()
+            res.returncode = 0
+            res.stdout = "Starting: Intent"
+            res.stderr = ""
+            return res
+
+        mock_run.side_effect = fake_run_protocol_timeout
+        self.assertFalse(env.launch_intent("com.roblox", "roblox://123"))
+
+        # 5. component failure invokes fallback
+        mock_run.reset_mock()
+        def fake_run_component_failure(*args, **kwargs):
+            cmd = args[0][2]
+            res = MagicMock()
+            res.stdout = ""
+            res.stderr = ""
+            res.returncode = 0
+
+            if "ActivityProtocolLaunch" in cmd:
+                res.returncode = 1
+                res.stderr = "Error: does not exist"
+            elif "-p com.roblox" in cmd:
+                res.stdout = "Starting: Intent"
+                res.returncode = 0
+            return res
+
+        mock_run.side_effect = fake_run_component_failure
+        self.assertTrue(env.launch_intent("com.roblox", "123"))
+        fallback_called = False
+        for call in mock_run.call_args_list:
+            cmd = call[0][0][2]
+            if "-p com.roblox" in cmd and "roblox://placeID=123" in cmd:
+                fallback_called = True
+        self.assertTrue(fallback_called, "Fallback should be called with correct URL if explicit component fails")
+
+        # 6. force-stop timeout fails safely
+        mock_run.reset_mock()
+        def fake_run_force_stop_timeout(*args, **kwargs):
+            cmd = args[0][2]
+            if "force-stop" in cmd:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=5)
+            res = MagicMock()
+            res.returncode = 0
+            res.stdout = "Starting: Intent"
+            res.stderr = ""
+            return res
+
+        mock_run.side_effect = fake_run_force_stop_timeout
+        self.assertTrue(env.launch_intent("com.roblox", "roblox://123"))
+
+        # 7. shell injection regression
+        self.assertFalse(env.launch_intent("com.roblox; rm -rf /", "123"))
+
 if __name__ == '__main__':
     unittest.main()

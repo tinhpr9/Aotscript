@@ -32,8 +32,11 @@ class SystemEnvironment:
             return False
         try:
             # use su -c pidof to check if running
-            result = subprocess.run(["su", "-c", f"pidof {package}"], capture_output=True, text=True)
+            result = subprocess.run(["su", "-c", f"pidof {package}"], capture_output=True, text=True, timeout=5)
             return bool(result.stdout.strip())
+        except subprocess.TimeoutExpired:
+            self.log(logging.WARNING, f"[{package}] pidof timeout")
+            return False
         except Exception:
             return False
 
@@ -41,20 +44,53 @@ class SystemEnvironment:
         if not re.match(r'^[a-zA-Z0-9_.]+$', package):
             return False
         try:
-            subprocess.run(["su", "-c", f"am force-stop {shlex.quote(package)}"])
-            self.sleep(2)
+            subprocess.run(["su", "-c", f"am force-stop {shlex.quote(package)}"], timeout=5)
+        except subprocess.TimeoutExpired:
+            self.log(logging.WARNING, f"[{package}] force-stop timeout")
+        except Exception:
+            pass
 
+        self.sleep(2)
+
+        fallback = False
+        try:
             cmd_splash = f"am start -a android.intent.action.MAIN -n {shlex.quote(package)}/com.roblox.client.startup.ActivitySplash"
-            subprocess.run(["su", "-c", cmd_splash])
-            self.sleep(10)
+            res_splash = subprocess.run(["su", "-c", cmd_splash], capture_output=True, text=True, timeout=10)
+            if "does not exist" in res_splash.stderr or "Error:" in res_splash.stderr or res_splash.returncode != 0:
+                fallback = True
+        except subprocess.TimeoutExpired:
+            self.log(logging.WARNING, f"[{package}] splash timeout")
+            fallback = True
+        except Exception:
+            fallback = True
 
-            formatted_url = url
-            if 'roblox.com' not in url and url.isdigit():
-                formatted_url = f"roblox://placeID={url}"
+        formatted_url = url
+        if 'roblox.com' not in url and url.isdigit():
+            formatted_url = f"roblox://placeID={url}"
 
+        if fallback:
+            try:
+                cmd_fallback = f"am start -a android.intent.action.VIEW -d {shlex.quote(formatted_url)} -p {shlex.quote(package)}"
+                res_join = subprocess.run(["su", "-c", cmd_fallback], capture_output=True, text=True, timeout=10)
+                return "Starting: Intent" in res_join.stdout or res_join.returncode == 0
+            except subprocess.TimeoutExpired:
+                self.log(logging.WARNING, f"[{package}] fallback join timeout")
+                return False
+            except Exception:
+                return False
+
+        self.sleep(10)
+
+        try:
             cmd_join = f"am start -a android.intent.action.VIEW -n {shlex.quote(package)}/com.roblox.client.ActivityProtocolLaunch -d {shlex.quote(formatted_url)}"
-            result = subprocess.run(["su", "-c", cmd_join], capture_output=True, text=True)
+            result = subprocess.run(["su", "-c", cmd_join], capture_output=True, text=True, timeout=10)
+            if "does not exist" in result.stderr or "Error:" in result.stderr or result.returncode != 0:
+                cmd_fallback = f"am start -a android.intent.action.VIEW -d {shlex.quote(formatted_url)} -p {shlex.quote(package)}"
+                result = subprocess.run(["su", "-c", cmd_fallback], capture_output=True, text=True, timeout=10)
             return "Starting: Intent" in result.stdout or result.returncode == 0
+        except subprocess.TimeoutExpired:
+            self.log(logging.WARNING, f"[{package}] join timeout")
+            return False
         except Exception:
             return False
 
