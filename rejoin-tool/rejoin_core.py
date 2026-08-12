@@ -159,6 +159,21 @@ class ConfigManager:
         return None
 
     @staticmethod
+    def safe_get_num(settings: dict, key: str, default_val: float, min_val: float = 0, max_val: float = 86400) -> float:
+        val = settings.get(key, default_val)
+        if isinstance(val, bool):
+            return default_val
+        try:
+            val = float(val)
+            if not math.isfinite(val):
+                return default_val
+            if val > max_val:
+                return default_val
+            return max(val, min_val)
+        except (TypeError, ValueError):
+            return default_val
+
+    @staticmethod
     def load_config(strict=False, _locked=False) -> dict:
         ConfigManager.ensure_dir()
         if not os.path.exists(CONFIG_FILE):
@@ -193,9 +208,6 @@ class ConfigManager:
                         enabled = v.get("enabled", False)
                         if enabled:
                             if not ConfigManager.format_and_validate_url(v.get("join_url", "")):
-                                raise ValueError("Error: config.json is malformed. Please fix or remove it.")
-                        else:
-                            if "join_url" in v and not isinstance(v["join_url"], str):
                                 raise ValueError("Error: config.json is malformed. Please fix or remove it.")
             else:
                 if not isinstance(config, dict):
@@ -299,18 +311,6 @@ class Monitor:
         if not isinstance(packages, dict):
             packages = {}
 
-        def safe_get_num(key, default_val, min_val=0):
-            val = settings.get(key, default_val)
-            if isinstance(val, bool):
-                return default_val
-            try:
-                val = float(val)
-                if not math.isfinite(val):
-                    return default_val
-                return max(val, min_val)
-            except (TypeError, ValueError):
-                return default_val
-
         for pkg, data in packages.items():
             if self.stop_event and self.stop_event():
                 break
@@ -333,7 +333,7 @@ class Monitor:
             else:
                 # Need to launch
                 retries = self.state[pkg]["retries"]
-                max_retries = int(safe_get_num("max_retries", 3, 0))
+                max_retries = int(ConfigManager.safe_get_num(settings, "max_retries", 3, 0, 100))
                 if retries >= max_retries:
                     if self.state[pkg]["status"] != "FAILED":
                         self.env.log(logging.ERROR, f"[{pkg}] FAILED after {retries} retries.")
@@ -343,8 +343,8 @@ class Monitor:
                 # Check cooldown / delay
                 last_launch = self.state[pkg].get("last_launch", 0)
                 last_success = self.state[pkg].get("last_success", 0)
-                retry_delay = safe_get_num("retry_delay_sec", 10, 0)
-                cooldown = safe_get_num("cooldown_after_success_sec", 30, 0)
+                retry_delay = ConfigManager.safe_get_num(settings, "retry_delay_sec", 10, 0, 86400)
+                cooldown = ConfigManager.safe_get_num(settings, "cooldown_after_success_sec", 30, 0, 86400)
 
                 if now - last_success < cooldown:
                     continue
@@ -360,13 +360,13 @@ class Monitor:
                 self.state[pkg]["retries"] += 1
 
                 if success:
-                    self.env.sleep(safe_get_num("open_delay_sec", 10, 0))
+                    self.env.sleep(ConfigManager.safe_get_num(settings, "open_delay_sec", 10, 0, 86400))
                     if self.env.is_process_running(pkg):
                         self.state[pkg]["status"] = "RUNNING"
                         self.state[pkg]["retries"] = 0
                         self.state[pkg]["last_success"] = time.time()
                         self.env.log(logging.INFO, f"[{pkg}] Verified RUNNING after launch.")
-                        delay_seq = safe_get_num("delay_between_packages_sec", 5, 0)
+                        delay_seq = ConfigManager.safe_get_num(settings, "delay_between_packages_sec", 5, 0, 86400)
                         if delay_seq > 0:
                             self.env.sleep(delay_seq)
                     else:
@@ -404,19 +404,7 @@ class Monitor:
             if not isinstance(settings, dict):
                 settings = {}
 
-            interval_raw = settings.get("check_interval_sec", 30)
-            if isinstance(interval_raw, bool):
-                interval = 30
-            else:
-                try:
-                    interval = float(interval_raw)
-                    if not math.isfinite(interval):
-                        interval = 30
-                    else:
-                        interval = int(interval)
-                        interval = max(interval, 1)
-                except (TypeError, ValueError):
-                    interval = 30
+            interval = int(ConfigManager.safe_get_num(settings, "check_interval_sec", 30, 1, 86400))
 
             # Sleep in small increments to allow responsive stop
             for _ in range(interval):

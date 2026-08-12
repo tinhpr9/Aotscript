@@ -559,7 +559,7 @@ sys.exit(0 if success else 1)
             ConfigManager.load_config(strict=True)
 
         with open(rejoin_core.CONFIG_FILE, "w") as f:
-            f.write('{"packages": {"pkg1": {"join_url": 123}}}')
+            f.write('{"packages": {"pkg1": {"enabled": true, "join_url": 123}}}')
         with self.assertRaises(ValueError):
             ConfigManager.load_config(strict=True)
 
@@ -612,9 +612,11 @@ sys.exit(0 if success else 1)
         check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
         check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
 
-        # disabled + structurally invalid join_url => rejected
-        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": 123}}}')
-        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": {}}}}')
+        # disabled + any structurally invalid join_url type => accepted (legacy repairable)
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": 123}}}')
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": null}}}')
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": []}}}')
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": {}}}}')
 
     @patch('rejoin_cli.get_pid')
     @patch('subprocess.Popen')
@@ -678,15 +680,15 @@ sys.exit(0 if success else 1)
         monitor = Monitor(env, lambda: False)
         import math
 
-        # Test nan/inf/booleans
+        # Test nan/inf/booleans/huge bounds
         conf = {
             "settings": {
                 "check_interval_sec": float('inf'),
                 "max_retries": float('nan'),
                 "retry_delay_sec": float('-inf'),
                 "cooldown_after_success_sec": True,
-                "open_delay_sec": False,
-                "delay_between_packages_sec": "inf"
+                "open_delay_sec": 1e308,
+                "delay_between_packages_sec": "1e308"
             },
             "packages": {
                 "pkg1": {"enabled": True, "join_url": "123"}
