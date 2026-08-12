@@ -13,14 +13,15 @@ const COMMAND_MAX_TARGETS = 1000;
 
 const AOT_CONTROL_MAX_TARGETS = 128;
 const AOT_BATCH_ACTION = "OPEN_SWIFT_BACKUP";
+const AOT_APPS_ACTION = "OPEN_SWIFT_APPS";
 const AOT_BATCH_PACKAGE = "org.swiftapps.swiftbackup";
 const AOT_BATCH_TTL_MS = 75 * 1000;
 const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.11.8";
-const AOT_WORKER_TAG = "worker-v2026.08.11.8";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.11.9";
+const AOT_WORKER_TAG = "worker-v2026.08.11.9";
 const AOT_RELEASE_PROTOCOL = "github-release-v1";
 const AOT_RELEASE_REPOSITORY = "tinhpr9/Aotscript";
 const AOT_RELEASE_CACHE_MS = 5 * 60 * 1000;
@@ -711,11 +712,7 @@ export class FleetState
       if (!live) {
         return;
       }
-      const key =
-        this.aotLiveKey(
-          identity.sessionId,
-          identity.deviceId
-        );
+      const key = identity.deviceId;
       const previous =
         this.aotLive.get(key);
       if (
@@ -731,11 +728,16 @@ export class FleetState
         key,
         live
       );
+      const fleet = await this.readFleet();
+      fleet.devices[identity.deviceId] = {
+        ...(fleet.devices[identity.deviceId] || {}), device_id: identity.deviceId,
+        worker_version: live.worker_version, capabilities: live.capabilities,
+      };
+      await this.writeFleet(fleet);
+      await this.broadcastFleetState();
       try {
         if (typeof socket.serializeAttachment === "function") {
           socket.serializeAttachment({
-            role: identity.role,
-            session_id: identity.sessionId,
             device_id: identity.deviceId,
             worker_version: live.worker_version,
             capabilities: live.capabilities,
@@ -763,9 +765,9 @@ export class FleetState
     const identity = this.parseAotSocketIdentity(socket);
     if (identity) {
       this.aotLive.delete(
-        this.aotLiveKey(identity.sessionId, identity.deviceId)
+        identity.deviceId
       );
-      await this.broadcastAotHubState(identity.sessionId);
+      await this.broadcastFleetState();
     }
   }
 
@@ -780,7 +782,7 @@ export class FleetState
     sessionId,
     deviceId
   ) {
-    return `aot:${role}:${sessionId}:${deviceId}`;
+    return `aot-device:${deviceId}`;
   }
 
   sendAotPayload(tag, payload) {
@@ -803,7 +805,7 @@ export class FleetState
   }
 
   aotDashboardTag(sessionId) {
-    return `aot-dashboard:${sessionId}`;
+    return "aot-dashboard:fleet";
   }
 
   async broadcastAotHubState(sessionId) {
@@ -1026,33 +1028,21 @@ export class FleetState
     } catch (error) {
       return null;
     }
-    const tag = tags.find(
-      (value) =>
-        String(value).startsWith("aot:")
-    );
+    const tag = tags.find((value) => String(value).startsWith("aot-device:"));
     if (!tag) {
       return null;
     }
     const parts = String(tag).split(":");
-    if (parts.length !== 4) {
+    if (parts.length !== 2) {
       return null;
     }
-    const role = parts[1];
-    const sessionId = parts[2];
-    const deviceId =
-      validDeviceId(parts[3]);
-    if (
-      !["reference", "follower"].includes(role) ||
-      !/^[A-Za-z0-9_-]{1,64}$/.test(
-        sessionId
-      ) ||
-      !deviceId
-    ) {
+    const deviceId = validDeviceId(parts[1]);
+    if (!deviceId) {
       return null;
     }
     return {
-      role,
-      sessionId,
+      role: "device",
+      sessionId: "fleet",
       deviceId,
     };
   }
@@ -1064,11 +1054,7 @@ export class FleetState
     if (
       !body ||
       body.type !== "aot_status" ||
-      body.protocol !== "phase4-1" ||
-      String(body.role || "") !==
-        identity.role ||
-      String(body.session_id || "") !==
-        identity.sessionId ||
+      !["fleet-batch-v1", "phase4-1"].includes(body.protocol) ||
       validDeviceId(body.device_id) !==
         identity.deviceId
     ) {
@@ -1544,7 +1530,7 @@ export class FleetState
     );
     return {
       action_id: String(batch.action_id || ""),
-      action: AOT_BATCH_ACTION,
+      action: String(batch.action || ""),
       package: AOT_BATCH_PACKAGE,
       created_at: Number(batch.created_at || 0),
       expires_at: expiresAt,
@@ -2872,6 +2858,186 @@ export class FleetState
     });
   }
 
+  async readFleet() {
+    const stored = await this.ctx.storage.get("aot_fleet");
+    const record = stored && typeof stored === "object" ? stored : {
+      version: 2, devices: {}, last_batch: null, last_update: null,
+      canary_release: null, update_device_status: {}, updated_at: Date.now(),
+    };
+    if (!record.devices || typeof record.devices !== "object") record.devices = {};
+    return record;
+  }
+
+  async writeFleet(record) {
+    record.updated_at = Date.now();
+    await this.ctx.storage.put("aot_fleet", record);
+  }
+
+  fleetMembers(record) {
+    return Object.keys(record.devices || {}).map((device_id) => ({
+      device_id, role: "device",
+      worker_version: record.devices[device_id]?.worker_version || "",
+      capabilities: record.devices[device_id]?.capabilities || [],
+    }));
+  }
+
+  async getFleetHubState() {
+    const record = await this.readFleet();
+    const now = Date.now();
+    const devices = this.fleetMembers(record).map((item) => {
+      const live = this.aotLive.get(item.device_id) || {};
+      const online = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", item.device_id)).length > 0;
+      return {
+        device_id: item.device_id, online, status: online ? "ONLINE" : "OFFLINE",
+        worker_version: live.worker_version || item.worker_version || "",
+        capabilities: live.capabilities || item.capabilities || [], updated_at: live.updated_at || 0,
+      };
+    }).sort((a, b) => a.device_id.localeCompare(b.device_id));
+    return json({ ok: true, state: {
+      protocol: "fleet-batch-v1", devices,
+      last_batch: this.aotBatchView(record.last_batch, now),
+      last_update: this.aotUpdateView(record.last_update), canary_release: record.canary_release || null,
+    }});
+  }
+
+  async broadcastFleetState() {
+    const response = await this.getFleetHubState();
+    if (!response.ok) return 0;
+    const payload = await response.json();
+    return this.sendAotPayload(this.aotDashboardTag("fleet"), { type: "aot_hub_state", ...payload.state });
+  }
+
+  async connectFleetDashboard(request) {
+    if (String(request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
+      return json({ ok: false, error: "upgrade_required" }, 426);
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.ctx.acceptWebSocket(server, [this.aotDashboardTag("fleet")]);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async connectFleetWebSocket(url, request) {
+    const deviceId = validDeviceId(url.searchParams.get("id"));
+    if (!deviceId) return json({ ok: false, error: "invalid_device_id" }, 400);
+    if (String(request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
+      return json({ ok: false, error: "upgrade_required" }, 426);
+    }
+    const tag = this.aotSocketTag("device", "fleet", deviceId);
+    for (const socket of this.ctx.getWebSockets(tag)) {
+      try { socket.close(4001, "replaced"); } catch (error) {}
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.ctx.acceptWebSocket(server, [tag]);
+    if (typeof server.serializeAttachment === "function") {
+      server.serializeAttachment({ device_id: deviceId, fleet: true, worker_version: null, capabilities: [] });
+    }
+    const record = await this.readFleet();
+    record.devices[deviceId] = { ...(record.devices[deviceId] || {}), device_id: deviceId, joined_at: record.devices[deviceId]?.joined_at || Date.now() };
+    await this.writeFleet(record);
+    await this.broadcastFleetState();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async dispatchFleetBatch(record, action, requestedTargetIds) {
+    const allowed = new Set([AOT_BATCH_ACTION, AOT_APPS_ACTION]);
+    if (!allowed.has(action)) return json({ ok: false, error: "invalid_batch_action" }, 400);
+    const seen = new Set();
+    const targets = [];
+    for (const raw of requestedTargetIds) {
+      const id = validDeviceId(raw);
+      if (!id || seen.has(id) || !record.devices[id]) return json({ ok: false, error: "invalid_batch_target" }, 400);
+      seen.add(id); targets.push(id);
+    }
+    if (!targets.length || targets.length > AOT_CONTROL_MAX_TARGETS) return json({ ok: false, error: "invalid_batch_targets" }, 400);
+    const createdAt = Date.now(), expiresAt = createdAt + AOT_BATCH_TTL_MS;
+    const actionId = `fleet-${createdAt}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    const devices = {}, online = [];
+    for (const id of targets) {
+      const connected = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", id)).length > 0;
+      devices[id] = { device_id: id, status: connected ? "SENT" : "SKIPPED_OFFLINE", history: [connected ? "SENT" : "SKIPPED_OFFLINE"], reason: connected ? null : "device_offline", updated_at: createdAt };
+      if (connected) online.push(id);
+    }
+    record.last_batch = { action_id: actionId, action, package: AOT_BATCH_PACKAGE, created_at: createdAt, expires_at: expiresAt, devices };
+    await this.writeFleet(record);
+    const payload = { type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: online, action_id: actionId, action, package: AOT_BATCH_PACKAGE, expires_at: expiresAt };
+    for (const id of online) {
+      if (!this.sendAotPayload(this.aotSocketTag("device", "fleet", id), payload)) {
+        devices[id].status = "FAILED"; devices[id].history.push("FAILED"); devices[id].reason = "websocket_send_failed";
+      }
+    }
+    await this.writeFleet(record);
+    return json({ ok: true, batch: this.aotBatchView(record.last_batch, createdAt) });
+  }
+
+  async controlFleetHub(request) {
+    const body = await this.readJson(request);
+    if (!body || body.protocol !== "fleet-batch-v1") return json({ ok: false, error: "invalid_hub_control" }, 400);
+    const record = await this.readFleet();
+    if (body.kind === "open_swift_backup" || body.kind === "open_swift_apps") {
+      return this.dispatchFleetBatch(record, body.kind === "open_swift_apps" ? AOT_APPS_ACTION : AOT_BATCH_ACTION, Array.isArray(body.target_device_ids) ? body.target_device_ids : []);
+    }
+    if (body.kind === "update_canary" || body.kind === "update_stable") {
+      record.followers = Object.fromEntries(this.fleetMembers(record).map((m) => [m.device_id, m]));
+      record.reference_device_id = this.fleetMembers(record)[0]?.device_id || null;
+      const response = await this.startWorkerUpdate("fleet", record, body.kind === "update_canary" ? "canary" : "stable");
+      await this.writeFleet(record);
+      return response;
+    }
+    return json({ ok: false, error: "unsupported_fleet_control" }, 400);
+  }
+
+  async dispatchFleetAck(request) {
+    const body = await this.readJson(request);
+    const id = validDeviceId(body?.device_id), actionId = String(body?.action_id || ""), action = String(body?.batch_action || "");
+    if (!id || !/^[A-Za-z0-9_-]{1,128}$/.test(actionId) || ![AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_UPDATE_ACTION].includes(action)) return json({ ok: false, error: "invalid_aot_ack" }, 400);
+    const record = await this.readFleet();
+    if (action === AOT_UPDATE_ACTION) {
+      record.followers = Object.fromEntries(this.fleetMembers(record).map((m) => [m.device_id, m]));
+      record.reference_device_id = this.fleetMembers(record)[0]?.device_id || id;
+      body.session_id = "fleet"; body.reference_device_id = record.reference_device_id; body.follower_device_id = id; body.protocol = "phase4-1";
+      const response = await this.dispatchAotAck(new Request(request.url, { method: "POST", body: JSON.stringify(body) }));
+      await this.writeFleet(await this.readAotSession("fleet"));
+      return response;
+    }
+    const batch = record.last_batch, device = batch?.devices?.[id];
+    const allowed = new Set(["ACCEPTED", "OPENED", "APPS_OPENED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "DUPLICATE"]);
+    if (!batch || batch.action_id !== actionId || batch.action !== action || !device || !allowed.has(body.status)) return json({ ok: false, error: "invalid_batch_ack" }, 400);
+    const terminal = new Set(["OPENED", "APPS_OPENED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE"]);
+    if (!terminal.has(device.status) && body.status !== "DUPLICATE") {
+      const next = Date.now() >= batch.expires_at ? "TIMEOUT" : body.status;
+      device.status = next; if (!device.history.includes(next)) device.history.push(next);
+      device.reason = ["FAILED", "FAILED_NOT_INSTALLED", "TIMEOUT"].includes(next) ? String(body.reason || "worker_reported_failure").slice(0, 160) : null;
+      device.executed = body.executed === true; device.updated_at = Date.now();
+      await this.writeFleet(record); await this.broadcastFleetState();
+    }
+    return json({ ok: true, action_id: actionId, device_id: id, status: device.status });
+  }
+
+  async registerFleetDevice(request, operation) {
+    const body = await this.readJson(request);
+    const deviceId = validDeviceId(body?.device_id || body?.new_device_id);
+    if (!deviceId) return json({ ok: false, error: "invalid_device_id" }, 400);
+    const record = await this.readFleet();
+    if (operation === "reset") {
+      const oldId = validDeviceId(body?.old_device_id);
+      if (!oldId || oldId === deviceId) return json({ ok: false, error: "invalid_identity_reset" }, 400);
+      delete record.devices[oldId]; this.aotLive.delete(oldId);
+      for (const socket of this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", oldId))) {
+        try { socket.close(4002, "identity_changed"); } catch (error) {}
+      }
+    }
+    record.devices[deviceId] = { ...(record.devices[deviceId] || {}), device_id: deviceId, joined_at: record.devices[deviceId]?.joined_at || Date.now() };
+    await this.writeFleet(record);
+    if (operation === "verify") {
+      const online = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", deviceId)).length > 0;
+      if (!online) return json({ ok: false, error: "device_not_online_in_aot_hub", online: false }, 409);
+      return json({ ok: true, device_id: deviceId, online: true, visible_in_hub: true });
+    }
+    return json({ ok: true, device_id: deviceId });
+  }
+
   async fetch(request) {
     const url =
       new URL(request.url);
@@ -2880,35 +3046,31 @@ export class FleetState
       request.method === "GET" &&
       url.pathname === "/aot/hub/state"
     ) {
-      return this.getAotHubState(
-        url
-      );
+      return this.getFleetHubState();
     }
 
     if (
       request.method === "POST" &&
       url.pathname === "/aot/hub/control"
     ) {
-      return this.controlAotHub(
-        request
-      );
+      return this.controlFleetHub(request);
     }
 
     if (request.method === "POST" && url.pathname === "/aot/registration/discover") {
-      return this.discoverAotRegistration(request);
+      return this.registerFleetDevice(request, "discover");
     }
     if (request.method === "POST" && url.pathname === "/aot/registration/reset") {
-      return this.resetAotIdentity(request);
+      return this.registerFleetDevice(request, "reset");
     }
     if (request.method === "POST" && url.pathname === "/aot/registration/verify") {
-      return this.verifyAotRegistration(request);
+      return this.registerFleetDevice(request, "verify");
     }
 
     if (
       request.method === "GET" &&
       url.pathname === "/aot/hub/dashboard-ws"
     ) {
-      return this.connectAotDashboard(url, request);
+      return this.connectFleetDashboard(request);
     }
 
 
@@ -2916,10 +3078,7 @@ export class FleetState
       request.method === "GET" &&
       url.pathname === "/aot/ws"
     ) {
-      return this.connectAotWebSocket(
-        url,
-        request
-      );
+      return this.connectFleetWebSocket(url, request);
     }
 
     if (
@@ -2935,9 +3094,7 @@ export class FleetState
       request.method === "POST" &&
       url.pathname === "/aot/ack"
     ) {
-      return this.dispatchAotAck(
-        request
-      );
+      return this.dispatchFleetAck(request);
     }
 
     if (

@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix="aot-bundle-updater-") as folder:
     state = base / "protected-state"
     state.mkdir()
     protected = {
-        "device_id.txt": "m37\n",
+        "device_id.txt": "m901\n",
         "device_group.txt": "NOVA\n",
         "aot_group_config.json": json.dumps({"enabled": True, "role": "reference", "session_id": "fixture"}),
         "agent_config.json": json.dumps({"worker_report_url": "https://example.invalid/report", "agent_report_secret": "fixture-secret"}),

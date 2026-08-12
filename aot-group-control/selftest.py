@@ -643,4 +643,41 @@ assert full_tap["hierarchy_source"] == "full_window"
 assert full_tap["mode"] == "semantic"
 assert tapped == [nodes[1].bounds.center]
 
+apps_xml = """<hierarchy><node class='Root' resource-id='root' clickable='false' enabled='true' scrollable='false' password='false' bounds='[0,0][100,100]'><node class='Button' resource-id='org.swiftapps.swiftbackup:id/nav_apps' text='Apps' content-desc='Apps' clickable='true' enabled='true' scrollable='false' selected='false' password='false' bounds='[0,50][100,100]'/></node></hierarchy>"""
+apps_selected_xml = apps_xml.replace("selected='false'", "selected='true'")
+apps_taps = []
+old_foreground = module.foreground_package
+old_dump = module.dump_ui_xml
+old_tap = module._tap_xy
+old_sleep = module.time.sleep
+try:
+    module.foreground_package = lambda: module.SWIFT_BACKUP_PACKAGE
+    dumps = iter((apps_xml, apps_xml, apps_selected_xml))
+    module.dump_ui_xml = lambda: next(dumps)
+    module._tap_xy = lambda x, y: apps_taps.append((x, y))
+    module.time.sleep = lambda _seconds: None
+    result = module.open_swift_apps()
+finally:
+    module.foreground_package = old_foreground
+    module.dump_ui_xml = old_dump
+    module._tap_xy = old_tap
+    module.time.sleep = old_sleep
+assert result["executed"] is True and apps_taps == [(50, 75)]
+
+apps_button = apps_xml[apps_xml.index("<node class='Button'"):apps_xml.index("</node></hierarchy>")]
+for bad_xml, reason in (
+    ("<hierarchy/>", "swift_apps_selector_not_found"),
+    (apps_xml.replace(apps_button, apps_button + apps_button), "swift_apps_selector_ambiguous"),
+):
+    try:
+        module.foreground_package = lambda: module.SWIFT_BACKUP_PACKAGE
+        module.dump_ui_xml = lambda value=bad_xml: value
+        module.open_swift_apps()
+    except module.AotControllerError as exc:
+        assert str(exc) == reason
+    else:
+        raise AssertionError(reason + " accepted")
+module.foreground_package = old_foreground
+module.dump_ui_xml = old_dump
+
 print("AOT_CONTROLLER_SELFTEST=OK")

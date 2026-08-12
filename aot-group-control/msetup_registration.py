@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 LOCAL_IDENTITY_STATE = (
     "aot_group_state.json",
     "aot_worker_update_pending.json",
@@ -82,28 +82,15 @@ def post_json(origin: str, secret: str, operation: str, body: dict[str, Any]) ->
     return data
 
 
-def assignment_config(device_id: str, response: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    role = str(response.get("role") or "")
-    session_id = str(response.get("session_id") or "")
-    reference_id = normalize_device_id(response.get("reference_device_id"))
-    if (
-        role not in {"reference", "follower"}
-        or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_id)
-        or not reference_id
-        or (role == "reference" and reference_id != device_id)
-        or (role == "follower" and reference_id == device_id)
-    ):
+def assignment_config(device_id: str, response: dict[str, Any]) -> dict[str, Any]:
+    if normalize_device_id(response.get("device_id")) != device_id:
         raise RegistrationError("registration_assignment_invalid")
-    config = {
+    return {
         "version": CONFIG_VERSION,
         "device_id": device_id,
         "enabled": True,
-        "role": role,
-        "session_id": session_id,
-        "reference_device_id": reference_id if role == "follower" else None,
         "open_package": None,
     }
-    return config, reference_id
 
 
 def write_config_atomic(path: pathlib.Path, config: dict[str, Any]) -> bool:
@@ -112,10 +99,7 @@ def write_config_atomic(path: pathlib.Path, config: dict[str, Any]) -> bool:
     except Exception:
         existing = None
     if isinstance(existing, dict):
-        core_keys = (
-            "device_id", "enabled", "role", "session_id",
-            "reference_device_id",
-        )
+        core_keys = ("device_id", "enabled")
         open_package = existing.get("open_package")
         open_package_valid = open_package in (None, "") or (
             isinstance(open_package, str)
@@ -144,13 +128,11 @@ def configure(args: argparse.Namespace) -> int:
         "device_id": device_id,
         "previous_device_id": previous_id,
     })
-    config, reference_id = assignment_config(device_id, response)
+    config = assignment_config(device_id, response)
     changed = write_config_atomic(pathlib.Path(args.aot_config), config)
     print("AOT_REGISTRATION=CONFIGURED")
     print("AOT_CONFIG_WRITE=" + ("UPDATED" if changed else "UNCHANGED"))
-    print("ROLE=" + config["role"])
-    print("SESSION_ID=" + config["session_id"])
-    print("REFERENCE_DEVICE_ID=" + reference_id)
+    print("MODE=FLEET")
     return 0
 
 
@@ -190,13 +172,9 @@ def reset_identity(args: argparse.Namespace) -> int:
         raise RegistrationError("old_relay_did_not_stop")
     config = json.loads(pathlib.Path(args.aot_config).read_text(encoding="utf-8"))
     origin, secret = load_agent_auth(pathlib.Path(args.agent_config), args.origin)
-    reference_id = normalize_device_id(config.get("reference_device_id")) or new_id
     post_json(origin, secret, "reset", {
         "old_device_id": old_id,
         "new_device_id": new_id,
-        "session_id": config.get("session_id"),
-        "role": config.get("role"),
-        "reference_device_id": reference_id,
     })
     state_root = pathlib.Path(args.state_root)
     for name in LOCAL_IDENTITY_STATE:
@@ -210,7 +188,6 @@ def verify(args: argparse.Namespace) -> int:
     config = json.loads(pathlib.Path(args.aot_config).read_text(encoding="utf-8"))
     if not device_id or config.get("device_id") != device_id:
         raise RegistrationError("aot_config_identity_mismatch")
-    reference_id = normalize_device_id(config.get("reference_device_id")) or device_id
     origin, secret = load_agent_auth(pathlib.Path(args.agent_config), args.origin)
     deadline = time.monotonic() + max(1, min(int(args.timeout), 60))
     last_error = "device_not_online_in_aot_hub"
@@ -218,9 +195,6 @@ def verify(args: argparse.Namespace) -> int:
         try:
             data = post_json(origin, secret, "verify", {
                 "device_id": device_id,
-                "role": config.get("role"),
-                "session_id": config.get("session_id"),
-                "reference_device_id": reference_id,
             })
             if data.get("online") is True and data.get("visible_in_hub") is True:
                 print("AOT_SERVER_ONLINE=YES")

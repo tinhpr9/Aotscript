@@ -43,16 +43,17 @@ MAX_WS_FRAME_BYTES = 512 * 1024
 MAX_HTTP_JSON_BYTES = 384 * 1024
 MAX_PREVIEW_BYTES = 180 * 1024
 PROCESSED_ACTIONS_MAX = 256
-HUB_PROTOCOL_VERSION = "phase4-1"
+HUB_PROTOCOL_VERSION = "fleet-batch-v1"
 LIVE_STATUS_INTERVAL_SECONDS = 2.5
 SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
 OPEN_SWIFT_BACKUP_ACTION = "OPEN_SWIFT_BACKUP"
+OPEN_SWIFT_APPS_ACTION = "OPEN_SWIFT_APPS"
 SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.11.8"
-WORKER_CAPABILITIES = ("dynamic_update_channel",)
+WORKER_VERSION = "aot-worker-2026.08.11.9"
+WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic")
 
 
 class AotRelayError(RuntimeError):
@@ -150,18 +151,12 @@ def websocket_url(
     report_url: str,
     *,
     device_id: str,
-    role: str,
-    session_id: str,
+    role: str | None = None,
+    session_id: str | None = None,
 ) -> str:
     parsed = urllib.parse.urlparse(report_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
-    query = urllib.parse.urlencode(
-        {
-            "device_id": device_id,
-            "role": role,
-            "session_id": session_id,
-        }
-    )
+    query = urllib.parse.urlencode({"device_id": device_id})
     return urllib.parse.urlunparse(
         (
             scheme,
@@ -528,21 +523,18 @@ def _execute_action(action: dict[str, Any], precondition: str) -> dict[str, Any]
 def _send_batch_ack(
     cfg: dict[str, str],
     *,
-    session_id: str,
-    reference_device_id: str,
     device_id: str,
     action_id: str,
+    action: str,
     status: str,
     executed: bool,
     reason: str | None = None,
 ) -> None:
     payload = {
         "protocol": HUB_PROTOCOL_VERSION,
-        "session_id": session_id,
-        "reference_device_id": reference_device_id,
-        "follower_device_id": device_id,
+        "device_id": device_id,
         "action_id": action_id,
-        "batch_action": OPEN_SWIFT_BACKUP_ACTION,
+        "batch_action": action,
         "status": status,
         "executed": executed,
     }
@@ -629,22 +621,20 @@ def _handle_batch_action(
     state: dict[str, Any],
     *,
     local_id: str,
-    session_id: str,
     message: dict[str, Any],
 ) -> bool:
     if message.get("type") != "aot_batch_action":
         return False
     if (
-        message.get("protocol") != HUB_PROTOCOL_VERSION
-        or normalize_session_id(message.get("session_id")) != session_id
-        or message.get("action") != OPEN_SWIFT_BACKUP_ACTION
+        message.get("protocol") not in {HUB_PROTOCOL_VERSION, "phase4-1"}
+        or message.get("action") not in {OPEN_SWIFT_BACKUP_ACTION, OPEN_SWIFT_APPS_ACTION}
         or message.get("package") != SWIFT_BACKUP_PACKAGE
         or local_id not in normalize_target_ids(message.get("target_device_ids"))
     ):
         return True
     action_id = normalize_action_id(message.get("action_id"))
-    reference_id = normalize_device_id(message.get("reference_device_id"))
-    if not action_id or not reference_id:
+    action = str(message.get("action"))
+    if not action_id:
         return True
     try:
         expires_at = int(message.get("expires_at") or 0)
@@ -653,10 +643,9 @@ def _handle_batch_action(
     if expires_at <= int(time.time() * 1000):
         _send_batch_ack(
             cfg,
-            session_id=session_id,
-            reference_device_id=reference_id,
             device_id=local_id,
             action_id=action_id,
+            action=action,
             status="TIMEOUT",
             executed=False,
         )
@@ -664,10 +653,9 @@ def _handle_batch_action(
     if action_already_processed(state, action_id):
         _send_batch_ack(
             cfg,
-            session_id=session_id,
-            reference_device_id=reference_id,
             device_id=local_id,
             action_id=action_id,
+            action=action,
             status="DUPLICATE",
             executed=False,
         )
@@ -675,15 +663,14 @@ def _handle_batch_action(
     mark_action_processed(state, action_id)
     _send_batch_ack(
         cfg,
-        session_id=session_id,
-        reference_device_id=reference_id,
         device_id=local_id,
         action_id=action_id,
+        action=action,
         status="ACCEPTED",
         executed=False,
     )
     try:
-        executed = _open_swift_backup()
+        executed = _open_swift_backup() if action == OPEN_SWIFT_BACKUP_ACTION else bool(controller.open_swift_apps()["executed"])
     except (AotRelayError, controller.AotControllerError) as exc:
         status = (
             "FAILED_NOT_INSTALLED"
@@ -692,10 +679,9 @@ def _handle_batch_action(
         )
         _send_batch_ack(
             cfg,
-            session_id=session_id,
-            reference_device_id=reference_id,
             device_id=local_id,
             action_id=action_id,
+            action=action,
             status=status,
             executed=False,
             reason=str(exc).split(":", 1)[0],
@@ -703,11 +689,10 @@ def _handle_batch_action(
         return True
     _send_batch_ack(
         cfg,
-        session_id=session_id,
-        reference_device_id=reference_id,
         device_id=local_id,
         action_id=action_id,
-        status="OPENED",
+        action=action,
+        status="OPENED" if action == OPEN_SWIFT_BACKUP_ACTION else "APPS_OPENED",
         executed=executed,
     )
     return True
@@ -717,22 +702,20 @@ def _handle_worker_update(
     state: dict[str, Any],
     *,
     local_id: str,
-    session_id: str,
-    reference_device_id: str,
     message: dict[str, Any],
+    session_id: str | None = None,
+    reference_device_id: str | None = None,
 ) -> bool:
     if message.get("type") != "aot_batch_action" or message.get("action") != UPDATE_WORKER_ACTION:
         return False
     if (
-        message.get("protocol") != HUB_PROTOCOL_VERSION
-        or normalize_session_id(message.get("session_id")) != session_id
+        message.get("protocol") not in {HUB_PROTOCOL_VERSION, "phase4-1"}
         or local_id not in normalize_target_ids(message.get("target_device_ids"))
     ):
         return True
     action_id = normalize_action_id(message.get("action_id"))
     channel = str(message.get("channel") or "")
-    reference_id = normalize_device_id(message.get("reference_device_id"))
-    if not action_id or not reference_id or reference_id != reference_device_id:
+    if not action_id:
         return True
     try:
         if int(message.get("expires_at") or 0) <= int(time.time() * 1000):
@@ -762,7 +745,7 @@ def _handle_worker_update(
     command = [
         sys.executable, "-u", str(BOOTSTRAP_LAUNCHER), "update-action",
         "--action-id", action_id, "--channel", channel,
-        "--reference-device", reference_id,
+        "--reference-device", local_id,
         "--release-metadata", release_metadata,
     ]
     subprocess.Popen(
@@ -807,17 +790,15 @@ def _ws_send_json(
 
 def _live_status_payload(
     *,
-    role: str,
-    session_id: str,
     device_id: str,
     include_preview: bool,
+    role: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     snap = controller.snapshot(include_nodes=False)
     payload: dict[str, Any] = {
         "type": "aot_status",
         "protocol": HUB_PROTOCOL_VERSION,
-        "role": role,
-        "session_id": session_id,
         "device_id": device_id,
         "worker_version": WORKER_VERSION,
         "capabilities": list(WORKER_CAPABILITIES),
@@ -850,15 +831,13 @@ def _live_status_payload(
 def _send_live_status(
     sock: socket.socket,
     *,
-    role: str,
-    session_id: str,
     device_id: str,
     previous_preview_sha: str | None,
     force_preview: bool = False,
+    role: str | None = None,
+    session_id: str | None = None,
 ) -> str | None:
     payload = _live_status_payload(
-        role=role,
-        session_id=session_id,
         device_id=device_id,
         include_preview=True,
     )
@@ -1767,6 +1746,76 @@ def follower_loop(
 
 
 
+def fleet_loop(*, open_package: str | None = None) -> int:
+    local_id = normalize_device_id(_read_small(DEVICE_ID_PATH))
+    group = _read_small(DEVICE_GROUP_PATH).upper()
+    if not local_id:
+        raise AotRelayError("invalid_local_device_id")
+    if group not in {"NOVA", "MARMOT"}:
+        raise AotRelayError("invalid_local_device_group")
+    if not controller.root_available():
+        raise AotRelayError("root_not_available")
+    if open_package:
+        _launch_package(open_package)
+    cfg = load_agent_config()
+    url = websocket_url(cfg["worker_report_url"], device_id=local_id)
+    state = _load_state()
+    reconnect_delay = 2
+    while True:
+        sock = None
+        try:
+            sock = ws_connect(url, cfg["agent_report_secret"])
+            sock.settimeout(2)
+            reconnect_delay = 2
+            print(f"AOT_DEVICE={local_id}")
+            print("AOT_FLEET_CHANNEL=CONNECTED")
+            try:
+                updater.notify_pending_healthy()
+            except Exception:
+                pass
+            _send_live_status(sock, device_id=local_id, previous_preview_sha=None)
+            next_status = time.monotonic() + LIVE_STATUS_INTERVAL_SECONDS
+            while True:
+                if time.monotonic() >= next_status:
+                    try:
+                        _send_live_status(sock, device_id=local_id, previous_preview_sha=None)
+                    except (OSError, controller.AotControllerError):
+                        pass
+                    next_status = time.monotonic() + LIVE_STATUS_INTERVAL_SECONDS
+                try:
+                    opcode, payload = _ws_recv_frame(sock)
+                except socket.timeout:
+                    continue
+                if opcode == 0x8:
+                    raise ConnectionError("websocket_closed")
+                if opcode == 0x9:
+                    _ws_send_frame(sock, 0xA, payload)
+                    continue
+                if opcode != 0x1:
+                    continue
+                try:
+                    message = json.loads(payload.decode("utf-8"))
+                except Exception:
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                if _handle_worker_update(state, local_id=local_id, message=message):
+                    continue
+                _handle_batch_action(cfg, state, local_id=local_id, message=message)
+        except KeyboardInterrupt:
+            raise
+        except (OSError, ConnectionError, AotRelayError, controller.AotControllerError) as exc:
+            print("AOT_FLEET_CHANNEL=RECONNECT:" + type(exc).__name__)
+            time.sleep(reconnect_delay)
+            reconnect_delay = min(30, reconnect_delay * 2)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+
 def _recv_ack(
     sock: socket.socket,
     *,
@@ -2079,39 +2128,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
 
-    follower = sub.add_parser("follower")
-    follower.add_argument("--session", required=True)
-    follower.add_argument(
-        "--reference-device",
-        required=True,
-    )
-    follower.add_argument("--open-package")
+    fleet = sub.add_parser("fleet")
+    fleet.add_argument("--open-package")
 
-    reference = sub.add_parser("reference")
-    reference.add_argument("--session", required=True)
-    reference.add_argument("--open-package")
-
-    reference_test_parser = sub.add_parser(
-        "reference-test"
-    )
-    reference_test_parser.add_argument(
-        "--session",
-        required=True,
-    )
-    reference_test_parser.add_argument(
-        "--follower",
-        required=True,
-    )
-    reference_test_parser.add_argument(
-        "--selector",
-        default=(
-            "org.swiftapps.swiftbackup:id/nav_account"
-        ),
-    )
-    reference_test_parser.add_argument(
-        "--open-package",
-        default="org.swiftapps.swiftbackup",
-    )
     return parser
 
 
@@ -2119,45 +2138,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        session_id = normalize_session_id(
-            args.session
-        )
-        if not session_id:
-            raise AotRelayError(
-                "invalid_session_id"
-            )
-        if args.command == "follower":
-            reference = normalize_device_id(
-                args.reference_device
-            )
-            if not reference:
-                raise AotRelayError(
-                    "invalid_reference_device"
-                )
-            return follower_loop(
-                session_id=session_id,
-                reference_device=reference,
-                open_package=args.open_package,
-            )
-        if args.command == "reference":
-            return reference_loop(
-                session_id=session_id,
-                open_package=args.open_package,
-            )
-        if args.command == "reference-test":
-            follower = normalize_device_id(
-                args.follower
-            )
-            if not follower:
-                raise AotRelayError(
-                    "invalid_follower_device"
-                )
-            return reference_test(
-                session_id=session_id,
-                follower_id=follower,
-                selector=args.selector,
-                open_package=args.open_package,
-            )
+        if args.command == "fleet":
+            return fleet_loop(open_package=args.open_package)
         raise AotRelayError(
             "unknown_command"
         )

@@ -27,7 +27,7 @@ DEVICE_GROUP_PATH = pathlib.Path(
 LOG_PATH = pathlib.Path(
     "/storage/emulated/0/Download/AOT_Group_Control.log"
 )
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 
 class AotRuntimeError(RuntimeError):
@@ -47,11 +47,6 @@ def normalize_device_id(value: Any) -> str | None:
     if not match:
         return None
     return f"m{match.group(1)}"
-
-
-def normalize_session_id(value: Any) -> str | None:
-    raw = str(value or "").strip()
-    return raw if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", raw) else None
 
 
 def normalize_package(value: Any) -> str | None:
@@ -82,24 +77,6 @@ def validate_config_data(
     configured_device_id = normalize_device_id(data.get("device_id"))
     if configured_device_id and local_device_id and configured_device_id != local_device_id:
         raise AotRuntimeError("config_device_id_mismatch")
-    role = str(data.get("role") or "").strip().lower()
-    if role not in {"reference", "follower"}:
-        raise AotRuntimeError("invalid_role")
-    session_id = normalize_session_id(data.get("session_id"))
-    if not session_id:
-        raise AotRuntimeError("invalid_session_id")
-    reference_device_id = None
-    if role == "follower":
-        reference_device_id = normalize_device_id(
-            data.get("reference_device_id")
-        )
-        if not reference_device_id:
-            raise AotRuntimeError("invalid_reference_device_id")
-        if (
-            local_device_id
-            and reference_device_id == local_device_id
-        ):
-            raise AotRuntimeError("reference_equals_local_device")
     open_package = None
     if data.get("open_package") not in (None, ""):
         open_package = normalize_package(data.get("open_package"))
@@ -109,9 +86,6 @@ def validate_config_data(
         "version": CONFIG_VERSION,
         "device_id": configured_device_id or local_device_id,
         "enabled": enabled,
-        "role": role,
-        "session_id": session_id,
-        "reference_device_id": reference_device_id,
         "open_package": open_package,
     }
 
@@ -223,7 +197,7 @@ def _relay_identity_matches(
         return False
 
     relay_args = args[relay_index + 1:]
-    if not relay_args or relay_args[0] != config["role"]:
+    if not relay_args or relay_args[0] != "fleet":
         return False
 
     def option_value(name: str) -> str | None:
@@ -241,14 +215,7 @@ def _relay_identity_matches(
             else None
         )
 
-    if option_value("--session") != config["session_id"]:
-        return False
-    if config["role"] == "follower":
-        return (
-            option_value("--reference-device")
-            == config.get("reference_device_id")
-        )
-    return option_value("--reference-device") is None
+    return option_value("--open-package") == config.get("open_package")
 
 
 def matching_relay_pids(config: dict[str, Any]) -> list[int]:
@@ -290,17 +257,8 @@ def relay_command(config: dict[str, Any]) -> list[str]:
         sys.executable,
         "-u",
         str(RELAY_PATH),
-        config["role"],
-        "--session",
-        config["session_id"],
+        "fleet",
     ]
-    if config["role"] == "follower":
-        command.extend(
-            [
-                "--reference-device",
-                str(config["reference_device_id"]),
-            ]
-        )
     if config.get("open_package"):
         command.extend(
             [
@@ -346,19 +304,13 @@ def configure(args: argparse.Namespace) -> int:
         "version": CONFIG_VERSION,
         "device_id": device_id,
         "enabled": not args.disabled,
-        "role": args.role,
-        "session_id": args.session,
-        "reference_device_id": args.reference_device,
         "open_package": args.open_package,
     }
     save_config(data)
     print("AOT_CONFIG=SUCCESS")
     print(f"DEVICE_ID={device_id}")
     print(f"DEVICE_GROUP={group}")
-    print(f"ROLE={args.role}")
-    print(f"SESSION={args.session}")
-    if args.role == "follower":
-        print(f"REFERENCE_DEVICE={args.reference_device}")
+    print("MODE=FLEET")
     print("SECRET_OUTPUT=NO")
     return 0
 
@@ -371,51 +323,10 @@ def status() -> int:
     pids = matching_relay_pids(config)
     print("AOT_CONFIG=OK")
     print(f"ENABLED={'YES' if config['enabled'] else 'NO'}")
-    print(f"ROLE={config['role']}")
-    print(f"SESSION={config['session_id']}")
+    print("MODE=FLEET")
     print("PIDS=" + (",".join(map(str, pids)) if pids else "NONE"))
     print("SECRET_OUTPUT=NO")
     return 0
-
-
-def run_e2e(args: argparse.Namespace) -> int:
-    config = load_config()
-    if config["role"] != "reference":
-        raise AotRuntimeError("e2e_requires_reference_role")
-    followers = []
-    seen = set()
-    for raw in args.follower:
-        device_id = normalize_device_id(raw)
-        if not device_id:
-            raise AotRuntimeError("invalid_e2e_follower")
-        if device_id in seen:
-            continue
-        seen.add(device_id)
-        followers.append(device_id)
-    if not followers:
-        raise AotRuntimeError("e2e_followers_empty")
-    stop_runtime(config)
-    command = [
-        sys.executable,
-        "-u",
-        str(E2E_PATH),
-        "--session",
-        config["session_id"],
-    ]
-    for follower in followers:
-        command.extend(["--follower", follower])
-    package = args.package or config.get("open_package")
-    if package:
-        command.extend(["--package", package])
-    try:
-        result = subprocess.run(command, check=False)
-        return int(result.returncode)
-    finally:
-        try:
-            start_runtime(config)
-        except AotRuntimeError as exc:
-            print("AOT_RUNTIME_RESTART=FAILED")
-            print("REASON=" + str(exc))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -425,13 +336,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     config = sub.add_parser("configure")
-    config.add_argument(
-        "--role",
-        choices=("reference", "follower"),
-        required=True,
-    )
-    config.add_argument("--session", required=True)
-    config.add_argument("--reference-device")
     config.add_argument("--open-package")
     config.add_argument("--disabled", action="store_true")
 
@@ -440,13 +344,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("auto-start")
     sub.add_parser("status")
 
-    e2e = sub.add_parser("e2e")
-    e2e.add_argument(
-        "--follower",
-        action="append",
-        required=True,
-    )
-    e2e.add_argument("--package")
     return parser
 
 
@@ -473,8 +370,6 @@ def main(argv: list[str] | None = None) -> int:
                 + (",".join(map(str, stopped)) if stopped else "NONE")
             )
             return 0
-        if args.command == "e2e":
-            return run_e2e(args)
         raise AotRuntimeError("unknown_command")
     except AotRuntimeError as exc:
         print("AOT_RUNTIME=FAILED")

@@ -1,155 +1,30 @@
 import fs from "node:fs/promises";
 import vm from "node:vm";
 
-const workerUrl = new URL("./worker.js", import.meta.url);
-const moduleCache = new Map();
-const moduleContext = vm.createContext({
-  URL, Request, Response, Headers, JSON, Map, Set, Object, Array,
-  String, Number, Boolean, Math, Date, console,
-});
-
-const cloudflareModule = new vm.SyntheticModule(
-  ["DurableObject"],
-  function () {
-    this.setExport("DurableObject", class DurableObject {
-      constructor(ctx, env) {
-        this.ctx = ctx;
-        this.env = env;
-      }
-    });
-  },
-  { context: moduleContext }
-);
-
-async function loadModule(url) {
-  if (moduleCache.has(url.href)) {
-    return moduleCache.get(url.href);
-  }
-  const source = await fs.readFile(url, "utf8");
-  const loaded = new vm.SourceTextModule(source, {
-    context: moduleContext,
-    identifier: url.href,
-  });
-  moduleCache.set(url.href, loaded);
-  await loaded.link(async (specifier) => {
-    if (specifier === "cloudflare:workers") {
-      return cloudflareModule;
-    }
-    return loadModule(new URL(specifier, url));
-  });
-  return loaded;
+const source = await fs.readFile(new URL("./worker.js", import.meta.url), "utf8");
+const start = source.indexOf("function fleetHubHtml()");
+const end = source.indexOf("async function handleAotHubPage", start);
+if (start < 0 || end < 0) throw new Error("fleet dashboard unavailable");
+const dashboard = source.slice(start, end);
+for (const required of [
+  "Chọn máy online", "Bỏ chọn hết", "Mở Swift Backup", "Mở Apps",
+  "open_swift_backup", "open_swift_apps", "target_device_ids", "WebSocket",
+]) {
+  if (!dashboard.includes(required)) throw new Error(`dashboard missing ${required}`);
 }
-
-const workerModule = await loadModule(workerUrl);
-await workerModule.evaluate();
-const response = await workerModule.namespace.default.fetch(
-  new Request("https://test/aot/hub"),
-  {}
-);
-const html = await response.text();
-const scriptMatch = html.match(
-  /<script>\s*([\s\S]*?)<\/script>\s*<\/body>/
-);
-const defaultMatch = html.match(
-  /<input id="session" value="([^"]*)"/
-);
-if (!scriptMatch || !defaultMatch) {
-  throw new Error("dashboard HTML structure unavailable");
+for (const forbidden of [
+  "REFERENCE", "FOLLOWERS", "referencePreview", "preview_b64", "PAUSE",
+  "RESUME", "SWIPE", "session_id", "setInterval(", "x_norm", "y_norm",
+]) {
+  if (dashboard.includes(forbidden)) throw new Error(`legacy dashboard exposed ${forbidden}`);
 }
-
-class LocalStorage {
-  constructor(values) {
-    this.values = values || new Map();
-  }
-  getItem(key) {
-    return this.values.has(key) ? this.values.get(key) : null;
-  }
-  setItem(key, value) {
-    this.values.set(key, String(value));
-  }
+if (!dashboard.includes("Math.random()") || !dashboard.includes("Math.pow(2,retry++)")) {
+  throw new Error("dashboard reconnect jitter/backoff missing");
 }
-
-function loadDashboard(storage) {
-  const elementIds = [
-    "session", "error", "reference", "followers", "lastControl",
-    "online", "synced", "out", "offline", "refresh", "apply",
-    "pause", "resume", "back", "up", "down", "openSwift",
-    "batchResults", "batchTargets", "selectOnline", "clearSelection",
-    "updateCanary", "updateStable", "updateError", "updateHint", "updateResults",
-  ];
-  const elements = new Map(
-    elementIds.map((id) => [id, {
-      id,
-      value: id === "session" ? defaultMatch[1] : "",
-      textContent: "",
-      innerHTML: "",
-      disabled: false,
-      onclick: null,
-      querySelectorAll() { return []; },
-    }])
-  );
-  const document = {
-    getElementById(id) {
-      return elements.get(id) || null;
-    },
-  };
-  const window = {
-    Telegram: null,
-    localStorage: storage,
-    setTimeout() {},
-    clearTimeout() {},
-    location: { protocol: "https:", host: "test" },
-  };
-  vm.runInNewContext(scriptMatch[1], {
-    window,
-    document,
-    console,
-    encodeURIComponent,
-  });
-  return elements;
+if (!source.includes('const AOT_HUB_PROTOCOL_VERSION = "fleet-batch-v1"')) {
+  throw new Error("fleet protocol version missing");
 }
-
-const storage = new LocalStorage();
-let elements = loadDashboard(storage);
-if (elements.get("session").value !== defaultMatch[1]) {
-  throw new Error("missing storage did not preserve fallback session");
+if (!source.includes('["OPEN_SWIFT_BACKUP", "OPEN_SWIFT_APPS", "UPDATE_WORKER"]')) {
+  throw new Error("batch ACK actions incomplete");
 }
-
-elements.get("session").value = "team-session-3";
-elements.get("apply").onclick();
-if (storage.getItem("aot-hub-session-id") !== "team-session-3") {
-  throw new Error("Apply did not persist selected session");
-}
-
-elements = loadDashboard(storage);
-if (elements.get("session").value !== "team-session-3") {
-  throw new Error("reload did not restore persisted session");
-}
-
-const invalidStorage = new LocalStorage(
-  new Map([["aot-hub-session-id", "invalid session!"]])
-);
-elements = loadDashboard(invalidStorage);
-if (elements.get("session").value !== defaultMatch[1]) {
-  throw new Error("invalid stored session overrode fallback");
-}
-
-if (
-  !html.includes("Chọn máy online") ||
-  !html.includes("Bỏ chọn hết") ||
-  !html.includes("Mở Swift Backup") ||
-  !scriptMatch[1].includes('kind: "open_swift_backup"') ||
-  !scriptMatch[1].includes("target_device_ids: onlineSelected") ||
-  !scriptMatch[1].includes("swift_backup_not_foreground") ||
-  !scriptMatch[1].includes("item.reason") ||
-  !scriptMatch[1].includes("protocol_rejected:") ||
-  !scriptMatch[1].includes("data.message") ||
-  !html.includes('id="updateError" class="error"') ||
-  html.includes("Canary:") ||
-  !scriptMatch[1].includes("new window.WebSocket") ||
-  scriptMatch[1].includes("setInterval(")
-) {
-  throw new Error("selected WebSocket Swift Backup batch UI is invalid");
-}
-
-console.log("AOT_HUB_SESSION_SELFTEST=OK");
+console.log("AOT_HUB_FLEET_SELFTEST=OK");

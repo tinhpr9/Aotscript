@@ -28,14 +28,14 @@ worker actions in `cloudflare-worker/`.
 - Each manifest must retain schema version 2, its explicit channel, a unique
   release version, `minimum_bootstrap_version`, and the URL plus SHA-256 of
   every release file. Canary targets are selected dynamically by AOT Hub from
-  the current session's ONLINE devices; never bind a channel to Device IDs.
+  the current fleet's ONLINE devices; never bind a channel to Device IDs.
 - Do not add machine identity, group, session, secrets, or other device state
   to a release. Those values remain outside releases under the Shouko storage
   directory and must survive updates byte-for-byte.
 - The schema-2 raw manifests exist solely for the one-time upgrade of deployed
-  Worker `2026.08.11.7`, whose bootstrap predates pinned release metadata.
-  Worker `2026.08.11.8` and later must use the schema-3 manifest asset from the
-  exact GitHub Release and must not consult those transition manifests.
+  pre-fleet workers through the isolated update-only bridge. Fleet Worker
+  `2026.08.11.9` and later must use the schema-3 manifest asset from the exact
+  GitHub Release and must not consult mutable transition manifests.
 
 ## Safety and compatibility
 
@@ -56,6 +56,8 @@ worker actions in `cloudflare-worker/`.
   verified `legacy_relay_bridge.py` top-level manifest asset to enter Bootstrap
   v2. This bridge is capability-based, never identity-based; capable workers
   receive only the requested channel.
+- Fleet protocol identity is Device ID only. Do not restore roles, control
+  sessions, cross-device preview, coordinate actions, capture, or replay.
 - Preserve Durable Object WebSocket Hibernation and event-driven dashboard
   updates. Do not add periodic polling or a new paid service.
 
