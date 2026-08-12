@@ -38,9 +38,19 @@ class SystemEnvironment:
         if not re.match(r'^[a-zA-Z0-9_.]+$', package):
             return False
         try:
-            # We use monkey or am to launch intent
-            cmd_str = f"am start -a android.intent.action.VIEW -d {shlex.quote(url)} {shlex.quote(package)}"
-            result = subprocess.run(["su", "-c", cmd_str], capture_output=True, text=True)
+            subprocess.run(["su", "-c", f"am force-stop {shlex.quote(package)}"])
+            self.sleep(2)
+
+            cmd_splash = f"am start -a android.intent.action.MAIN -n {shlex.quote(package)}/com.roblox.client.startup.ActivitySplash"
+            subprocess.run(["su", "-c", cmd_splash])
+            self.sleep(10)
+
+            formatted_url = url
+            if 'roblox.com' not in url and url.isdigit():
+                formatted_url = f"roblox://placeID={url}"
+
+            cmd_join = f"am start -a android.intent.action.VIEW -n {shlex.quote(package)}/com.roblox.client.ActivityProtocolLaunch -d {shlex.quote(formatted_url)}"
+            result = subprocess.run(["su", "-c", cmd_join], capture_output=True, text=True)
             return "Starting: Intent" in result.stdout or result.returncode == 0
         except Exception:
             return False
@@ -136,7 +146,7 @@ class Monitor:
                         self.env.log(logging.ERROR, f"[{pkg}] FAILED after {retries} retries.")
                     self.state[pkg]["status"] = "FAILED"
                     continue
-                
+
                 # Check cooldown / delay
                 last_launch = self.state[pkg].get("last_launch", 0)
                 last_success = self.state[pkg].get("last_success", 0)
@@ -204,6 +214,17 @@ def is_rejoin_daemon(pid: int) -> bool:
         return "rejoin_daemon.py" in cmdline
     except OSError:
         return False
+
+def discover_roblox_packages() -> list:
+    try:
+        result = subprocess.run(["su", "-c", "pm list packages com.roblox"], capture_output=True, text=True)
+        packages = []
+        for line in result.stdout.strip().splitlines():
+            if line.startswith("package:"):
+                packages.append(line.replace("package:", "").strip())
+        return packages
+    except Exception:
+        return []
 
 def acquire_lock() -> bool:
     ConfigManager.ensure_dir()

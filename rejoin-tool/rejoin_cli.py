@@ -124,7 +124,8 @@ def interactive_menu():
         print("5. Enable/disable package")
         print("6. Install Termux:Boot")
         print("7. Configuration details")
-        print("8. Exit")
+        print("8. Discover packages")
+        print("9. Exit")
         choice = input("Select an option: ").strip()
 
         if choice == "1":
@@ -151,7 +152,20 @@ def interactive_menu():
             config = ConfigManager.load_config()
             import json
             print(json.dumps(config, indent=2))
-        elif choice == "8" or not choice:
+        elif choice == "8":
+            from rejoin_core import discover_roblox_packages
+            packages = discover_roblox_packages()
+            if not packages:
+                print("No Roblox packages found.")
+            else:
+                print(f"Found {len(packages)} packages.")
+                add = input("Do you want to add them? (y/n): ").strip().lower()
+                if add == 'y':
+                    url = input("Join URL (e.g., roblox://... or Game ID): ").strip()
+                    for p in packages:
+                        ConfigManager.add_package(p, url)
+                        print(f"Added {p}")
+        elif choice == "9" or not choice:
             break
         else:
             print("Invalid choice")
@@ -160,7 +174,7 @@ def main():
     parser = argparse.ArgumentParser(description="Rejoin Tool")
     parser.add_argument("command", nargs="?", choices=[
         "setup", "packages", "add", "remove", "enable", "disable", 
-        "start", "stop", "status", "logs", "install-boot", "uninstall-boot"
+        "start", "stop", "status", "logs", "install-boot", "uninstall-boot", "discover"
     ], help="Command to run")
     
     parser.add_argument("args", nargs=argparse.REMAINDER)
@@ -210,6 +224,19 @@ def main():
         if args.args:
             ConfigManager.set_package_enabled(args.args[0], False)
             print(f"Disabled {args.args[0]}")
+    elif cmd == "discover":
+        from rejoin_core import discover_roblox_packages
+        packages = discover_roblox_packages()
+        if not packages:
+            print("No Roblox packages found.")
+        else:
+            print(f"Found {len(packages)} packages:")
+            for p in packages:
+                print(f" - {p}")
+                if args.args:
+                    url = " ".join(args.args)
+                    ConfigManager.add_package(p, url)
+                    print(f"   Added {p} with URL {url}")
 
 if __name__ == "__main__":
     main()
