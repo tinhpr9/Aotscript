@@ -175,10 +175,11 @@ class TestRejoin(unittest.TestCase):
 
         script = f"""
 import sys
-sys.path.append('{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}')
+sys.path.append({repr(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))})
 import rejoin_core
-rejoin_core.CONFIG_DIR = '{self.test_dir}'
-rejoin_core.LOCK_FILE = '{rejoin_core.LOCK_FILE}'
+rejoin_core.CONFIG_DIR = {repr(self.test_dir)}
+rejoin_core.RUNTIME_DIR = {repr(self.test_runtime_dir)}
+rejoin_core.LOCK_FILE = {repr(rejoin_core.LOCK_FILE)}
 success = rejoin_core.acquire_lock()
 sys.exit(0 if success else 1)
 """
@@ -447,6 +448,42 @@ sys.exit(0 if success else 1)
             rejoin_cli.stop_daemon()
 
         mock_print.assert_any_call("Failed to stop: shutdown still pending.")
+
+    def test_missing_packages_safe(self):
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write("{}")
+
+        ConfigManager.remove_package("pkg1")
+        ConfigManager.set_package_enabled("pkg1", True)
+
+    def test_check_interval_validation(self):
+        env = MockEnv()
+        monitor = Monitor(env, lambda: False)
+
+        def run_with_interval(val):
+            env.sleep_history.clear()
+            conf = {"settings": {"check_interval_sec": val}}
+
+            def fake_load_config(*args, **kwargs):
+                fake_load_config.calls += 1
+                if fake_load_config.calls > 2:
+                    raise StopIteration("STOP")
+                return conf
+            fake_load_config.calls = 0
+
+            with patch.object(ConfigManager, 'load_config', side_effect=fake_load_config):
+                try:
+                    monitor.run_loop()
+                except StopIteration:
+                    pass
+            return len(env.sleep_history)
+
+        self.assertEqual(run_with_interval("5"), 5)
+        self.assertEqual(run_with_interval(5.8), 5)
+        self.assertEqual(run_with_interval("abc"), 30)
+        self.assertEqual(run_with_interval(0), 1)
+        self.assertEqual(run_with_interval(-10), 1)
+        self.assertEqual(run_with_interval(None), 30)
 
 if __name__ == '__main__':
     unittest.main()

@@ -161,14 +161,14 @@ class ConfigManager:
     @staticmethod
     def remove_package(package: str):
         config = ConfigManager.load_config()
-        if package in config["packages"]:
+        if "packages" in config and package in config["packages"]:
             del config["packages"][package]
             ConfigManager.save_config(config)
 
     @staticmethod
     def set_package_enabled(package: str, enabled: bool):
         config = ConfigManager.load_config()
-        if package in config["packages"]:
+        if "packages" in config and package in config["packages"]:
             config["packages"][package]["enabled"] = enabled
             ConfigManager.save_config(config)
 
@@ -266,7 +266,15 @@ class Monitor:
             self.run_once()
             self.save_state()
             config = ConfigManager.load_config()
-            interval = config.get("settings", {}).get("check_interval_sec", 30)
+
+            interval_raw = config.get("settings", {}).get("check_interval_sec", 30)
+            try:
+                interval = int(interval_raw)
+                if interval < 1:
+                    interval = 1
+            except (TypeError, ValueError):
+                interval = 30
+
             # Sleep in small increments to allow responsive stop
             for _ in range(interval):
                 if self.stop_event and self.stop_event():
