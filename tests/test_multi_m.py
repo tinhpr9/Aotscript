@@ -10,15 +10,14 @@ import re
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import sys
 from unittest.mock import MagicMock
-sys.modules['requests'] = MagicMock()
 
 with open(os.path.join(ROOT, "Toolcheck"), "r", encoding="utf-8") as f:
     code = f.read()
 
 Toolcheck = types.ModuleType("Toolcheck")
-exec(code, Toolcheck.__dict__)
+with patch.dict('sys.modules', {'requests': MagicMock()}):
+    exec(code, Toolcheck.__dict__)
 
 class TestMultiM(unittest.TestCase):
     def setUp(self):
