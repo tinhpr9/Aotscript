@@ -108,6 +108,32 @@ class ConfigManager:
             os.makedirs(CONFIG_DIR, exist_ok=True)
 
     @staticmethod
+    def format_and_validate_url(url):
+        import urllib.parse
+        if not isinstance(url, str):
+            return None
+        url = url.strip()
+        if not url:
+            return None
+
+        formatted_url = url
+        if url.isdigit():
+            formatted_url = f"roblox://placeID={url}"
+            return formatted_url
+        elif url.startswith('roblox://'):
+            return formatted_url
+        elif url.startswith('http://') or url.startswith('https://'):
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.hostname
+            if not host:
+                return None
+            if host != "roblox.com" and not host.endswith(".roblox.com"):
+                return None
+            return formatted_url
+
+        return None
+
+    @staticmethod
     def load_config(strict=False) -> dict:
         ConfigManager.ensure_dir()
         if not os.path.exists(CONFIG_FILE):
@@ -128,12 +154,20 @@ class ConfigManager:
                     if not isinstance(config["packages"], dict):
                         raise ValueError("Error: config.json is malformed. Please fix or remove it.")
                     for k, v in config["packages"].items():
+                        if not isinstance(k, str) or not re.match(r'^[a-zA-Z0-9_.]+$', k):
+                            raise ValueError("Error: config.json is malformed. Please fix or remove it.")
                         if not isinstance(v, dict):
                             raise ValueError("Error: config.json is malformed. Please fix or remove it.")
                         if "enabled" in v and not isinstance(v["enabled"], bool):
                             raise ValueError("Error: config.json is malformed. Please fix or remove it.")
-                        if "join_url" in v and not isinstance(v["join_url"], str):
-                            raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+
+                        enabled = v.get("enabled", False)
+                        if enabled:
+                            if not ConfigManager.format_and_validate_url(v.get("join_url", "")):
+                                raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+                        else:
+                            if "join_url" in v and not isinstance(v["join_url"], str):
+                                raise ValueError("Error: config.json is malformed. Please fix or remove it.")
             else:
                 if not isinstance(config, dict):
                     config = {}
@@ -159,23 +193,11 @@ class ConfigManager:
 
     @staticmethod
     def add_package(package: str, url: str) -> bool:
-        if not re.match(r'^[a-zA-Z0-9_.]+$', package):
+        if not isinstance(package, str) or not re.match(r'^[a-zA-Z0-9_.]+$', package):
             return False
 
-        import urllib.parse
-        formatted_url = url
-        if url.isdigit():
-            formatted_url = f"roblox://placeID={url}"
-        elif url.startswith('roblox://'):
-            pass
-        elif url.startswith('http://') or url.startswith('https://'):
-            parsed = urllib.parse.urlparse(url)
-            host = parsed.hostname
-            if not host:
-                return False
-            if host != "roblox.com" and not host.endswith(".roblox.com"):
-                return False
-        else:
+        formatted_url = ConfigManager.format_and_validate_url(url)
+        if not formatted_url:
             return False
 
         try:

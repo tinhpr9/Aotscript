@@ -563,6 +563,50 @@ sys.exit(0 if success else 1)
         with self.assertRaises(ValueError):
             ConfigManager.load_config(strict=True)
 
+    def test_package_schema_validation(self):
+        def check_malformed(json_str):
+            with open(rejoin_core.CONFIG_FILE, "w") as f:
+                f.write(json_str)
+            with self.assertRaises(ValueError):
+                ConfigManager.load_config(strict=True)
+            with open(rejoin_core.CONFIG_FILE, "r") as f:
+                self.assertEqual(f.read(), json_str)
+
+        def check_valid(json_str):
+            with open(rejoin_core.CONFIG_FILE, "w") as f:
+                f.write(json_str)
+            ConfigManager.load_config(strict=True)
+
+        # enabled + missing join_url
+        check_malformed('{"packages": {"pkg1": {"enabled": true}}}')
+
+        # enabled + empty join_url
+        check_malformed('{"packages": {"pkg1": {"enabled": true, "join_url": ""}}}')
+
+        # enabled + whitespace join_url
+        check_malformed('{"packages": {"pkg1": {"enabled": true, "join_url": "   "}}}')
+
+        # enabled + invalid join target
+        check_malformed('{"packages": {"pkg1": {"enabled": true, "join_url": "http://evil.com"}}}')
+
+        # invalid package key
+        check_malformed('{"packages": {"pkg1!@#": {"enabled": true, "join_url": "123"}}}')
+
+        # valid numeric ID
+        check_valid('{"packages": {"pkg1": {"enabled": true, "join_url": "123"}}}')
+
+        # valid roblox:// target
+        check_valid('{"packages": {"pkg1": {"enabled": true, "join_url": "roblox://test"}}}')
+
+        # valid roblox.com URL
+        check_valid('{"packages": {"pkg1": {"enabled": true, "join_url": "https://www.roblox.com/games/123"}}}')
+
+        # disabled package behavior (allowed missing/invalid/empty join_url)
+        check_valid('{"packages": {"pkg1": {"enabled": false}}}')
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
+        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": 123}}}') # Still fails on non-string
+
     @patch('rejoin_cli.get_pid')
     @patch('subprocess.Popen')
     @patch('builtins.print')
