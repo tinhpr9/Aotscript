@@ -41,14 +41,17 @@ class MockEnv(SystemEnvironment):
 class TestRejoin(unittest.TestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
+        self.test_runtime_dir = tempfile.mkdtemp()
         self.old_config_dir = rejoin_core.CONFIG_DIR
         self.old_config_file = rejoin_core.CONFIG_FILE
+        self.old_runtime_dir = getattr(rejoin_core, 'RUNTIME_DIR', None)
         self.old_lock_file = rejoin_core.LOCK_FILE
         self.old_log_file = rejoin_core.LOG_FILE
 
         rejoin_core.CONFIG_DIR = self.test_dir
         rejoin_core.CONFIG_FILE = os.path.join(self.test_dir, "config.json")
-        rejoin_core.LOCK_FILE = os.path.join(self.test_dir, "monitor.lock")
+        rejoin_core.RUNTIME_DIR = self.test_runtime_dir
+        rejoin_core.LOCK_FILE = os.path.join(self.test_runtime_dir, "monitor.lock")
         rejoin_core.LOG_FILE = os.path.join(self.test_dir, "rejoin.log")
 
         if rejoin_core._lock_fd is not None:
@@ -58,12 +61,16 @@ class TestRejoin(unittest.TestCase):
         rejoin_core.release_lock()
         rejoin_core.CONFIG_DIR = self.old_config_dir
         rejoin_core.CONFIG_FILE = self.old_config_file
+        if self.old_runtime_dir is not None:
+            rejoin_core.RUNTIME_DIR = self.old_runtime_dir
         rejoin_core.LOCK_FILE = self.old_lock_file
         rejoin_core.LOG_FILE = self.old_log_file
 
-        for f in os.listdir(self.test_dir):
-            os.remove(os.path.join(self.test_dir, f))
-        os.rmdir(self.test_dir)
+        for d in [self.test_dir, self.test_runtime_dir]:
+            if os.path.exists(d):
+                for f in os.listdir(d):
+                    os.remove(os.path.join(d, f))
+                os.rmdir(d)
 
     def test_config_load_save(self):
         conf = ConfigManager.load_config()
@@ -350,6 +357,8 @@ sys.exit(0 if success else 1)
         rejoin_core.release_lock()
 
     def test_get_pid_empty_file(self):
+        if getattr(rejoin_core, 'RUNTIME_DIR', None) and not os.path.exists(rejoin_core.RUNTIME_DIR):
+            os.makedirs(rejoin_core.RUNTIME_DIR, exist_ok=True)
         # Create an empty lock file
         with open(rejoin_core.LOCK_FILE, "w") as f:
             f.write("")
@@ -402,20 +411,38 @@ sys.exit(0 if success else 1)
         self.assertEqual(len(monitor.state), 0)
 
     @patch('os.kill')
+    @patch('rejoin_cli.is_rejoin_daemon')
     @patch('rejoin_cli.get_pid')
     @patch('builtins.print')
-    def test_stop_daemon_wait(self, mock_print, mock_get_pid, mock_kill):
+    def test_stop_daemon_wait(self, mock_print, mock_get_pid, mock_is_rejoin, mock_kill):
         import rejoin_cli
-        mock_get_pid.side_effect = [123, 123, 123, None]
+        mock_get_pid.return_value = 123
+
+        def fake_kill(pid, sig):
+            if sig == 0:
+                raise OSError()
+            return
+        mock_kill.side_effect = fake_kill
 
         with patch('time.sleep', return_value=None):
             rejoin_cli.stop_daemon()
 
-        mock_kill.assert_called_once_with(123, 15)
+        mock_kill.assert_any_call(123, 15)
         mock_print.assert_any_call("Stopped.")
 
-        mock_get_pid.side_effect = [123] * 25
         mock_print.reset_mock()
+        mock_kill.reset_mock()
+        mock_kill.side_effect = None
+        mock_is_rejoin.return_value = False
+
+        with patch('time.sleep', return_value=None):
+            rejoin_cli.stop_daemon()
+
+        mock_print.assert_any_call("Stopped.")
+
+        mock_print.reset_mock()
+        mock_kill.reset_mock()
+        mock_is_rejoin.return_value = True
         with patch('time.sleep', return_value=None):
             rejoin_cli.stop_daemon()
 

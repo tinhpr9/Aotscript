@@ -10,7 +10,8 @@ from datetime import datetime
 
 CONFIG_DIR = "/storage/emulated/0/Download/AotRejoin"
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-LOCK_FILE = os.path.join(CONFIG_DIR, "monitor.lock")
+RUNTIME_DIR = os.path.expanduser("~/.aot-rejoin")
+LOCK_FILE = os.path.join(RUNTIME_DIR, "monitor.lock")
 LOG_FILE = os.path.join(CONFIG_DIR, "rejoin.log")
 
 DEFAULT_CONFIG = {
@@ -300,6 +301,8 @@ _lock_fd = None
 def acquire_lock() -> bool:
     global _lock_fd
     ConfigManager.ensure_dir()
+    if not os.path.exists(RUNTIME_DIR):
+        os.makedirs(RUNTIME_DIR, exist_ok=True)
     try:
         fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

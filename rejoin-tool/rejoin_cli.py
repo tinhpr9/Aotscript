@@ -65,7 +65,12 @@ def stop_daemon():
 
         import time
         for _ in range(20):
-            if get_pid() is None:
+            try:
+                os.kill(pid, 0)
+                if not is_rejoin_daemon(pid):
+                    print("Stopped.")
+                    return
+            except OSError:
                 print("Stopped.")
                 return
             time.sleep(0.5)
