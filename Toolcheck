@@ -497,46 +497,68 @@ def find_cookies(download_choice=None, preset_m_code=None):
     print(" - Ví dụ: m120, M69, m153,...")
     print(" - Hoặc để TRỐNG và ấn Enter để tự dán list User:Pass thủ công.")
     if preset_m_code is None:
-        m_code = input("=> Nhập mã M: ").strip().lower()
+        input_str = input("=> Nhập mã M: ")
     else:
-        m_code = str(preset_m_code).strip().lower()
-        print(f"=> Tự động chọn mã M: {m_code.upper()}")
+        input_str = str(preset_m_code)
+        print(f"=> Tự động chọn mã M: {input_str}")
+
+    m_codes_requested = []
+    raw_codes = re.split(r'[,\s]+', input_str.strip())
+    for code in raw_codes:
+        code = code.strip().lower()
+        if not code: continue
+        match = re.match(r'^m?(\d+)$', code)
+        norm = "m" + match.group(1) if match else code
+        if norm not in m_codes_requested:
+            m_codes_requested.append(norm)
 
     targets = []
-    
-    if m_code:
+    m_valid = []
+
+    if m_codes_requested:
         if not os.path.exists(ACC_FILE_PATH):
             return print(f"\n[!] LỖI: Không tìm thấy file {ACC_FILE_PATH}. Vui lòng chọn 'y' ở bước tải để hệ thống kéo file về!")
-        
+
         try:
             acc_lines = open(ACC_FILE_PATH, "r", encoding="utf-8").readlines()
-            found_section = False
-            
+            sections = {}
+            current_m = None
+
             for line in acc_lines:
                 clean_line = line.strip()
-                if not clean_line: continue 
-                lower_line = clean_line.lower()
+                if not clean_line: continue
 
-                is_header = False
-                match = re.match(r'^m(\d+)([^a-z0-9]|$)', lower_line)
+                match = re.match(r'^m?(\d+)$', clean_line.lower())
                 if match:
-                    is_header = True
-                    current_header_code = "m" + match.group(1)
-
-                if not found_section:
-                    if is_header and current_header_code == m_code:
-                        found_section = True
+                    current_m = "m" + match.group(1)
+                    if current_m not in sections:
+                        sections[current_m] = []
                 else:
-                    if is_header:
-                        break
+                    if current_m and ":" in clean_line:
+                        sections[current_m].append(clean_line)
 
-                    if ":" in clean_line:
-                        targets.append(clean_line)
-            
-            if targets:
-                print(f"\n[+] Đã vét thành công {len(targets)} acc từ dàn {m_code.upper()} trong acc.txt")
-            else:
-                return print(f"\n[-] Không tìm thấy dàn acc {m_code.upper()} hoặc dàn bị trống trong file acc.txt!")
+            seen_users = set()
+            for m in m_codes_requested:
+                if m not in sections:
+                    print(f"[-] {m.upper()}: Không tồn tại")
+                elif not sections[m]:
+                    print(f"[-] {m.upper()}: Tồn tại nhưng trống")
+                    m_valid.append(m)
+                else:
+                    count = 0
+                    for acc in sections[m]:
+                        user = acc.split(":")[0].strip()
+                        if user not in seen_users:
+                            seen_users.add(user)
+                            targets.append(acc)
+                            count += 1
+                    print(f"[+] {m.upper()}: Tìm thấy {count} account")
+                    m_valid.append(m)
+
+            if not targets:
+                return print(f"\n[-] Dừng sạch: Không có account nào được tìm thấy từ các mã M yêu cầu!")
+
+            print(f"\n[+] Đã vét thành công {len(targets)} acc từ các dàn trong acc.txt")
         except Exception as e:
             return print(f"\n[!] LỖI đọc file acc.txt: {e}")
     else:
@@ -562,6 +584,13 @@ def find_cookies(download_choice=None, preset_m_code=None):
         open(COOKIE_FILE, "w", encoding="utf-8").write("\n".join(found_cookies) + "\n")
         print(f" [THÀNH CÔNG] TÌM THẤY {len(found_lines)}/{len(targets)} TÀI KHOẢN!")
     else: print("[-] XU CÀ NA: Không tìm thấy Cookie nào khớp!")
+
+    if m_codes_requested:
+        print(f"M_SELECTED={','.join(m.upper() for m in m_codes_requested)}")
+        print(f"M_VALID={','.join(m.upper() for m in m_valid)}")
+        print(f"TARGETS={len(targets)}")
+        print(f"FOUND={len(found_lines)}")
+        print(f"NOT_FOUND={len(targets) - len(found_lines)}")
 
 def menu():
     check_env()
