@@ -3,6 +3,8 @@ import os
 import subprocess
 import time
 import logging
+import shlex
+import re
 from datetime import datetime
 
 CONFIG_DIR = "/storage/emulated/0/Download/AotRejoin"
@@ -23,6 +25,8 @@ DEFAULT_CONFIG = {
 
 class SystemEnvironment:
     def is_process_running(self, package: str) -> bool:
+        if not re.match(r'^[a-zA-Z0-9_.]+$', package):
+            return False
         try:
             # use su -c pidof to check if running
             result = subprocess.run(["su", "-c", f"pidof {package}"], capture_output=True, text=True)
@@ -31,10 +35,12 @@ class SystemEnvironment:
             return False
 
     def launch_intent(self, package: str, url: str) -> bool:
+        if not re.match(r'^[a-zA-Z0-9_.]+$', package):
+            return False
         try:
             # We use monkey or am to launch intent
-            cmd = f"am start -a android.intent.action.VIEW -d '{url}' {package}"
-            result = subprocess.run(["su", "-c", cmd], capture_output=True, text=True)
+            cmd_str = f"am start -a android.intent.action.VIEW -d {shlex.quote(url)} {shlex.quote(package)}"
+            result = subprocess.run(["su", "-c", cmd_str], capture_output=True, text=True)
             return "Starting: Intent" in result.stdout or result.returncode == 0
         except Exception:
             return False
@@ -133,7 +139,12 @@ class Monitor:
                 
                 # Check cooldown / delay
                 last_launch = self.state[pkg].get("last_launch", 0)
+                last_success = self.state[pkg].get("last_success", 0)
                 retry_delay = settings.get("retry_delay_sec", 10)
+                cooldown = settings.get("cooldown_after_success_sec", 30)
+
+                if now - last_success < cooldown:
+                    continue
                 if now - last_launch < retry_delay:
                     continue
 
@@ -148,8 +159,15 @@ class Monitor:
                 self.state[pkg]["retries"] += 1
 
                 if success:
-                    self.state[pkg]["status"] = "LAUNCHED"
                     self.env.sleep(settings.get("open_delay_sec", 10))
+                    if self.env.is_process_running(pkg):
+                        self.state[pkg]["status"] = "RUNNING"
+                        self.state[pkg]["retries"] = 0
+                        self.state[pkg]["last_success"] = time.time()
+                        self.env.log(logging.INFO, f"[{pkg}] Verified RUNNING after launch.")
+                    else:
+                        self.env.log(logging.WARNING, f"[{pkg}] Launched but process not found.")
+                        self.state[pkg]["status"] = "LAUNCH_ERROR"
                 else:
                     self.env.log(logging.WARNING, f"[{pkg}] Launch command failed.")
                     self.state[pkg]["status"] = "LAUNCH_ERROR"
@@ -179,6 +197,14 @@ class Monitor:
                     break
                 self.env.sleep(1)
 
+def is_rejoin_daemon(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/cmdline", "r") as f:
+            cmdline = f.read().replace('\x00', ' ')
+        return "rejoin_daemon.py" in cmdline
+    except OSError:
+        return False
+
 def acquire_lock() -> bool:
     ConfigManager.ensure_dir()
     if os.path.exists(LOCK_FILE):
@@ -187,7 +213,8 @@ def acquire_lock() -> bool:
                 pid = int(f.read().strip())
             # check if pid is still running
             os.kill(pid, 0)
-            return False # Lock is held by running process
+            if is_rejoin_daemon(pid):
+                return False # Lock is held by running process
         except (ValueError, OSError):
             pass # Process dead or invalid pid, we can take lock
     with open(LOCK_FILE, "w") as f:

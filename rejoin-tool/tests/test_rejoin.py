@@ -20,9 +20,16 @@ class MockEnv(SystemEnvironment):
 
     def launch_intent(self, package: str, url: str) -> bool:
         self.launch_history.append((package, url))
+        success = True
         if isinstance(self.launch_returns, dict):
-            return self.launch_returns.get(package, True)
-        return self.launch_returns
+            success = self.launch_returns.get(package, True)
+        else:
+            success = self.launch_returns
+
+        if success and getattr(self, "simulate_process_start", False):
+            self.running_processes.add(package)
+
+        return success
 
     def sleep(self, seconds: int):
         self.sleep_history.append(seconds)
@@ -83,25 +90,39 @@ class TestRejoin(unittest.TestCase):
 
     def test_launch_success(self):
         env = MockEnv()
+        env.simulate_process_start = True
         ConfigManager.add_package("pkg1", "url1")
         monitor = Monitor(env)
         monitor.run_once()
-        self.assertEqual(monitor.state["pkg1"]["status"], "LAUNCHED")
+        self.assertEqual(monitor.state["pkg1"]["status"], "RUNNING")
         self.assertEqual(len(env.launch_history), 1)
+
+    def test_launch_false_success(self):
+        env = MockEnv()
+        ConfigManager.add_package("pkg1", "url1")
+        monitor = Monitor(env)
+        monitor.run_once()
+        self.assertEqual(monitor.state["pkg1"]["status"], "LAUNCH_ERROR")
+        self.assertEqual(len(env.launch_history), 1)
+
+    def test_invalid_package_rejected(self):
+        env = SystemEnvironment()
+        self.assertFalse(env.is_process_running("invalid package"))
+        self.assertFalse(env.launch_intent("invalid package", "url"))
 
     def test_launch_fail_and_max_retry(self):
         env = MockEnv()
         env.launch_returns = False
         ConfigManager.add_package("pkg1", "url1")
         monitor = Monitor(env)
-        
+
         # We need to simulate time passing for retry delay
         mock_time = 100
         def fake_time():
             nonlocal mock_time
             mock_time += 15
             return mock_time
-            
+
         with patch('time.time', side_effect=fake_time):
             monitor.run_once() # Retry 1
             self.assertEqual(monitor.state["pkg1"]["status"], "LAUNCH_ERROR")
@@ -112,31 +133,65 @@ class TestRejoin(unittest.TestCase):
 
     def test_one_failure_does_not_stop_others(self):
         env = MockEnv()
+        env.simulate_process_start = True
         env.launch_returns = {"fail_pkg": False, "ok_pkg": True}
         ConfigManager.add_package("fail_pkg", "url1")
         ConfigManager.add_package("ok_pkg", "url2")
         monitor = Monitor(env)
-        
+
         monitor.run_once()
         self.assertEqual(monitor.state["fail_pkg"]["status"], "LAUNCH_ERROR")
-        self.assertEqual(monitor.state["ok_pkg"]["status"], "LAUNCHED")
+        self.assertEqual(monitor.state["ok_pkg"]["status"], "RUNNING")
 
     @patch('os.kill')
-    def test_duplicate_monitor_lock(self, mock_kill):
+    @patch('rejoin_core.is_rejoin_daemon')
+    def test_duplicate_monitor_lock(self, mock_is_daemon, mock_kill):
         # First acquire should succeed
         self.assertTrue(rejoin_core.acquire_lock())
-        
+
         # Simulate another process holds lock (os.kill succeeds)
         with open(rejoin_core.LOCK_FILE, "w") as f:
             f.write("99999\n")
-        
+
         mock_kill.return_value = None
+
+        # If it is the daemon, we fail to acquire lock
+        mock_is_daemon.return_value = True
         self.assertFalse(rejoin_core.acquire_lock())
-        
+
+        # If it is NOT the daemon (stale/reused PID), we CAN acquire lock
+        mock_is_daemon.return_value = False
+        self.assertTrue(rejoin_core.acquire_lock())
+
         # Simulate dead process (os.kill raises OSError)
         mock_kill.side_effect = OSError
         self.assertTrue(rejoin_core.acquire_lock())
         rejoin_core.release_lock()
+
+    def test_cooldown_after_success(self):
+        env = MockEnv()
+        env.simulate_process_start = True
+        ConfigManager.add_package("pkg1", "url1")
+        monitor = Monitor(env)
+
+        mock_time = 100
+        def fake_time():
+            nonlocal mock_time
+            mock_time += 1
+            return mock_time
+
+        with patch('time.time', side_effect=fake_time):
+            monitor.run_once() # sets last_success
+            self.assertEqual(monitor.state["pkg1"]["status"], "RUNNING")
+
+            env.running_processes.remove("pkg1")
+
+            monitor.run_once() # should be in cooldown, won't launch
+            self.assertEqual(len(env.launch_history), 1)
+
+            mock_time += 35 # pass cooldown
+            monitor.run_once() # should launch again
+            self.assertEqual(len(env.launch_history), 2)
 
 if __name__ == '__main__':
     unittest.main()

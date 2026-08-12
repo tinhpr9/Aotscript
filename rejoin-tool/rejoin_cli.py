@@ -4,7 +4,7 @@ import os
 import subprocess
 import signal
 
-from rejoin_core import ConfigManager, init_logging, Monitor, SystemEnvironment, LOCK_FILE, CONFIG_DIR
+from rejoin_core import ConfigManager, init_logging, Monitor, SystemEnvironment, LOCK_FILE, CONFIG_DIR, is_rejoin_daemon
 
 STATUS_FILE = os.path.join(CONFIG_DIR, "status.json")
 BOOT_SCRIPT_DIR = os.path.expanduser("~/.termux/boot")
@@ -16,7 +16,9 @@ def get_pid():
             with open(LOCK_FILE, "r") as f:
                 pid = int(f.read().strip())
             os.kill(pid, 0)
-            return pid
+            if is_rejoin_daemon(pid):
+                return pid
+            return None
         except (ValueError, OSError):
             return None
     return None
@@ -31,7 +33,14 @@ def start_daemon():
     log_file = os.path.join(CONFIG_DIR, "rejoin.log")
     cmd = f"nohup python3 {script_dir}/rejoin_daemon.py > {log_file} 2>&1 &"
     os.system(cmd)
-    print("Started.")
+    import time
+    for _ in range(10):
+        time.sleep(0.5)
+        new_pid = get_pid()
+        if new_pid:
+            print(f"Started successfully (PID: {new_pid}).")
+            return
+    print("FAILED to start monitor.")
 
 def stop_daemon():
     pid = get_pid()
