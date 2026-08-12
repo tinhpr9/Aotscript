@@ -60,4 +60,28 @@ class FleetArchitectureTests(unittest.TestCase):
         for forbidden in ("tap_selector", "tap_normalized", "swipe_normalized", "preview_b64"):
             self.assertNotIn(forbidden, bridge)
 
+    def test_dead_legacy_aotHubHtml_is_removed(self):
+        """Regression: aotHubHtml with REFERENCE/FOLLOWERS UI must not exist."""
+        worker = (ROOT / "cloudflare-worker/worker.js").read_text()
+        self.assertNotIn("function aotHubHtml()", worker,
+                         "dead legacy dashboard aotHubHtml must be deleted")
+        # The active dashboard must still be present
+        self.assertIn("function fleetHubHtml()", worker)
+        self.assertIn("async function handleAotHubPage", worker)
+
+    def test_active_fleet_dashboard_has_both_batch_buttons(self):
+        """Active fleet dashboard must have both Swift Backup and Apps buttons."""
+        worker = (ROOT / "cloudflare-worker/worker.js").read_text()
+        start = worker.index("function fleetHubHtml()")
+        end = worker.index("async function handleAotHubPage", start)
+        dashboard = worker[start:end]
+        self.assertIn("open_swift_backup", dashboard,
+                       "fleet dashboard must have open_swift_backup action")
+        self.assertIn("open_swift_apps", dashboard,
+                       "fleet dashboard must have open_swift_apps action")
+        self.assertIn("Mở Swift Backup", dashboard,
+                       "fleet dashboard must show Swift Backup button label")
+        self.assertIn("Mở Apps", dashboard,
+                       "fleet dashboard must show Apps button label")
+
 if __name__ == "__main__": unittest.main()

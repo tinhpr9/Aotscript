@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import vm from "node:vm";
 
 const source = await fs.readFile(new URL("./worker.js", import.meta.url), "utf8");
+if (source.includes("function aotHubHtml()")) throw new Error("dead legacy dashboard function aotHubHtml still exists");
 const start = source.indexOf("function fleetHubHtml()");
 const end = source.indexOf("async function handleAotHubPage", start);
 if (start < 0 || end < 0) throw new Error("fleet dashboard unavailable");
