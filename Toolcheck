@@ -10,11 +10,11 @@ import re
 BASE_DIR = os.environ.get("SHOUKO_BASE_DIR", "/storage/emulated/0/Download/Shouko")
 FACE_ACC_FILE = os.path.join(BASE_DIR, "Listacc.txt")
 COOKIE_FILE = os.path.join(BASE_DIR, "Cookies.txt")
-FACE_PRIORITY_FILE = os.path.join(BASE_DIR, "Face_Priority.txt")
+FACE_PRIORITY_FILE = os.path.join(BASE_DIR, "Face_Priority.txt") 
 FACE_TARGET_CONFIG = os.path.join(BASE_DIR, "Face_Target_File.txt")
 
-DB_COOKIES_FILE = os.path.join(BASE_DIR, "Data_Tong_Cookies.txt")
-FOUND_RESULT_FILE = os.path.join(BASE_DIR, "Ket_Qua_Tim_Duoc.txt")
+DB_COOKIES_FILE = os.path.join(BASE_DIR, "Data_Tong_Cookies.txt") 
+FOUND_RESULT_FILE = os.path.join(BASE_DIR, "Ket_Qua_Tim_Duoc.txt") 
 
 FACE_API_KEY = "ZP_FaceUnlock_0DLuB8BEqFpLM0bssjSPFqGwnRkgXm7p"
 COOKIE_API_KEY = "ZP_CookieChecker_gCvFnk1LOTPh2ysCcTcZhjCwuYVnwoYT"
@@ -84,7 +84,7 @@ def force_clear_jobs():
         return False
 
 def face_unlock():
-    target_file = FACE_ACC_FILE
+    target_file = FACE_ACC_FILE 
     if os.path.exists(FACE_TARGET_CONFIG):
         try:
             saved_path = open(FACE_TARGET_CONFIG, "r", encoding="utf-8").read().strip()
@@ -98,30 +98,30 @@ def face_unlock():
         is_prio = get_priority_state()
         print(f"\n[*] Đang nhắm mục tiêu vào file: {target_file}")
         print(f"[*] Đang Submit lên Face Unlock (Luồng Ưu Tiên: {'BẬT' if is_prio else 'TẮT'})...")
-
+        
         headers = {"X-API-Key": FACE_API_KEY, "Content-Type": "application/json"}
         res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": is_prio})
-
+        
         if res.status_code == 409:
             print("[!] Phát hiện có job cũ ngáng đường. Đang gọi đội dọn dẹp...")
             force_clear_jobs()
             res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": is_prio})
 
         if res.status_code != 200: return print(f"[!] LỖI SUBMIT: {res.status_code} - {res.text}")
-
+        
         job_id = res.json().get("job_id")
         print("[*] Đang tự động theo dõi (5s/lần)...")
-
+        
         limit_7d_accounts = set()
 
         while True:
             time.sleep(5)
             st_res = requests.get(f"{FACE_URL}/status/{job_id}", headers=headers)
             if st_res.status_code != 200: continue
-
+            
             st_data = st_res.json()
             st = st_data.get("status", "unknown")
-
+            
             for key in ["logs", "results", "accounts", "details", "messages"]:
                 items = st_data.get(key, [])
                 if isinstance(items, list):
@@ -138,11 +138,11 @@ def face_unlock():
                 status_text = f"[{st.upper()}] Hàng chờ: #{st_data.get('queue_position', '?')} | Đợi {st_data.get('jobs_ahead', '?')} jobs"
             else:
                 status_text = f"[{st.upper()}] Tiến độ: {st_data.get('processed', 0)}/{st_data.get('total_accounts', 0)}"
-
+            
             print(f"\r   -> {status_text}" + " " * 15, end="", flush=True)
-
+            
             if st in ["completed", "failed", "cancelled"]:
-                print()
+                print() 
                 if st == "completed":
                     total_acc = st_data.get("total_accounts", 0)
                     unlocked = st_data.get("success_count", st_data.get("unlocked_count", st_data.get("unlocked", 0)))
@@ -155,14 +155,14 @@ def face_unlock():
                         for file_info in st_data["result_files"]:
                             fname = file_info["filename"]
                             dl_res = requests.get(f"{FACE_URL}/download/{job_id}/{fname}", headers=headers)
-
+                            
                             # MÀNG LỌC RÁC
                             if dl_res.status_code != 200 or '{"error"' in dl_res.text:
                                 print(f"    -> [!] API ZeroPoint lỗi khi tải {fname}, đã tự động bỏ qua...")
                                 continue
-
+                                
                             content = dl_res.text
-
+                            
                             if "fail" in fname.lower() or "result" in fname.lower():
                                 for line in content.splitlines():
                                     line_lower = line.lower()
@@ -190,13 +190,13 @@ def face_unlock():
                     print(f" [⏳] 7-DAY LIMIT       : {limit_7d_count}")
                     print(f" [$] TỔNG THIỆT HẠI   : ${cost}")
                     print("="*50)
-
+                
                 if target_file != FACE_ACC_FILE and os.path.exists(FACE_TARGET_CONFIG): os.remove(FACE_TARGET_CONFIG)
                 break
     except Exception as e: print(f"\n[!] LỖI HỆ THỐNG: {e}")
 
 def check_zeropoint_db():
-    target_file = FACE_ACC_FILE
+    target_file = FACE_ACC_FILE 
     if os.path.exists(FACE_TARGET_CONFIG):
         try:
             saved_path = open(FACE_TARGET_CONFIG, "r", encoding="utf-8").read().strip()
@@ -209,25 +209,25 @@ def check_zeropoint_db():
 
         lines_count = len([line for line in acc_text.splitlines() if line.strip()])
         print(f"\n[*] Đang gửi {lines_count} acc lên ZeroPoint để soi Database...")
-
+        
         headers = {"X-API-Key": FACE_API_KEY, "Content-Type": "application/json"}
         res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": False})
-
+        
         if res.status_code == 409:
             print("[!] Kẹt xe! Phát hiện job cũ đang treo. Đang gọi đội dọn dẹp...")
             force_clear_jobs()
             res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": False})
 
         if res.status_code != 200: return print(f"[!] LỖI API: {res.status_code} - {res.text}")
-
+        
         data = res.json()
         job_id = data.get("job_id")
         db_count = data.get("db_accounts_count", 0)
         paid_count = data.get("paid_accounts_count", 0)
         total = data.get("total_accounts", 0)
-
+        
         cancel_res = requests.post(f"{FACE_URL}/cancel/{job_id}", headers=headers)
-
+        
         print("\n" + "="*50)
         print("      KẾT QUẢ CHECK DATABASE ZEROPOINT      ")
         print("="*50)
@@ -235,7 +235,7 @@ def check_zeropoint_db():
         print(f" - CÓ TRONG DATABASE     : {db_count} acc (Giải Free nếu Tắt Ưu Tiên)")
         print(f" - KHÔNG CÓ (Tài Khoản Lạ): {paid_count} acc (Bị tính phí)")
         print("="*50)
-
+        
         if cancel_res.status_code == 200: print("[+] ĐÃ HỦY LỆNH AN TOÀN! Không mất đồng nào.")
         else: print(f"[!] CẢNH BÁO: Hủy lệnh trả về mã {cancel_res.status_code}.")
     except Exception as e: print(f"\n[!] LỖI HỆ THỐNG: {e}")
@@ -261,11 +261,11 @@ def cookie_checker():
         print("\n[*] Đang Submit lên Cookie Checker...")
         headers = {"X-API-Key": COOKIE_API_KEY, "Content-Type": "application/json"}
         res = requests.post(f"{COOKIE_URL}/submit", headers=headers, json={"cookies": cookies_text})
-
+        
         if res.status_code in [401, 403]: return print(f"[!] LỖI API: Key không hợp lệ.")
         elif res.status_code == 429: return print(f"[!] LỖI RATE LIMIT: Đợi {res.json().get('cooldown', 20)}s.")
         elif res.status_code != 200: return print(f"[!] LỖI API: Mã {res.status_code}")
-
+        
         session_id = res.json().get("session_id")
         while True:
             time.sleep(2)
@@ -274,37 +274,37 @@ def cookie_checker():
             st_data = st_res.json()
             st = st_data.get("status")
             print(f"\r   -> [{st.upper()}] Tiến độ: {st_data.get('checked', 0)}/{st_data.get('total', 0)}    ", end="", flush=True)
-
+            
             if st in ["completed", "error"]:
-                print()
+                print() 
                 if st == "completed" and st_data.get("download_files"):
-                    live_cookies_found = []
-
+                    live_cookies_found = [] 
+                    
                     ftypes_to_download = parse_download_files(st_data["download_files"])
-
+                    
                     for ftype in ftypes_to_download:
                         save_path = os.path.join(BASE_DIR, f"Cookie_{ftype}_result.txt")
                         dl_res = requests.get(f"{COOKIE_URL}/download/{session_id}/{ftype}", headers=headers)
-
+                        
                         # MÀNG LỌC RÁC
                         if dl_res.status_code != 200 or '{"error"' in dl_res.text:
                             print(f"    -> [!] API ZeroPoint lỗi khi tải {ftype}, đã tự động bỏ qua...")
                             continue
-
+                        
                         raw_lines = [c.strip() for c in dl_res.text.splitlines() if c.strip()]
                         mapped_lines = []
-
+                        
                         if os.path.exists(FOUND_RESULT_FILE):
                             full_db = [line.strip() for line in open(FOUND_RESULT_FILE, "r", encoding="utf-8").readlines() if line.strip()]
                             for cookie in raw_lines:
                                 found_match = False
                                 for db_line in full_db:
-                                    if cookie in db_line:
+                                    if cookie in db_line: 
                                         mapped_lines.append(db_line)
                                         found_match = True
                                         break
                                 if not found_match:
-                                    mapped_lines.append(cookie)
+                                    mapped_lines.append(cookie) 
                         else:
                             mapped_lines = raw_lines
 
@@ -327,7 +327,7 @@ def cookie_checker():
 
                         elif mapped_lines and os.path.exists(FOUND_RESULT_FILE) and "live" not in ftype.lower():
                             print(f"    -> [AUTO-LINK] Đã ghép thành công User:Pass cho file này!")
-
+                            
                     if live_cookies_found:
                         print(f"\n[*] [AUTO-CLEAN] Đang dọn dẹp file gốc...")
                         cleaned_status = False
@@ -347,7 +347,7 @@ def cookie_checker():
 def check_all_data_tong():
     if not os.path.exists(DB_COOKIES_FILE):
         return print(f"\n[!] LỖI: Không tìm thấy file Data Tổng. Hãy vào Mode 4 bấm 'y' để tải về trước!")
-
+        
     try:
         raw_lines = open(DB_COOKIES_FILE, "r", encoding="utf-8").readlines()
         full_db = [line.strip() for line in raw_lines if line.strip()]
@@ -358,20 +358,20 @@ def check_all_data_tong():
             parts = line.split(":")
             if len(parts) >= 3:
                 cookies_to_check.append(":".join(parts[2:]))
-
+        
         if not cookies_to_check:
             return print("\n[!] Không tìm thấy định dạng Cookie hợp lệ trong Data Tổng!")
 
         cookies_text = "\n".join(cookies_to_check)
         print(f"\n[*] Đang Submit {len(cookies_to_check)} Cookies từ Data Tổng lên Cookie Checker...")
-
+        
         headers = {"X-API-Key": COOKIE_API_KEY, "Content-Type": "application/json"}
         res = requests.post(f"{COOKIE_URL}/submit", headers=headers, json={"cookies": cookies_text})
-
+        
         if res.status_code in [401, 403]: return print(f"[!] LỖI API: Key không hợp lệ.")
         elif res.status_code == 429: return print(f"[!] LỖI RATE LIMIT: Đợi {res.json().get('cooldown', 20)}s.")
         elif res.status_code != 200: return print(f"[!] LỖI API: Mã {res.status_code}")
-
+        
         session_id = res.json().get("session_id")
         while True:
             time.sleep(2)
@@ -380,35 +380,35 @@ def check_all_data_tong():
             st_data = st_res.json()
             st = st_data.get("status")
             print(f"\r   -> [{st.upper()}] Tiến độ: {st_data.get('checked', 0)}/{st_data.get('total', 0)}    ", end="", flush=True)
-
+            
             if st in ["completed", "error"]:
-                print()
+                print() 
                 if st == "completed" and st_data.get("download_files"):
                     live_cookies_found = []
-
+                    
                     ftypes_to_download = parse_download_files(st_data["download_files"])
-
+                    
                     for ftype in ftypes_to_download:
                         save_path = os.path.join(BASE_DIR, f"Cookie_DataTong_{ftype}_result.txt")
                         dl_res = requests.get(f"{COOKIE_URL}/download/{session_id}/{ftype}", headers=headers)
-
+                        
                         # MÀNG LỌC RÁC
                         if dl_res.status_code != 200 or '{"error"' in dl_res.text:
                             print(f"    -> [!] API ZeroPoint lỗi khi tải {ftype}, đã tự động bỏ qua...")
                             continue
-
+                        
                         result_cookies = [c.strip() for c in dl_res.text.splitlines() if c.strip()]
                         mapped_lines = []
-
+                        
                         for cookie in result_cookies:
                             found_match = False
                             for db_line in full_db:
-                                if cookie in db_line:
+                                if cookie in db_line: 
                                     mapped_lines.append(db_line)
                                     found_match = True
                                     break
                             if not found_match:
-                                mapped_lines.append(cookie)
+                                mapped_lines.append(cookie) 
 
                         final_content = "\n".join(mapped_lines) + "\n" if mapped_lines else ""
                         open(save_path, "w", encoding="utf-8").write(final_content)
@@ -458,7 +458,7 @@ def find_cookies(download_choice=None, preset_m_code=None):
         file_id_acc = "12oxXXlSPvHbB0YRUMQcHhLHiE4gemiVg"
         url = "https://docs.google.com/uc?export=download"
         session = requests.Session()
-
+        
         def download_drive(fid, save_path, name):
             try:
                 res = session.get(url, params={'id': fid}, stream=True)
@@ -469,7 +469,7 @@ def find_cookies(download_choice=None, preset_m_code=None):
                         break
                 if token:
                     res = session.get(url, params={'id': fid, 'confirm': token}, stream=True)
-
+                
                 with open(save_path, "wb") as f:
                     for chunk in res.iter_content(32768):
                         if chunk: f.write(chunk)
@@ -482,8 +482,8 @@ def find_cookies(download_choice=None, preset_m_code=None):
 
     try: raw_data = open(DB_COOKIES_FILE, "r", encoding="utf-8").readlines()
     except: raw_data = []
-
-    if not raw_data:
+    
+    if not raw_data: 
         return print(f"\n[!] LỖI: Dữ liệu {DB_COOKIES_FILE} trống hoặc không tồn tại. Hãy chạy lại và bấm 'y' để tải về!")
 
     db = {}
@@ -492,7 +492,7 @@ def find_cookies(download_choice=None, preset_m_code=None):
         if len(parts) >= 3: db[parts[0].strip()] = line.strip()
 
     print(f"\n ĐÃ TẢI {len(db)} ACCOUNT TỪ DATA TỔNG!")
-
+    
     print("\n[?] NHẬP MÃ DÀN ACC ĐỂ QUÉT TỪ FILE acc.txt")
     print(" - Ví dụ: m120, M69, m153,...")
     print(" - Hoặc để TRỐNG và ấn Enter để tự dán list User:Pass thủ công.")
@@ -507,12 +507,8 @@ def find_cookies(download_choice=None, preset_m_code=None):
     for code in raw_codes:
         code = code.strip().lower()
         if not code: continue
-        if code.startswith('m'):
-            match = re.match(r'^m(\d+)$', code)
-            norm = "m" + match.group(1) if match else code
-        else:
-            match = re.match(r'^(\d+)$', code)
-            norm = "m" + match.group(1) if match else code
+        match = re.match(r'^m?(\d+)$', code)
+        norm = "m" + match.group(1) if match else code
         if norm not in m_codes_requested:
             m_codes_requested.append(norm)
 
@@ -532,7 +528,7 @@ def find_cookies(download_choice=None, preset_m_code=None):
                 clean_line = line.strip()
                 if not clean_line: continue
 
-                match = re.match(r'^m(\d+)([^a-z0-9]|$)', clean_line.lower())
+                match = re.match(r'^m?(\d+)$', clean_line.lower())
                 if match:
                     current_m = "m" + match.group(1)
                     if current_m not in sections:
@@ -614,7 +610,7 @@ def menu():
         print("9. TỰ ĐỘNG: Tải dữ liệu rồi nhập mã dàn cần quét")
         print("10. Thoát Tool")
         print("="*50)
-
+        
         choice = input("[?] Chọn Mode (1-10): ")
         if choice == '1': face_balance()
         elif choice == '2': face_unlock()

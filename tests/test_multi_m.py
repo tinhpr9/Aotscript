@@ -37,10 +37,12 @@ class TestMultiM(unittest.TestCase):
             f.write("user2:pass2:cookie2\n")
             f.write("user3:pass3:cookie3\n")
             f.write("user4:pass4:cookie4\n")
+            f.write("m123:password:cookie123\n")
         
         # Fake acc.txt
         with open(Toolcheck.ACC_FILE_PATH, "w", encoding="utf-8") as f:
             f.write("m88\n")
+            f.write("m123:password\n") # Fake header
             f.write("user1:pass1\n")
             f.write("user2:pass2\n")
             f.write("M91 \n")
@@ -66,8 +68,8 @@ class TestMultiM(unittest.TestCase):
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88", out)
         self.assertIn("M_VALID=M88", out)
-        self.assertIn("TARGETS=2", out)
-        self.assertIn("FOUND=2", out)
+        self.assertIn("TARGETS=3", out)
+        self.assertIn("FOUND=3", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
@@ -77,8 +79,8 @@ class TestMultiM(unittest.TestCase):
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88,M91", out)
         self.assertIn("M_VALID=M88,M91", out)
-        self.assertIn("TARGETS=3", out) # user2 is deduplicated
-        self.assertIn("FOUND=3", out)
+        self.assertIn("TARGETS=4", out) # user2 is deduplicated
+        self.assertIn("FOUND=4", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
@@ -96,7 +98,7 @@ class TestMultiM(unittest.TestCase):
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88,M91,M106", out)
         self.assertIn("M_VALID=M88,M91,M106", out)
-        self.assertIn("TARGETS=4", out)
+        self.assertIn("TARGETS=5", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
@@ -105,7 +107,7 @@ class TestMultiM(unittest.TestCase):
         Toolcheck.find_cookies()
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88", out)
-        self.assertIn("TARGETS=2", out)
+        self.assertIn("TARGETS=3", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
@@ -116,7 +118,7 @@ class TestMultiM(unittest.TestCase):
         self.assertIn("M_SELECTED=M88,M999", out)
         self.assertIn("M_VALID=M88", out)
         self.assertIn("[-] M999: Không tồn tại", out)
-        self.assertIn("TARGETS=2", out)
+        self.assertIn("TARGETS=3", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
@@ -143,7 +145,25 @@ class TestMultiM(unittest.TestCase):
         Toolcheck.find_cookies(download_choice='n', preset_m_code='m88 m91')
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88,M91", out)
-        self.assertIn("TARGETS=3", out)
+        self.assertIn("TARGETS=4", out)
+
+    @patch('builtins.input')
+    @patch('sys.stdout', new_callable=StringIO)
+    def test_multi_m_numeric_input(self, mock_stdout, mock_input):
+        mock_input.side_effect = ["n", "88 91"]
+        Toolcheck.find_cookies()
+        out = mock_stdout.getvalue()
+        self.assertIn("M_SELECTED=M88,M91", out)
+        self.assertIn("M_VALID=M88,M91", out)
+
+    @patch('builtins.input')
+    @patch('sys.stdout', new_callable=StringIO)
+    def test_false_header(self, mock_stdout, mock_input):
+        # Truy vấn m123, sẽ báo không tồn tại vì m123:password không phải là header
+        mock_input.side_effect = ["n", "m123"]
+        Toolcheck.find_cookies()
+        out = mock_stdout.getvalue()
+        self.assertIn("[-] M123: Không tồn tại", out)
 
 if __name__ == '__main__':
     unittest.main()
