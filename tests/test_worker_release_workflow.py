@@ -248,9 +248,11 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
     def test_resume_mode_never_uploads_assets(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         create_block = text[text.index('if [[ "$RELEASE_MODE" == create ]]'):]
-        upload = create_block.index('--input "$asset"')
-        else_branch = create_block.index("else", upload)
-        self.assertLess(upload, else_branch)
+        resume_start = create_block.index('          else\n            RELEASE_ID="$RESUME_RELEASE_ID"')
+        resume_end = create_block.index('          fi\n          gh api', resume_start)
+        resume_branch = create_block[resume_start:resume_end]
+        self.assertNotIn('--input "$asset"', resume_branch)
+        self.assertNotIn('/assets?name=', resume_branch)
 
 
 if __name__ == "__main__":
