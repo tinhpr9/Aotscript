@@ -601,11 +601,17 @@ sys.exit(0 if success else 1)
         # valid roblox.com URL
         check_valid('{"packages": {"pkg1": {"enabled": true, "join_url": "https://www.roblox.com/games/123"}}}')
 
-        # disabled package behavior (allowed missing/invalid/empty join_url)
+        # disabled package behavior
+        # disabled + valid join_url => accepted
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": "123"}}}')
+
+        # disabled + missing join_url => accepted
         check_valid('{"packages": {"pkg1": {"enabled": false}}}')
-        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
-        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
-        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": 123}}}') # Still fails on non-string
+
+        # disabled + invalid join_url => rejected
+        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
+        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
+        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": 123}}}')
 
     @patch('rejoin_cli.get_pid')
     @patch('subprocess.Popen')
@@ -697,17 +703,17 @@ sys.exit(0 if success else 1)
                 pass
 
     def test_disabled_package_mutation(self):
-        # 1. Invalid URL in disabled package is fine
+        # 1. Missing URL in disabled package is fine
         ConfigManager.ensure_dir()
         with open(rejoin_core.CONFIG_FILE, "w") as f:
-            f.write('{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
+            f.write('{"packages": {"pkg1": {"enabled": false}}}')
 
         # 2. Attempt to enable it should fail
         self.assertFalse(ConfigManager.set_package_enabled("pkg1", True))
 
         # 3. Check JSON preservation
         with open(rejoin_core.CONFIG_FILE, "r") as f:
-            self.assertEqual(f.read(), '{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
+            self.assertEqual(f.read(), '{"packages": {"pkg1": {"enabled": false}}}')
 
     def test_non_bool_enabled(self):
         ConfigManager.ensure_dir()
@@ -758,6 +764,32 @@ sys.exit(0 if success else 1)
         config = ConfigManager.load_config(strict=True)
         self.assertIn("pkg3", config["packages"])
         self.assertNotIn("pkg1", config["packages"])
+
+    def test_first_config_race(self):
+        # A. simultaneous first initialization + add_package
+        if os.path.exists(rejoin_core.CONFIG_FILE):
+            os.remove(rejoin_core.CONFIG_FILE)
+
+        import multiprocessing
+        def worker_read():
+            import rejoin_core
+            rejoin_core.ConfigManager.load_config(strict=True)
+
+        def worker_add(pkg):
+            import rejoin_core
+            rejoin_core.ConfigManager.add_package(pkg, "123")
+
+        p1 = multiprocessing.Process(target=worker_read)
+        p2 = multiprocessing.Process(target=worker_add, args=("pkg_race_1",))
+
+        p1.start()
+        p2.start()
+        p1.join()
+        p2.join()
+
+        # B. simultaneous first initialization/read + mutation
+        config = ConfigManager.load_config(strict=True)
+        self.assertIn("pkg_race_1", config["packages"])
 
 if __name__ == '__main__':
     unittest.main()

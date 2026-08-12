@@ -159,13 +159,17 @@ class ConfigManager:
         return None
 
     @staticmethod
-    def load_config(strict=False) -> dict:
+    def load_config(strict=False, _locked=False) -> dict:
         ConfigManager.ensure_dir()
         if not os.path.exists(CONFIG_FILE):
+            if not _locked:
+                with ConfigManager.transaction_lock():
+                    if not os.path.exists(CONFIG_FILE):
+                        import copy
+                        default_copy = copy.deepcopy(DEFAULT_CONFIG)
+                        ConfigManager.save_config(default_copy)
             import copy
-            default_copy = copy.deepcopy(DEFAULT_CONFIG)
-            ConfigManager.save_config(default_copy)
-            return default_copy
+            return copy.deepcopy(DEFAULT_CONFIG)
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 config = json.load(f)
@@ -187,12 +191,11 @@ class ConfigManager:
                             raise ValueError("Error: config.json is malformed. Please fix or remove it.")
 
                         enabled = v.get("enabled", False)
-                        if enabled:
-                            if not ConfigManager.format_and_validate_url(v.get("join_url", "")):
+                        if "join_url" in v:
+                            if not ConfigManager.format_and_validate_url(v["join_url"]):
                                 raise ValueError("Error: config.json is malformed. Please fix or remove it.")
-                        else:
-                            if "join_url" in v and not isinstance(v["join_url"], str):
-                                raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+                        elif enabled:
+                            raise ValueError("Error: config.json is malformed. Please fix or remove it.")
             else:
                 if not isinstance(config, dict):
                     config = {}
@@ -227,7 +230,7 @@ class ConfigManager:
 
         with ConfigManager.transaction_lock():
             try:
-                config = ConfigManager.load_config(strict=True)
+                config = ConfigManager.load_config(strict=True, _locked=True)
             except ValueError as e:
                 print(str(e))
                 return False
@@ -242,7 +245,7 @@ class ConfigManager:
     def remove_package(package: str) -> bool:
         with ConfigManager.transaction_lock():
             try:
-                config = ConfigManager.load_config(strict=True)
+                config = ConfigManager.load_config(strict=True, _locked=True)
             except ValueError as e:
                 print(str(e))
                 return False
@@ -260,7 +263,7 @@ class ConfigManager:
 
         with ConfigManager.transaction_lock():
             try:
-                config = ConfigManager.load_config(strict=True)
+                config = ConfigManager.load_config(strict=True, _locked=True)
             except ValueError as e:
                 print(str(e))
                 return False
