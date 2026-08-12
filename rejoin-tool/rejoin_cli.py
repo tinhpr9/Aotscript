@@ -59,9 +59,17 @@ def stop_daemon():
         print(f"Stopping monitor (PID: {pid})...")
         try:
             os.kill(pid, signal.SIGTERM)
-            print("Stopped.")
         except OSError:
             print("Failed to stop or process already dead.")
+            return
+
+        import time
+        for _ in range(20):
+            if get_pid() is None:
+                print("Stopped.")
+                return
+            time.sleep(0.5)
+        print("Failed to stop: shutdown still pending.")
     else:
         print("Monitor is not running.")
 
@@ -101,10 +109,12 @@ def install_boot():
         os.makedirs(BOOT_SCRIPT_DIR, exist_ok=True)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     rejoin_bin = os.path.join(script_dir, "rejoin")
+    import shlex
+    safe_bin = shlex.quote(rejoin_bin)
     content = f"""#!/data/data/com.termux/files/usr/bin/sh
 termux-wake-lock
 sleep 15
-{rejoin_bin} start
+{safe_bin} start
 """
     with open(BOOT_SCRIPT_PATH, "w") as f:
         f.write(content)
@@ -163,8 +173,13 @@ def interactive_menu():
             install_boot()
         elif choice == "7":
             config = ConfigManager.load_config()
+            import copy
             import json
-            print(json.dumps(config, indent=2))
+            safe_config = copy.deepcopy(config)
+            for pkg, data in safe_config.get("packages", {}).items():
+                if "join_url" in data:
+                    data["join_url"] = "***REDACTED***"
+            print(json.dumps(safe_config, indent=2))
         elif choice == "8":
             from rejoin_core import discover_roblox_packages
             packages = discover_roblox_packages()
@@ -253,7 +268,7 @@ def main():
                 if args.args:
                     url = " ".join(args.args)
                     if ConfigManager.add_package(p, url):
-                        print(f"   Added {p} with URL {url}")
+                        print(f"   Added {p}")
                     else:
                         print(f"   Failed to add {p}")
 

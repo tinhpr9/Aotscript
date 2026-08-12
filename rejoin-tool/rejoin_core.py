@@ -134,10 +134,20 @@ class ConfigManager:
         if not re.match(r'^[a-zA-Z0-9_.]+$', package):
             return False
 
+        import urllib.parse
         formatted_url = url
-        if 'roblox.com' not in url and url.isdigit():
+        if url.isdigit():
             formatted_url = f"roblox://placeID={url}"
-        elif 'roblox.com' not in url and not url.startswith('roblox://'):
+        elif url.startswith('roblox://'):
+            pass
+        elif url.startswith('http://') or url.startswith('https://'):
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.hostname
+            if not host:
+                return False
+            if host != "roblox.com" and not host.endswith(".roblox.com"):
+                return False
+        else:
             return False
 
         config = ConfigManager.load_config()
@@ -173,6 +183,9 @@ class Monitor:
         packages = config.get("packages", {})
 
         for pkg, data in packages.items():
+            if self.stop_event and self.stop_event():
+                break
+
             if not data.get("enabled", False):
                 self.state[pkg] = {"status": "DISABLED", "retries": 0, "last_launch": 0}
                 continue
@@ -210,10 +223,8 @@ class Monitor:
                     continue
 
                 self.env.log(logging.INFO, f"[{pkg}] NOT RUNNING. Launching (Attempt {retries + 1}/{max_retries})...")
-                # Hide secret from URL in log
                 url = data.get("join_url", "")
-                safe_url = url.split("?")[0] + "?***" if "?" in url else url
-                self.env.log(logging.DEBUG, f"[{pkg}] Intent URL: {safe_url}")
+                self.env.log(logging.DEBUG, f"[{pkg}] Intent URL: ***REDACTED***")
 
                 success = self.env.launch_intent(pkg, url)
                 self.state[pkg]["last_launch"] = time.time()
@@ -307,7 +318,13 @@ def release_lock():
         try:
             os.ftruncate(_lock_fd, 0)
             os.fsync(_lock_fd)
+        except Exception:
+            pass
+        try:
             fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
             os.close(_lock_fd)
         except Exception:
             pass

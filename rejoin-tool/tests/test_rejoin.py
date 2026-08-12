@@ -14,6 +14,7 @@ class MockEnv(SystemEnvironment):
         self.launch_history = []
         self.sleep_history = []
         self.launch_returns = True
+        self.log_calls = []
 
     def is_process_running(self, package: str) -> bool:
         return package in self.running_processes
@@ -35,7 +36,7 @@ class MockEnv(SystemEnvironment):
         self.sleep_history.append(seconds)
 
     def log(self, level: int, msg: str):
-        pass
+        self.log_calls.append(msg)
 
 class TestRejoin(unittest.TestCase):
     def setUp(self):
@@ -360,6 +361,65 @@ sys.exit(0 if success else 1)
         finally:
             if old_cli_lock:
                 rejoin_cli.LOCK_FILE = old_cli_lock
+
+    def test_url_validation(self):
+        self.assertTrue(ConfigManager.add_package("pkg.val", "roblox://placeID=123"))
+        self.assertTrue(ConfigManager.add_package("pkg.val", "123456"))
+        self.assertTrue(ConfigManager.add_package("pkg.val", "https://roblox.com/games/123"))
+        self.assertTrue(ConfigManager.add_package("pkg.val", "http://www.roblox.com/test"))
+
+        self.assertFalse(ConfigManager.add_package("pkg.val", "https://evilroblox.com"))
+        self.assertFalse(ConfigManager.add_package("pkg.val", "http://roblox.com.evil.example"))
+        self.assertFalse(ConfigManager.add_package("pkg.val", "not_a_url"))
+
+    def test_log_redaction(self):
+        env = MockEnv()
+        ConfigManager.add_package("pkg1", "roblox://placeID=123&secret=abc")
+        monitor = Monitor(env)
+        monitor.run_once()
+        for call in env.log_calls:
+            self.assertNotIn("secret=abc", call)
+
+    def test_release_lock_exception_safety(self):
+        self.assertTrue(rejoin_core.acquire_lock())
+
+        with patch('os.ftruncate', side_effect=OSError("Disk full")):
+            rejoin_core.release_lock()
+
+        self.assertIsNone(rejoin_core._lock_fd)
+        self.assertTrue(rejoin_core.acquire_lock())
+        rejoin_core.release_lock()
+
+    def test_stop_event_honored(self):
+        env = MockEnv()
+        ConfigManager.add_package("pkg1", "123")
+        ConfigManager.add_package("pkg2", "456")
+
+        stop_flag = True
+        monitor = Monitor(env, lambda: stop_flag)
+        monitor.run_once()
+
+        self.assertEqual(len(monitor.state), 0)
+
+    @patch('os.kill')
+    @patch('rejoin_cli.get_pid')
+    @patch('builtins.print')
+    def test_stop_daemon_wait(self, mock_print, mock_get_pid, mock_kill):
+        import rejoin_cli
+        mock_get_pid.side_effect = [123, 123, 123, None]
+
+        with patch('time.sleep', return_value=None):
+            rejoin_cli.stop_daemon()
+
+        mock_kill.assert_called_once_with(123, 15)
+        mock_print.assert_any_call("Stopped.")
+
+        mock_get_pid.side_effect = [123] * 25
+        mock_print.reset_mock()
+        with patch('time.sleep', return_value=None):
+            rejoin_cli.stop_daemon()
+
+        mock_print.assert_any_call("Failed to stop: shutdown still pending.")
 
 if __name__ == '__main__':
     unittest.main()
