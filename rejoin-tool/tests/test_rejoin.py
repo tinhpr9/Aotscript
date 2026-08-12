@@ -317,5 +317,49 @@ sys.exit(0 if success else 1)
         # 7. shell injection regression
         self.assertFalse(env.launch_intent("com.roblox; rm -rf /", "123"))
 
+    def test_lock_handoff_and_stable_path(self):
+        # Ensure lock doesn't exist initially to simulate clean start
+        if os.path.exists(rejoin_core.LOCK_FILE):
+            os.remove(rejoin_core.LOCK_FILE)
+
+        # Initial acquire
+        self.assertTrue(rejoin_core.acquire_lock())
+
+        # Verify file exists and grab its inode
+        self.assertTrue(os.path.exists(rejoin_core.LOCK_FILE))
+        inode1 = os.stat(rejoin_core.LOCK_FILE).st_ino
+
+        # Release lock (should not remove file, but clear contents)
+        rejoin_core.release_lock()
+
+        # File should still exist
+        self.assertTrue(os.path.exists(rejoin_core.LOCK_FILE))
+        # Contents should be empty
+        with open(rejoin_core.LOCK_FILE, "r") as f:
+            self.assertEqual(f.read().strip(), "")
+
+        # Second acquire (simulating another daemon taking over)
+        self.assertTrue(rejoin_core.acquire_lock())
+
+        # File should still exist and inode must remain exactly the same
+        self.assertTrue(os.path.exists(rejoin_core.LOCK_FILE))
+        inode2 = os.stat(rejoin_core.LOCK_FILE).st_ino
+        self.assertEqual(inode1, inode2)
+
+        rejoin_core.release_lock()
+
+    def test_get_pid_empty_file(self):
+        # Create an empty lock file
+        with open(rejoin_core.LOCK_FILE, "w") as f:
+            f.write("")
+        import rejoin_cli
+        old_cli_lock = getattr(rejoin_cli, 'LOCK_FILE', None)
+        rejoin_cli.LOCK_FILE = rejoin_core.LOCK_FILE
+        try:
+            self.assertIsNone(rejoin_cli.get_pid())
+        finally:
+            if old_cli_lock:
+                rejoin_cli.LOCK_FILE = old_cli_lock
+
 if __name__ == '__main__':
     unittest.main()

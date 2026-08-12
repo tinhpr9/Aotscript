@@ -14,7 +14,10 @@ def get_pid():
     if os.path.exists(LOCK_FILE):
         try:
             with open(LOCK_FILE, "r") as f:
-                pid = int(f.read().strip())
+                content = f.read().strip()
+                if not content:
+                    return None
+                pid = int(content)
             os.kill(pid, 0)
             if is_rejoin_daemon(pid):
                 return pid

@@ -305,10 +305,10 @@ def release_lock():
     global _lock_fd
     if _lock_fd is not None:
         try:
+            os.ftruncate(_lock_fd, 0)
+            os.fsync(_lock_fd)
             fcntl.flock(_lock_fd, fcntl.LOCK_UN)
             os.close(_lock_fd)
-            if os.path.exists(LOCK_FILE):
-                os.remove(LOCK_FILE)
         except Exception:
             pass
         _lock_fd = None
