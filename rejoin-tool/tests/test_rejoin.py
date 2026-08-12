@@ -608,10 +608,13 @@ sys.exit(0 if success else 1)
         # disabled + missing join_url => accepted
         check_valid('{"packages": {"pkg1": {"enabled": false}}}')
 
-        # disabled + invalid join_url => rejected
-        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
-        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
+        # disabled + invalid string join_url => accepted (legacy repairable)
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
+        check_valid('{"packages": {"pkg1": {"enabled": false, "join_url": ""}}}')
+
+        # disabled + structurally invalid join_url => rejected
         check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": 123}}}')
+        check_malformed('{"packages": {"pkg1": {"enabled": false, "join_url": {}}}}')
 
     @patch('rejoin_cli.get_pid')
     @patch('subprocess.Popen')
@@ -702,18 +705,35 @@ sys.exit(0 if success else 1)
             except StopIteration:
                 pass
 
-    def test_disabled_package_mutation(self):
-        # 1. Missing URL in disabled package is fine
+    def test_disabled_package_mutation_repair(self):
         ConfigManager.ensure_dir()
+        # 1. Setup legacy invalid disabled package
         with open(rejoin_core.CONFIG_FILE, "w") as f:
-            f.write('{"packages": {"pkg1": {"enabled": false}}}')
+            f.write('{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
 
         # 2. Attempt to enable it should fail
         self.assertFalse(ConfigManager.set_package_enabled("pkg1", True))
 
-        # 3. Check JSON preservation
+        # 3. Check JSON preservation after failed mutation
         with open(rejoin_core.CONFIG_FILE, "r") as f:
-            self.assertEqual(f.read(), '{"packages": {"pkg1": {"enabled": false}}}')
+            self.assertEqual(f.read(), '{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
+
+        # 4. Must be removable
+        self.assertTrue(ConfigManager.remove_package("pkg1"))
+        self.assertNotIn("pkg1", ConfigManager.load_config(strict=True).get("packages", {}))
+
+        # 5. Restore legacy invalid disabled package
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"packages": {"pkg1": {"enabled": false, "join_url": "invalid string"}}}')
+
+        # 6. Repair via add_package
+        self.assertTrue(ConfigManager.add_package("pkg1", "123"))
+
+        # 7. Enable should now succeed
+        self.assertTrue(ConfigManager.set_package_enabled("pkg1", True))
+        config = ConfigManager.load_config(strict=True)
+        self.assertTrue(config["packages"]["pkg1"]["enabled"])
+        self.assertEqual(config["packages"]["pkg1"]["join_url"], "roblox://placeID=123")
 
     def test_non_bool_enabled(self):
         ConfigManager.ensure_dir()

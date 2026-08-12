@@ -191,11 +191,12 @@ class ConfigManager:
                             raise ValueError("Error: config.json is malformed. Please fix or remove it.")
 
                         enabled = v.get("enabled", False)
-                        if "join_url" in v:
-                            if not ConfigManager.format_and_validate_url(v["join_url"]):
+                        if enabled:
+                            if not ConfigManager.format_and_validate_url(v.get("join_url", "")):
                                 raise ValueError("Error: config.json is malformed. Please fix or remove it.")
-                        elif enabled:
-                            raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+                        else:
+                            if "join_url" in v and not isinstance(v["join_url"], str):
+                                raise ValueError("Error: config.json is malformed. Please fix or remove it.")
             else:
                 if not isinstance(config, dict):
                     config = {}
