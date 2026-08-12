@@ -5,6 +5,8 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -65,7 +67,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         draft_release: dict | None = None,
     ) -> None:
         release_path = self.write_json("release.json", release)
-        ref_path = self.write_json("ref.json", self.ref if ref is None else ref)
+        ref_path = self.write_json("ref.json", self.ref if ref is None else ref) if published else None
         draft_path = (
             self.write_json("draft.json", self.release if draft_release is None else draft_release)
             if published
@@ -99,9 +101,6 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         wrong_tag = copy.deepcopy(self.release)
         wrong_tag["tag_name"] = "worker-vwrong"
         mutations.append((wrong_tag, self.ref, False))
-        wrong_ref = copy.deepcopy(self.ref)
-        wrong_ref["object"]["sha"] = "b" * 40
-        mutations.append((self.release, wrong_ref, False))
         for field, value in (("name", "wrong-name"), ("size", 999), ("digest", "sha256:" + "0" * 64)):
             changed = copy.deepcopy(self.release)
             changed["assets"][0][field] = value
@@ -131,16 +130,129 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReleaseVerificationError, "release_identity_missing"):
             self.verify(published, published=True, draft_release=missing_draft_id)
 
+    def test_draft_resume_requires_exact_identity_tag_state_and_unique_target(self) -> None:
+        releases = [copy.deepcopy(self.release)]
+        self.assertEqual(
+            MODULE.validate_draft(
+                release=self.release, releases=releases, release_id=123, tag=self.tag
+            ),
+            self.commit,
+        )
+        mutations = []
+        wrong_id = copy.deepcopy(self.release)
+        wrong_id["id"] = 124
+        mutations.append((wrong_id, releases, 123, self.tag))
+        missing_id = copy.deepcopy(self.release)
+        missing_id.pop("id")
+        mutations.append((missing_id, releases, 123, self.tag))
+        published = copy.deepcopy(self.release)
+        published["draft"] = False
+        mutations.append((published, releases, 123, self.tag))
+        immutable = copy.deepcopy(self.release)
+        immutable["immutable"] = True
+        mutations.append((immutable, releases, 123, self.tag))
+        wrong_target = copy.deepcopy(self.release)
+        wrong_target["target_commitish"] = "main"
+        mutations.append((wrong_target, [wrong_target], 123, self.tag))
+        duplicate = [copy.deepcopy(self.release), copy.deepcopy(self.release)]
+        duplicate[1]["id"] = 124
+        mutations.append((self.release, duplicate, 123, self.tag))
+        for release, listing, release_id, tag in mutations:
+            with self.subTest(release=release, listing=listing), self.assertRaises(
+                MODULE.ReleaseVerificationError
+            ):
+                MODULE.validate_draft(
+                    release=release, releases=listing, release_id=release_id, tag=tag
+                )
+
+    def test_draft_asset_verification_does_not_require_git_ref(self) -> None:
+        release_path = self.write_json("draft-no-ref.json", self.release)
+        MODULE.verify_release(
+            commit=self.commit,
+            tag=self.tag,
+            asset_folder=self.assets,
+            release_path=release_path,
+            ref_path=None,
+            published=False,
+        )
+
+    def test_published_release_requires_exact_ref_identity_and_immutability(self) -> None:
+        published = copy.deepcopy(self.release)
+        published.update({"draft": False, "immutable": True})
+        wrong_ref = copy.deepcopy(self.ref)
+        wrong_ref["object"]["sha"] = "b" * 40
+        with self.assertRaisesRegex(MODULE.ReleaseVerificationError, "tag_ref_commit_mismatch"):
+            self.verify(published, wrong_ref, published=True)
+        wrong_id = copy.deepcopy(published)
+        wrong_id["id"] = 999
+        with self.assertRaisesRegex(MODULE.ReleaseVerificationError, "release_identity_changed"):
+            self.verify(wrong_id, published=True)
+
+    def test_create_mode_rejects_any_existing_release_with_tag(self) -> None:
+        MODULE.require_no_release_with_tag([], self.tag)
+        with self.assertRaisesRegex(MODULE.ReleaseVerificationError, "already_exists"):
+            MODULE.require_no_release_with_tag([self.release], self.tag)
+
+    def test_resume_rebuild_reproduces_all_release_assets_from_source(self) -> None:
+        first = self.root / "first-build"
+        rebuilt = self.root / "rebuilt"
+        command = [
+            sys.executable,
+            str(ROOT / "scripts/build-worker-release.py"),
+            "--version",
+            "2026.08.11.8",
+            "--commit",
+            self.commit,
+            "--source-root",
+            str(ROOT),
+        ]
+        subprocess.run(command + ["--output", str(first)], check=True, capture_output=True)
+        subprocess.run(
+            command
+            + [
+                "--reproduce-metadata-from",
+                str(first),
+                "--output",
+                str(rebuilt),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        first_assets = {
+            path.name: (path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in first.iterdir()
+        }
+        rebuilt_assets = {
+            path.name: (path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in rebuilt.iterdir()
+        }
+        self.assertEqual(14, len(first_assets))
+        self.assertEqual(first_assets, rebuilt_assets)
+
     def test_workflow_is_fail_closed_and_never_uses_admin_endpoint(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertNotIn("/immutable-releases", text)
         self.assertNotIn("len(data[\"assets\"])", text)
         self.assertNotIn("gh release delete", text)
+        self.assertNotIn("DELETE", text)
         self.assertNotIn("git push --delete", text)
+        self.assertNotIn("--clobber", text)
         self.assertIn("require-absent", text)
-        self.assertGreaterEqual(text.count("scripts/verify_worker_release.py verify"), 2)
-        self.assertLess(text.index("gh release create"), text.index("gh release upload"))
-        self.assertLess(text.index("gh release upload"), text.index("--draft=false"))
+        self.assertIn("resume_release_id", text)
+        self.assertIn('releases/${RELEASE_ID}', text)
+        self.assertNotIn('releases/tags/${TAG} > draft', text)
+        self.assertNotIn('git/ref/tags/${TAG} > release-ref', text)
+        self.assertGreaterEqual(text.count("scripts/verify_worker_release.py verify"), 3)
+        self.assertLess(text.index("--input \"$asset\""), text.index("-F draft=false"))
+
+    def test_resume_mode_never_uploads_assets(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        create_block = text[text.index('if [[ "$RELEASE_MODE" == create ]]'):]
+        resume_start = create_block.index('          else\n            RELEASE_ID="$RESUME_RELEASE_ID"')
+        resume_end = create_block.index('          fi\n          gh api', resume_start)
+        resume_branch = create_block[resume_start:resume_end]
+        self.assertNotIn('--input "$asset"', resume_branch)
+        self.assertNotIn('/assets?name=', resume_branch)
 
 
 if __name__ == "__main__":
