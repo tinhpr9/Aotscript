@@ -28,6 +28,14 @@ def get_pid():
 
 def start_daemon():
     ConfigManager.ensure_dir()
+
+    try:
+        ConfigManager.load_config(strict=True)
+    except ValueError as e:
+        print("FAILED to start monitor.")
+        print(str(e))
+        return
+
     pid = get_pid()
     if pid:
         print(f"Monitor is already running (PID: {pid}).")
@@ -85,7 +93,12 @@ def print_status():
     else:
         print("[STOPPED] Monitor is not active")
 
-    config = ConfigManager.load_config()
+    try:
+        config = ConfigManager.load_config(strict=True)
+    except ValueError as e:
+        print(str(e))
+        return
+
     packages = config.get("packages", {})
     if not packages:
         print("No packages configured.")
@@ -179,7 +192,11 @@ def interactive_menu():
         elif choice == "6":
             install_boot()
         elif choice == "7":
-            config = ConfigManager.load_config()
+            try:
+                config = ConfigManager.load_config(strict=True)
+            except ValueError as e:
+                print(str(e))
+                continue
             import copy
             import json
             safe_config = copy.deepcopy(config)

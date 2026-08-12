@@ -531,5 +531,96 @@ sys.exit(0 if success else 1)
         monitor.run_once()
         self.assertTrue(os.path.exists(rejoin_core.CONFIG_FILE))
 
+    def test_schema_validation(self):
+        # wrong container types
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write("[]")
+        with self.assertRaises(ValueError):
+            ConfigManager.load_config(strict=True)
+
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"packages": []}')
+        with self.assertRaises(ValueError):
+            ConfigManager.load_config(strict=True)
+
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"packages": {"pkg1": []}}')
+        with self.assertRaises(ValueError):
+            ConfigManager.load_config(strict=True)
+
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"settings": []}')
+        with self.assertRaises(ValueError):
+            ConfigManager.load_config(strict=True)
+
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"packages": {"pkg1": {"enabled": "yes"}}}')
+        with self.assertRaises(ValueError):
+            ConfigManager.load_config(strict=True)
+
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write('{"packages": {"pkg1": {"join_url": 123}}}')
+        with self.assertRaises(ValueError):
+            ConfigManager.load_config(strict=True)
+
+    @patch('rejoin_cli.get_pid')
+    @patch('subprocess.Popen')
+    @patch('builtins.print')
+    def test_start_daemon_refuses_malformed(self, mock_print, mock_popen, mock_get_pid):
+        mock_get_pid.return_value = None
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write("{ invalid json ")
+
+        import rejoin_cli
+        rejoin_cli.start_daemon()
+
+        mock_popen.assert_not_called()
+        mock_print.assert_any_call("FAILED to start monitor.")
+
+    @patch('builtins.print')
+    def test_operational_cli_reads_fail_closed(self, mock_print):
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write("{ invalid json ")
+
+        import rejoin_cli
+        rejoin_cli.print_status()
+        mock_print.assert_any_call("Error: config.json is malformed. Please fix or remove it.")
+
+        from rejoin_core import discover_roblox_packages
+        self.assertEqual(discover_roblox_packages(), [])
+
+    def test_all_numeric_settings_safe(self):
+        env = MockEnv()
+        monitor = Monitor(env, lambda: False)
+
+        conf = {
+            "settings": {
+                "check_interval_sec": "invalid",
+                "max_retries": -5,
+                "retry_delay_sec": "-2.5",
+                "cooldown_after_success_sec": None,
+                "open_delay_sec": {},
+                "delay_between_packages_sec": "5.5"
+            },
+            "packages": {
+                "pkg1": {"enabled": True, "join_url": "123"}
+            }
+        }
+
+        def fake_load_config(*args, **kwargs):
+            fake_load_config.calls += 1
+            if fake_load_config.calls > 2:
+                raise StopIteration("STOP")
+            return conf
+        fake_load_config.calls = 0
+
+        with patch.object(ConfigManager, 'load_config', side_effect=fake_load_config):
+            try:
+                monitor.run_loop()
+            except StopIteration:
+                pass
+
+        # if it didn't crash, safe numbers worked
+
 if __name__ == '__main__':
     unittest.main()

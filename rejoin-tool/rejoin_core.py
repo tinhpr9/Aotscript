@@ -117,7 +117,32 @@ class ConfigManager:
             return default_copy
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                config = json.load(f)
+
+            if strict:
+                if not isinstance(config, dict):
+                    raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+                if "settings" in config and not isinstance(config["settings"], dict):
+                    raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+                if "packages" in config:
+                    if not isinstance(config["packages"], dict):
+                        raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+                    for k, v in config["packages"].items():
+                        if not isinstance(v, dict):
+                            raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+                        if "enabled" in v and not isinstance(v["enabled"], bool):
+                            raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+                        if "join_url" in v and not isinstance(v["join_url"], str):
+                            raise ValueError("Error: config.json is malformed. Please fix or remove it.")
+            else:
+                if not isinstance(config, dict):
+                    config = {}
+                if "packages" in config and not isinstance(config["packages"], dict):
+                    config["packages"] = {}
+                if "settings" in config and not isinstance(config["settings"], dict):
+                    config["settings"] = {}
+
+            return config
         except json.JSONDecodeError:
             if strict:
                 raise ValueError("Error: config.json is malformed. Please fix or remove it.")
@@ -206,14 +231,26 @@ class Monitor:
             self.env.log(logging.ERROR, str(e))
             raise
 
-        settings = config.get("settings", DEFAULT_CONFIG["settings"])
+        settings = config.get("settings", {})
+        if not isinstance(settings, dict):
+            settings = {}
         packages = config.get("packages", {})
+        if not isinstance(packages, dict):
+            packages = {}
+
+        def safe_get_num(key, default_val, min_val=0):
+            val = settings.get(key, default_val)
+            try:
+                val = float(val)
+                return max(val, min_val)
+            except (TypeError, ValueError):
+                return default_val
 
         for pkg, data in packages.items():
             if self.stop_event and self.stop_event():
                 break
 
-            if not data.get("enabled", False):
+            if not isinstance(data, dict) or not data.get("enabled", False):
                 self.state[pkg] = {"status": "DISABLED", "retries": 0, "last_launch": 0}
                 continue
 
@@ -231,7 +268,7 @@ class Monitor:
             else:
                 # Need to launch
                 retries = self.state[pkg]["retries"]
-                max_retries = settings.get("max_retries", 3)
+                max_retries = int(safe_get_num("max_retries", 3, 0))
                 if retries >= max_retries:
                     if self.state[pkg]["status"] != "FAILED":
                         self.env.log(logging.ERROR, f"[{pkg}] FAILED after {retries} retries.")
@@ -241,8 +278,8 @@ class Monitor:
                 # Check cooldown / delay
                 last_launch = self.state[pkg].get("last_launch", 0)
                 last_success = self.state[pkg].get("last_success", 0)
-                retry_delay = settings.get("retry_delay_sec", 10)
-                cooldown = settings.get("cooldown_after_success_sec", 30)
+                retry_delay = safe_get_num("retry_delay_sec", 10, 0)
+                cooldown = safe_get_num("cooldown_after_success_sec", 30, 0)
 
                 if now - last_success < cooldown:
                     continue
@@ -258,13 +295,13 @@ class Monitor:
                 self.state[pkg]["retries"] += 1
 
                 if success:
-                    self.env.sleep(settings.get("open_delay_sec", 10))
+                    self.env.sleep(safe_get_num("open_delay_sec", 10, 0))
                     if self.env.is_process_running(pkg):
                         self.state[pkg]["status"] = "RUNNING"
                         self.state[pkg]["retries"] = 0
                         self.state[pkg]["last_success"] = time.time()
                         self.env.log(logging.INFO, f"[{pkg}] Verified RUNNING after launch.")
-                        delay_seq = settings.get("delay_between_packages_sec", 5)
+                        delay_seq = safe_get_num("delay_between_packages_sec", 5, 0)
                         if delay_seq > 0:
                             self.env.sleep(delay_seq)
                     else:
@@ -298,11 +335,14 @@ class Monitor:
                 self.env.log(logging.ERROR, "Monitor stopping due to configuration error.")
                 break
 
-            interval_raw = config.get("settings", {}).get("check_interval_sec", 30)
+            settings = config.get("settings", {})
+            if not isinstance(settings, dict):
+                settings = {}
+
+            interval_raw = settings.get("check_interval_sec", 30)
             try:
-                interval = int(interval_raw)
-                if interval < 1:
-                    interval = 1
+                interval = int(float(interval_raw))
+                interval = max(interval, 1)
             except (TypeError, ValueError):
                 interval = 30
 
@@ -321,10 +361,20 @@ def is_rejoin_daemon(pid: int) -> bool:
         return False
 
 def discover_roblox_packages() -> list:
-    config = ConfigManager.load_config()
-    prefix = config.get("settings", {}).get("package_prefix", "com.roblox")
-    if not re.match(r'^[a-zA-Z0-9_.]+$', prefix):
+    try:
+        config = ConfigManager.load_config(strict=True)
+    except ValueError as e:
+        print(str(e))
         return []
+
+    settings = config.get("settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
+
+    prefix = settings.get("package_prefix", "com.roblox")
+    if not isinstance(prefix, str) or not re.match(r'^[a-zA-Z0-9_.]+$', prefix):
+        prefix = "com.roblox"
+
     try:
         result = subprocess.run(["su", "-c", f"pm list packages {shlex.quote(prefix)}"], capture_output=True, text=True, timeout=10)
         packages = []
