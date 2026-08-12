@@ -108,7 +108,7 @@ class ConfigManager:
             os.makedirs(CONFIG_DIR, exist_ok=True)
 
     @staticmethod
-    def load_config() -> dict:
+    def load_config(strict=False) -> dict:
         ConfigManager.ensure_dir()
         if not os.path.exists(CONFIG_FILE):
             import copy
@@ -119,6 +119,8 @@ class ConfigManager:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except json.JSONDecodeError:
+            if strict:
+                raise ValueError("Error: config.json is malformed. Please fix or remove it.")
             import copy
             return copy.deepcopy(DEFAULT_CONFIG)
 
@@ -151,7 +153,12 @@ class ConfigManager:
         else:
             return False
 
-        config = ConfigManager.load_config()
+        try:
+            config = ConfigManager.load_config(strict=True)
+        except ValueError as e:
+            print(str(e))
+            return False
+
         if "packages" not in config:
             config["packages"] = {}
         config["packages"][package] = {"join_url": formatted_url, "enabled": True}
@@ -160,14 +167,24 @@ class ConfigManager:
 
     @staticmethod
     def remove_package(package: str):
-        config = ConfigManager.load_config()
+        try:
+            config = ConfigManager.load_config(strict=True)
+        except ValueError as e:
+            print(str(e))
+            return
+
         if "packages" in config and package in config["packages"]:
             del config["packages"][package]
             ConfigManager.save_config(config)
 
     @staticmethod
     def set_package_enabled(package: str, enabled: bool):
-        config = ConfigManager.load_config()
+        try:
+            config = ConfigManager.load_config(strict=True)
+        except ValueError as e:
+            print(str(e))
+            return
+
         if "packages" in config and package in config["packages"]:
             config["packages"][package]["enabled"] = enabled
             ConfigManager.save_config(config)

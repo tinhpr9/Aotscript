@@ -485,5 +485,19 @@ sys.exit(0 if success else 1)
         self.assertEqual(run_with_interval(-10), 1)
         self.assertEqual(run_with_interval(None), 30)
 
+    @patch('builtins.print')
+    def test_malformed_config_mutation_failsafe(self, mock_print):
+        with open(rejoin_core.CONFIG_FILE, "w") as f:
+            f.write("{ invalid json ")
+
+        self.assertFalse(ConfigManager.add_package("pkg1", "123"))
+        mock_print.assert_any_call("Error: config.json is malformed. Please fix or remove it.")
+
+        ConfigManager.remove_package("pkg1")
+        ConfigManager.set_package_enabled("pkg1", True)
+
+        with open(rejoin_core.CONFIG_FILE, "r") as f:
+            self.assertEqual(f.read(), "{ invalid json ")
+
 if __name__ == '__main__':
     unittest.main()
