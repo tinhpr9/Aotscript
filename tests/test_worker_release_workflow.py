@@ -231,6 +231,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
 
     def test_workflow_is_fail_closed_and_never_uses_admin_endpoint(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('test "$RELEASE_VERSION" = "2026.08.11.11"', text)
         self.assertNotIn("/immutable-releases", text)
         self.assertNotIn("len(data[\"assets\"])", text)
         self.assertNotIn("gh release delete", text)
