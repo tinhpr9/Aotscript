@@ -19,6 +19,8 @@ const AOT_APPS_ACTION = "OPEN_SWIFT_APPS";
 const AOT_BACKUP_RESTORE_DATA_ACTION = "BACKUP_RESTORE_DATA";
 const AOT_BATCH_PACKAGE = "org.swiftapps.swiftbackup";
 const AOT_BATCH_TTL_MS = 75 * 1000;
+// Full chain bound: launch(45s) + multiple 30s UI transitions + final wait(45s) = ~300s total safe bound
+const AOT_BACKUP_RESTORE_DATA_TTL_MS = 300 * 1000;
 const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
@@ -2954,7 +2956,8 @@ export class FleetState
       seen.add(id); targets.push(id);
     }
     if (!targets.length || targets.length > AOT_CONTROL_MAX_TARGETS) return json({ ok: false, error: "invalid_batch_targets" }, 400);
-    const createdAt = Date.now(), expiresAt = createdAt + AOT_BATCH_TTL_MS;
+    const ttl = action === AOT_BACKUP_RESTORE_DATA_ACTION ? AOT_BACKUP_RESTORE_DATA_TTL_MS : AOT_BATCH_TTL_MS;
+    const createdAt = Date.now(), expiresAt = createdAt + ttl;
     const actionId = `fleet-${createdAt}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
     const devices = {}, online = [];
     for (const id of targets) {
@@ -3010,13 +3013,19 @@ export class FleetState
     const batch = record.last_batch, device = batch?.devices?.[id];
     const allowed = new Set(["ACCEPTED", "OPENED", "APPS_OPENED", "SWIFT_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED", "BACKUP_STARTED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "DUPLICATE"]);
     if (!batch || batch.action_id !== actionId || batch.action !== action || !device || !allowed.has(body.status)) return json({ ok: false, error: "invalid_batch_ack" }, 400);
-    const terminal = new Set(["OPENED", "APPS_OPENED", "BACKUP_STARTED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE"]);
+    const terminal = new Set(["FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE"]);
+    if (action === AOT_BATCH_ACTION) terminal.add("OPENED");
+    if (action === AOT_APPS_ACTION) terminal.add("APPS_OPENED");
+    if (action === AOT_BACKUP_RESTORE_DATA_ACTION) terminal.add("BACKUP_STARTED");
+    const ranks = { "SENT": 0, "ACCEPTED": 1, "OPENED": 2, "SWIFT_OPENED": 2, "APPS_OPENED": 3, "FILTERED": 4, "SELECTED": 5, "OPTIONS_VERIFIED": 6, "BACKUP_STARTED": 7, "FAILED_NOT_INSTALLED": 8, "FAILED": 8, "TIMEOUT": 8, "SKIPPED_OFFLINE": 8 };
     if (!terminal.has(device.status) && body.status !== "DUPLICATE") {
       const next = Date.now() >= batch.expires_at ? "TIMEOUT" : body.status;
-      device.status = next; if (!device.history.includes(next)) device.history.push(next);
-      device.reason = ["FAILED", "FAILED_NOT_INSTALLED", "TIMEOUT"].includes(next) ? String(body.reason || "worker_reported_failure").slice(0, 160) : null;
-      device.executed = body.executed === true; device.updated_at = Date.now();
-      await this.writeFleet(record); await this.broadcastFleetState();
+      if ((ranks[next] || 0) > (ranks[device.status] || 0)) {
+        device.status = next; if (!device.history.includes(next)) device.history.push(next);
+        device.reason = ["FAILED", "FAILED_NOT_INSTALLED", "TIMEOUT"].includes(next) ? String(body.reason || "worker_reported_failure").slice(0, 160) : null;
+        device.executed = body.executed === true; device.updated_at = Date.now();
+        await this.writeFleet(record); await this.broadcastFleetState();
+      }
     }
     return json({ ok: true, action_id: actionId, device_id: id, status: device.status });
   }

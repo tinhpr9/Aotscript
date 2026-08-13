@@ -48,6 +48,19 @@ if (Object.values((await fleet.readFleet()).last_batch.devices).some(d => d.stat
 response = await fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[0], action_id: actionId, batch_action: "OPEN_SWIFT_BACKUP", status: "DUPLICATE", executed: false }) }));
 if (!response.ok || (await fleet.readFleet()).last_batch.devices[ids[0]].status !== "OPENED") throw new Error("dedupe terminal state changed");
 
+// Monotonic tests
+response = await fleet.dispatchFleetBatch(record, "BACKUP_RESTORE_DATA", [ids[0]]);
+body = await response.json();
+const bActionId = body.batch.action_id;
+const ack = async (status) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[0], action_id: bActionId, batch_action: "BACKUP_RESTORE_DATA", status, executed: false }) }));
+await ack("ACCEPTED");
+await ack("FILTERED");
+await ack("SWIFT_OPENED"); // regressive
+if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "FILTERED") throw new Error("monotonicity violated (regressive)");
+await ack("BACKUP_STARTED"); // terminal for this action
+await ack("SELECTED"); // late/post-terminal
+if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "BACKUP_STARTED") throw new Error("monotonicity violated (post-terminal)");
+
 const file = source;
 if (!file.includes("AOT_UPDATE_GROUP_SIZE = 5") || !file.includes("ROLLED_BACK")) throw new Error("update rollout/rollback lost");
 const fleetProtocol = file.slice(file.indexOf("async readFleet()"));

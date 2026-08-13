@@ -2008,6 +2008,7 @@ function normalizeAotHubControl(body) {
     [
       "open_swift_backup",
       "open_swift_apps",
+      "backup_restore_data",
       "update_canary",
       "update_stable",
     ].includes(kind)

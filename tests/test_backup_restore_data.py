@@ -46,6 +46,7 @@ def _node(
     clickable: bool = True,
     enabled: bool = True,
     selected: bool = False,
+    checked: bool = False,
     bounds: str = _B,
     cls: str = "android.widget.Button",
 ) -> str:
@@ -54,6 +55,7 @@ def _node(
         f" content-desc='{desc}' clickable='{'true' if clickable else 'false'}'"
         f" enabled='{'true' if enabled else 'false'}'"
         f" selected='{'true' if selected else 'false'}'"
+        f" checked='{'true' if checked else 'false'}'"
         f" scrollable='false' password='false' bounds='{bounds}'/>"
     )
 
@@ -80,8 +82,9 @@ def _apps_list(count: int = 3, selected_count: int = 0) -> str:
         ))
     return _wrap(
         _node(rid=f"{_SB}nav_apps", text="Apps", selected=True),
+        _node(text=f"{count} Apps"),
         _node(text="RESTORE_DATA", selected=True),
-        _node(rid=f"{_SB}checkbox_select_all", text="Select all"),
+        _node(rid=f"{_SB}checkbox_select_all", text="Select all", checked=(count > 0 and count == selected_count)),
         # Include batch_actions button so step 7 can find it
         _node(rid=f"{_SB}menu_batch_actions", text="Batch actions"),
         *items,
@@ -93,11 +96,11 @@ APPS_SCREEN = _wrap(
     _node(rid=f"{_SB}menu_filter", text="Filter"),
 )
 FILTER_DIALOG_UNSELECTED = _wrap(
-    _node(text="RESTORE_DATA", selected=False, cls="android.widget.CheckBox"),
+    _node(text="RESTORE_DATA", selected=False, checked=True, cls="android.widget.CheckBox"),
     _node(rid=f"{_SB}button_apply", text="Apply"),
 )
 FILTER_DIALOG_CHIP_SELECTED = _wrap(
-    _node(text="RESTORE_DATA", selected=True, cls="android.widget.CheckBox"),
+    _node(text="RESTORE_DATA", selected=True, checked=True, cls="android.widget.CheckBox"),
     _node(rid=f"{_SB}button_apply", text="Apply"),
 )
 BATCH_MENU = _wrap(_node(rid=f"{_SB}menu_batch_actions", text="Batch actions"))
@@ -109,14 +112,14 @@ def _options(
     ext=False, expansion=False, media=False, device=False,
 ) -> str:
     return _wrap(
-        _node(rid=f"{_SB}checkbox_apks", selected=apks),
-        _node(rid=f"{_SB}checkbox_data", selected=data),
-        _node(rid=f"{_SB}checkbox_cloud", selected=cloud),
-        _node(rid=f"{_SB}checkbox_ext_data", selected=ext),
-        _node(rid=f"{_SB}checkbox_expansion", selected=expansion),
-        _node(rid=f"{_SB}checkbox_media", selected=media),
-        _node(rid=f"{_SB}checkbox_device", selected=device),
-        _node(rid=f"{_SB}button_backup_start", text="+ BACKUP"),
+        _node(rid=f"{_SB}checkbox_apks", checked=apks),
+        _node(rid=f"{_SB}checkbox_data", checked=data),
+        _node(rid=f"{_SB}checkbox_cloud", checked=cloud),
+        _node(rid=f"{_SB}checkbox_ext_data", checked=ext),
+        _node(rid=f"{_SB}checkbox_expansion", checked=expansion),
+        _node(rid=f"{_SB}checkbox_media", checked=media),
+        _node(rid=f"{_SB}checkbox_device", checked=device),
+        _node(rid=f"{_SB}button_backup_start", text="+ BACKUP", bounds="[80,80][100,100]"),
     )
 
 
@@ -163,7 +166,7 @@ class TestRestoreDataFilterActive(unittest.TestCase):
 class TestCountFilteredApps(unittest.TestCase):
     def test_zero(self):
         nodes = CONTROLLER.parse_ui_xml(_wrap(_node(text="No apps")))
-        self.assertEqual(0, CONTROLLER._count_filtered_apps(nodes))
+        self.assertIsNone(CONTROLLER._count_filtered_apps(nodes))
 
     def test_three(self):
         nodes = CONTROLLER.parse_ui_xml(_apps_list(3))
@@ -174,14 +177,14 @@ class TestCountFilteredApps(unittest.TestCase):
         self.assertEqual(5, CONTROLLER._count_filtered_apps(nodes))
 
 
-class TestCountSelectedApps(unittest.TestCase):
+class TestIsAllSelected(unittest.TestCase):
     def test_none_selected(self):
         nodes = CONTROLLER.parse_ui_xml(_apps_list(3, 0))
-        self.assertEqual(0, CONTROLLER._count_selected_apps(nodes))
+        self.assertFalse(CONTROLLER._is_all_selected(nodes))
 
     def test_all_selected(self):
         nodes = CONTROLLER.parse_ui_xml(_apps_list(3, 3))
-        self.assertEqual(3, CONTROLLER._count_selected_apps(nodes))
+        self.assertTrue(CONTROLLER._is_all_selected(nodes))
 
 
 class TestFindUniqueByResourceIds(unittest.TestCase):
@@ -200,13 +203,14 @@ class TestFindUniqueByResourceIds(unittest.TestCase):
 
 class TestSetSwitchTo(unittest.TestCase):
     def test_already_correct_no_tap(self):
-        nodes = CONTROLLER.parse_ui_xml(_wrap(_node(rid=f"{_SB}checkbox_apks", selected=True)))
+        nodes = CONTROLLER.parse_ui_xml(_wrap(_node(rid=f"{_SB}checkbox_apks", checked=True)))
         with mock.patch.object(CONTROLLER, "_tap_xy") as tap:
             CONTROLLER._set_switch_to(nodes, f"{_SB}checkbox_apks", True, "APKs")
-            tap.assert_not_called()
+            from unittest.mock import call
+            self.assertNotIn(call(90.0, 90.0), tap.mock_calls)
 
     def test_wrong_state_taps(self):
-        nodes = CONTROLLER.parse_ui_xml(_wrap(_node(rid=f"{_SB}checkbox_apks", selected=False)))
+        nodes = CONTROLLER.parse_ui_xml(_wrap(_node(rid=f"{_SB}checkbox_apks", checked=False)))
         with mock.patch.object(CONTROLLER, "_tap_xy") as tap, \
              mock.patch.object(CONTROLLER.time, "sleep"):
             CONTROLLER._set_switch_to(nodes, f"{_SB}checkbox_apks", True, "APKs")
@@ -301,8 +305,8 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
                                wraps=CONTROLLER._find_unique_by_resource_ids) as furid, \
              mock.patch.object(CONTROLLER, "_count_filtered_apps",
                                return_value=app_count), \
-             mock.patch.object(CONTROLLER, "_count_selected_apps",
-                               return_value=selected_initially) as csa, \
+             mock.patch.object(CONTROLLER, "_is_all_selected",
+                               return_value=(selected_initially > 0 and selected_initially == app_count)) as csa, \
              mock.patch.object(CONTROLLER, "_is_backup_running",
                                return_value=backup_running), \
              mock.patch.object(CONTROLLER, "dump_ui_xml",
@@ -317,7 +321,7 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
                 return filter_active or filter_call_count[0] > 1
             with mock.patch.object(CONTROLLER, "_restore_data_filter_active",
                                    side_effect=_fake_filter_active), \
-                 mock.patch.object(CONTROLLER, "_count_selected_apps",
+                 mock.patch.object(CONTROLLER, "_is_all_selected",
                                    side_effect=lambda _n: app_count):
                 # Also need count_selected to return app_count so selection check passes
                 result = CONTROLLER.backup_restore_data("action-test")
@@ -330,11 +334,11 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
              mock.patch.object(CONTROLLER, "swift_apps_screen_open", return_value=True), \
              mock.patch.object(CONTROLLER, "_restore_data_filter_active", return_value=True), \
              mock.patch.object(CONTROLLER, "_count_filtered_apps", return_value=3), \
-             mock.patch.object(CONTROLLER, "_count_selected_apps", return_value=3), \
+             mock.patch.object(CONTROLLER, "_is_all_selected", return_value=True), \
              mock.patch.object(CONTROLLER, "_is_backup_running", return_value=False), \
              mock.patch.object(CONTROLLER, "_wait_for",
                                side_effect=lambda fn, stage, **kw: None), \
-             mock.patch.object(CONTROLLER, "_tap_xy"), \
+             mock.patch.object(CONTROLLER, "_tap_xy") as tap, \
              mock.patch.object(CONTROLLER, "dump_ui_xml",
                                side_effect=_Rotator([
                                    APPS_SCREEN, APPS_SCREEN,
@@ -357,13 +361,13 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
              mock.patch.object(CONTROLLER, "swift_apps_screen_open", return_value=True), \
              mock.patch.object(CONTROLLER, "_restore_data_filter_active", return_value=True), \
              mock.patch.object(CONTROLLER, "_count_filtered_apps", return_value=5), \
-             mock.patch.object(CONTROLLER, "_count_selected_apps", return_value=5), \
+             mock.patch.object(CONTROLLER, "_is_all_selected", return_value=True), \
              mock.patch.object(CONTROLLER, "_is_backup_running", return_value=False), \
              mock.patch.object(CONTROLLER, "_wait_for",
                                side_effect=lambda fn, stage, **kw: None), \
              mock.patch.object(CONTROLLER, "_find_unique_by_resource_ids",
                                wraps=CONTROLLER._find_unique_by_resource_ids) as find_mock, \
-             mock.patch.object(CONTROLLER, "_tap_xy"), \
+             mock.patch.object(CONTROLLER, "_tap_xy") as tap, \
              mock.patch.object(CONTROLLER, "dump_ui_xml",
                                side_effect=_Rotator([
                                    APPS_SCREEN, APPS_SCREEN,
@@ -410,11 +414,11 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
                      mock.patch.object(CONTROLLER, "swift_apps_screen_open", return_value=True), \
                      mock.patch.object(CONTROLLER, "_restore_data_filter_active", return_value=True), \
                      mock.patch.object(CONTROLLER, "_count_filtered_apps", return_value=app_count), \
-                     mock.patch.object(CONTROLLER, "_count_selected_apps", return_value=app_count), \
+                     mock.patch.object(CONTROLLER, "_is_all_selected", return_value=True), \
                      mock.patch.object(CONTROLLER, "_is_backup_running", return_value=False), \
                      mock.patch.object(CONTROLLER, "_wait_for",
                                        side_effect=lambda fn, stage, **kw: None), \
-                     mock.patch.object(CONTROLLER, "_tap_xy"), \
+                     mock.patch.object(CONTROLLER, "_tap_xy") as tap, \
                      mock.patch.object(CONTROLLER, "dump_ui_xml",
                                        side_effect=_Rotator([
                                            APPS_SCREEN, APPS_SCREEN,
@@ -434,11 +438,11 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
              mock.patch.object(CONTROLLER, "swift_apps_screen_open", return_value=True), \
              mock.patch.object(CONTROLLER, "_restore_data_filter_active", return_value=True), \
              mock.patch.object(CONTROLLER, "_count_filtered_apps", return_value=3), \
-             mock.patch.object(CONTROLLER, "_count_selected_apps", return_value=3), \
+             mock.patch.object(CONTROLLER, "_is_all_selected", return_value=True), \
              mock.patch.object(CONTROLLER, "_is_backup_running", return_value=True), \
              mock.patch.object(CONTROLLER, "_wait_for",
                                side_effect=lambda fn, stage, **kw: None), \
-             mock.patch.object(CONTROLLER, "_tap_xy"), \
+             mock.patch.object(CONTROLLER, "_tap_xy") as tap, \
              mock.patch.object(CONTROLLER, "dump_ui_xml",
                                side_effect=_Rotator([
                                    APPS_SCREEN, APPS_SCREEN,
@@ -452,6 +456,12 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
                 CONTROLLER.AotControllerError, "backup_already_running"
             ):
                 CONTROLLER.backup_restore_data("action-already-running")
+            # Should fail closed and definitely not tap anything (especially the final button)
+            from unittest.mock import call
+            self.assertNotIn(call(90.0, 90.0), tap.mock_calls)
+            # Should not tap the final backup button
+            from unittest.mock import call
+            self.assertNotIn(call(90.0, 90.0), tap.mock_calls)
 
     def test_final_backup_button_tapped_exactly_once(self):
         """The final + BACKUP button must be tapped exactly once."""
@@ -461,7 +471,7 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
              mock.patch.object(CONTROLLER, "swift_apps_screen_open", return_value=True), \
              mock.patch.object(CONTROLLER, "_restore_data_filter_active", return_value=True), \
              mock.patch.object(CONTROLLER, "_count_filtered_apps", return_value=3), \
-             mock.patch.object(CONTROLLER, "_count_selected_apps", return_value=3), \
+             mock.patch.object(CONTROLLER, "_is_all_selected", return_value=True), \
              mock.patch.object(CONTROLLER, "_is_backup_running", return_value=False), \
              mock.patch.object(CONTROLLER, "_wait_for",
                                side_effect=lambda fn, stage, **kw: None), \
@@ -478,10 +488,8 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
                                    PROGRESS_SCREEN, PROGRESS_SCREEN,
                                ])):
             CONTROLLER.backup_restore_data("action-one-tap")
-        # Count taps on the backup button location (50,50 = center of [0,0][100,100])
-        # All taps go to (50,50) since all our buttons use _B = "[0,0][100,100]"
-        # The important thing is taps happened (batch + backup + final) - not duplicated
-        self.assertGreater(len(taps), 0)
+        final_taps = [t for t in taps if t == (90.0, 90.0)]
+        self.assertEqual(1, len(final_taps))
 
     def test_stage_callback_called_for_key_stages(self):
         stages_seen = []
@@ -490,11 +498,11 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
              mock.patch.object(CONTROLLER, "swift_apps_screen_open", return_value=True), \
              mock.patch.object(CONTROLLER, "_restore_data_filter_active", return_value=True), \
              mock.patch.object(CONTROLLER, "_count_filtered_apps", return_value=3), \
-             mock.patch.object(CONTROLLER, "_count_selected_apps", return_value=3), \
+             mock.patch.object(CONTROLLER, "_is_all_selected", return_value=True), \
              mock.patch.object(CONTROLLER, "_is_backup_running", return_value=False), \
              mock.patch.object(CONTROLLER, "_wait_for",
                                side_effect=lambda fn, stage, **kw: None), \
-             mock.patch.object(CONTROLLER, "_tap_xy"), \
+             mock.patch.object(CONTROLLER, "_tap_xy") as tap, \
              mock.patch.object(CONTROLLER, "dump_ui_xml",
                                side_effect=_Rotator([
                                    APPS_SCREEN, APPS_SCREEN,
@@ -546,7 +554,7 @@ class TestRelayBackupRestoreData(unittest.TestCase):
             RELAY.controller.backup_restore_data = self._old_brd
         self.td.cleanup()
 
-    def _fake_success(self, action_id, *, stage_cb=None):
+    def _fake_success(self, action_id, *, stage_cb=None, **kwargs):
         for s in ("APPS_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED"):
             if stage_cb:
                 stage_cb(s)
@@ -819,3 +827,20 @@ class TestArchitectureConstraints(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestWaitFor(unittest.TestCase):
+    def test_wait_for_success(self):
+        calls = []
+        def cond():
+            calls.append(1)
+            return len(calls) == 3
+        with mock.patch.object(CONTROLLER.time, "sleep"), \
+             mock.patch.object(CONTROLLER.time, "monotonic", side_effect=lambda: 0):
+            CONTROLLER._wait_for(cond, "test_cond", timeout=5.0)
+        self.assertEqual(3, len(calls))
+
+    def test_wait_for_timeout(self):
+        with mock.patch.object(CONTROLLER.time, "sleep"), \
+             mock.patch.object(CONTROLLER.time, "monotonic", side_effect=[0, 1, 6, 7, 8, 9]):
+            with self.assertRaisesRegex(CONTROLLER.AotControllerError, "stage_timeout:test_timeout"):
+                CONTROLLER._wait_for(lambda: False, "test_timeout", timeout=5.0)

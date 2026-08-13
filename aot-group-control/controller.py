@@ -80,6 +80,7 @@ class UiNode:
     scrollable: bool
     password: bool
     selected: bool = False
+    checked: bool = False
     text: str = ""
     content_description: str = ""
 
@@ -95,6 +96,7 @@ class UiNode:
             "scrollable": self.scrollable,
             "password": self.password,
             "selected": self.selected,
+            "checked": self.checked,
         }
 
 
@@ -527,6 +529,7 @@ def parse_ui_xml(xml_text: str) -> list[UiNode]:
                     scrollable=_bool_attr(child.attrib.get("scrollable")),
                     password=_bool_attr(child.attrib.get("password")),
                     selected=_bool_attr(child.attrib.get("selected")),
+                    checked=_bool_attr(child.attrib.get("checked")),
                     text=child.attrib.get("text", ""),
                     content_description=child.attrib.get("content-desc", ""),
                 )
@@ -1099,18 +1102,20 @@ def _sb_assert_foreground() -> None:
     """Raise AotControllerError if Swift Backup is not foreground."""
     pkg = foreground_package()
     if pkg != SWIFT_BACKUP_PACKAGE:
-        raise AotControllerError(
-            f"swift_backup_not_foreground pkg={pkg!r}"
-        )
+        raise AotControllerError("swift_backup_not_foreground")
 
 
 def _wait_for(
     condition_fn,
     stage: str,
     timeout: float = RESTORE_DATA_STAGE_TIMEOUT,
+    absolute_deadline: float | None = None,
 ) -> None:
     """Poll condition_fn until True or timeout; raise on timeout."""
     deadline = time.monotonic() + timeout
+    if absolute_deadline is not None:
+        sys_deadline = absolute_deadline - time.time() + time.monotonic()
+        deadline = min(deadline, sys_deadline)
     while time.monotonic() < deadline:
         try:
             if condition_fn():
@@ -1188,7 +1193,7 @@ def _get_switch_state(nodes: list[UiNode], resource_id: str) -> bool | None:
     """Return the selected/checked state of a node, or None if not found."""
     matches = [n for n in nodes if n.resource_id == resource_id]
     if len(matches) == 1:
-        return matches[0].selected
+        return matches[0].checked
     return None
 
 
@@ -1205,7 +1210,7 @@ def _set_switch_to(
     if len(matches) > 1:
         raise AotControllerError(f"option_ambiguous:{option_name}")
     node = matches[0]
-    current = node.selected
+    current = node.checked
     if current == desired_on:
         return  # already correct
     target = _clickable_target(nodes, node)
@@ -1240,6 +1245,7 @@ def backup_restore_data(
     action_id: str,
     *,
     stage_cb=None,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Run the complete Swift Backup RESTORE_DATA full chain (11 steps).
 
@@ -1264,6 +1270,8 @@ def backup_restore_data(
     """
     def _cb(stage: str) -> None:
         if stage_cb is not None:
+            if deadline is not None and time.time() > deadline:
+                raise AotControllerError("expired")
             try:
                 stage_cb(stage)
             except Exception:
@@ -1303,7 +1311,7 @@ def backup_restore_data(
             n = parse_ui_xml(dump_ui_xml())
             fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, n)
             return fp != before_fp
-        _wait_for(_filter_dialog_open, "filter_dialog_open")
+        _wait_for(_filter_dialog_open, "filter_dialog_open", absolute_deadline=deadline)
         nodes = parse_ui_xml(dump_ui_xml())
 
         # ── Step 4: Activate the RESTORE_DATA label ───────────────────────────
@@ -1351,7 +1359,7 @@ def backup_restore_data(
                 ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_fp2
                 and _restore_data_filter_active(n)
             )
-        _wait_for(_filter_applied, "filter_applied")
+        _wait_for(_filter_applied, "filter_applied", absolute_deadline=deadline)
         nodes = parse_ui_xml(dump_ui_xml())
     _cb("FILTERED")
 
@@ -1362,18 +1370,16 @@ def backup_restore_data(
         raise AotControllerError("restore_data_filter_not_active_after_apply")
 
     # ── Step 6: Select every matching app ─────────────────────────────────────
-    # Count filtered apps (derived dynamically – never hard-coded).
+    # Count filtered apps (authoritative count exposed by UI).
     app_count = _count_filtered_apps(nodes)
-    if app_count == 0:
+    if app_count is None or app_count == 0:
         raise AotControllerError("restore_data_no_matching_apps")
-    selected_count = _count_selected_apps(nodes)
-    if selected_count < app_count:
-        # Use select-all checkbox if present; otherwise select manually.
+
+    if not _is_all_selected(nodes):
         select_all_node = _find_unique_by_resource_ids(
             nodes, _RID_SELECT_ALL, _RID_SELECT_ALL_ALT
         )
         if select_all_node is None:
-            # Fallback: look for text "Select all"
             candidates = _find_by_text_exact(nodes, "Select all")
             if len(candidates) == 1:
                 select_all_node = candidates[0]
@@ -1381,18 +1387,15 @@ def backup_restore_data(
             _tap_xy(*select_all_node.bounds.center)
             def _all_selected() -> bool:
                 _sb_assert_foreground()
-                n = parse_ui_xml(dump_ui_xml())
-                return _count_selected_apps(n) >= app_count
-            _wait_for(_all_selected, "select_all")
+                return _is_all_selected(parse_ui_xml(dump_ui_xml()))
+            _wait_for(_all_selected, "select_all", absolute_deadline=deadline)
             nodes = parse_ui_xml(dump_ui_xml())
         else:
             raise AotControllerError("select_all_not_found")
-    # Final selected count verification
-    final_selected = _count_selected_apps(nodes)
-    if final_selected < app_count or app_count == 0:
-        raise AotControllerError(
-            f"selection_incomplete selected={final_selected} total={app_count}"
-        )
+    
+    if not _is_all_selected(nodes):
+        raise AotControllerError("selection_incomplete")
+    final_selected = app_count
     _cb("SELECTED")
 
     # ── Step 7: Open Batch actions ─────────────────────────────────────────────
@@ -1418,7 +1421,7 @@ def backup_restore_data(
         _sb_assert_foreground()
         n = parse_ui_xml(dump_ui_xml())
         return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_batch_fp
-    _wait_for(_batch_menu_open, "batch_menu_open")
+    _wait_for(_batch_menu_open, "batch_menu_open", absolute_deadline=deadline)
 
     # ── Step 8: Choose Backup ─────────────────────────────────────────────────
     _sb_assert_foreground()
@@ -1437,7 +1440,7 @@ def backup_restore_data(
         _sb_assert_foreground()
         n = parse_ui_xml(dump_ui_xml())
         return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_backup_menu_fp
-    _wait_for(_backup_options_open, "backup_options_open")
+    _wait_for(_backup_options_open, "backup_options_open", absolute_deadline=deadline)
 
     # ── Step 9: Configure backup options exactly ──────────────────────────────
     # APKs: ON, Data: ON, Cloud: ON, Ext.data: OFF, Expansion: OFF,
@@ -1486,6 +1489,8 @@ def backup_restore_data(
     # 4. No backup already running
     if _is_backup_running(nodes):
         raise AotControllerError("backup_already_running")
+    if deadline is not None and time.time() > deadline:
+        raise AotControllerError("expired")
 
     # ── Step 10: Press + BACKUP exactly once ──────────────────────────────────
     _sb_assert_foreground()
@@ -1513,10 +1518,9 @@ def backup_restore_data(
             return True
         # Accept screen change away from options as proof of progression
         return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_final_fp
-    _wait_for(_backup_started, "backup_started", timeout=45.0)
+    _wait_for(_backup_started, "backup_started", timeout=45.0, absolute_deadline=deadline)
 
     # Confirm not an error screen
-    nodes = parse_ui_xml(dump_ui_xml())
     _sb_assert_foreground()
 
     _cb("BACKUP_STARTED")
@@ -1535,41 +1539,38 @@ def _restore_data_filter_active(nodes: list[UiNode]) -> bool:
     for node in nodes:
         if (
             (node.text == RESTORE_DATA_LABEL or node.content_description == RESTORE_DATA_LABEL)
-            and node.selected
+            and (node.selected or node.checked)
         ):
             return True
     # Also accept: a filter indicator label anywhere in the hierarchy
     return False
 
 
-def _count_filtered_apps(nodes: list[UiNode]) -> int:
-    """Return the count of app items in the filtered apps list.
-    Uses app_item / list_item resource IDs; never a hard-coded number."""
-    _APP_ITEM_SUFFIXES = (
-        "app_item", "list_item", "apps_item", "backup_app_item",
-        "item_app", "item_backup",
-    )
-    count = 0
+def _count_filtered_apps(nodes: list[UiNode]) -> int | None:
+    """Return the authoritative count of filtered apps from the UI.
+    Do not rely on the number of items in a virtualized UI dump."""
+    import re
+    pattern = re.compile(r"^(\d+)\s+(apps|items|selected)$", re.IGNORECASE)
     for node in nodes:
-        rid = node.resource_id
-        if rid and any(rid.endswith(s) for s in _APP_ITEM_SUFFIXES):
-            count += 1
-    return count
+        for text in (node.text, node.content_description):
+            match = pattern.search(text.strip())
+            if match:
+                return int(match.group(1))
+    return None
 
 
-def _count_selected_apps(nodes: list[UiNode]) -> int:
-    """Return the count of selected app items in the filtered list."""
-    _APP_ITEM_SUFFIXES = (
-        "app_item", "list_item", "apps_item", "backup_app_item",
-        "item_app", "item_backup",
+def _is_all_selected(nodes: list[UiNode]) -> bool:
+    """Return True if the Select All checkbox is checked."""
+    select_all_node = _find_unique_by_resource_ids(
+        nodes, _RID_SELECT_ALL, _RID_SELECT_ALL_ALT
     )
-    count = 0
-    for node in nodes:
-        rid = node.resource_id
-        if rid and any(rid.endswith(s) for s in _APP_ITEM_SUFFIXES):
-            if node.selected:
-                count += 1
-    return count
+    if select_all_node is None:
+        candidates = _find_by_text_exact(nodes, "Select all")
+        if len(candidates) == 1:
+            select_all_node = candidates[0]
+    if select_all_node is not None:
+        return select_all_node.checked or select_all_node.selected
+    return False
 
 
 def swipe_normalized(

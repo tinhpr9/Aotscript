@@ -535,6 +535,7 @@ def _send_batch_ack(
     status: str,
     executed: bool,
     reason: str | None = None,
+    **extra,
 ) -> None:
     payload = {
         "protocol": HUB_PROTOCOL_VERSION,
@@ -544,6 +545,7 @@ def _send_batch_ack(
         "status": status,
         "executed": executed,
     }
+    payload.update(extra)
     if reason:
         payload["reason"] = reason[:160]
     _send_ack(
@@ -779,12 +781,13 @@ def _handle_backup_restore_data(
 
     try:
         # Step 1: Ensure Swift Backup is foreground (launch if needed).
-        swift_opened = _open_swift_backup()
+        _open_swift_backup()
         _stage_cb("SWIFT_OPENED")
         # Steps 2-11: Full semantic state machine in controller.
         result = controller.backup_restore_data(
             action_id,
             stage_cb=_stage_cb,
+            deadline=expires_at / 1000.0,
         )
     except (AotRelayError, controller.AotControllerError) as exc:
         reason = str(exc).split(":", 1)[0]
@@ -810,6 +813,8 @@ def _handle_backup_restore_data(
         action=BACKUP_RESTORE_DATA_ACTION,
         status="BACKUP_STARTED",
         executed=True,
+        app_count=result.get("app_count"),
+        selected_count=result.get("selected_count"),
     )
     return True
 
@@ -1196,7 +1201,7 @@ def _handle_hub_action(
             device_id=local_id,
             control_id=control_id,
             status="error",
-            reason=str(exc),
+            reason=str(exc).split(":", 1)[0],
         )
         return
 
