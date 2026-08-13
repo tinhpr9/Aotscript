@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "aot-worker-2026.08.11.9",
+  "version": "aot-worker-2026.08.11.10",
   "channel": "canary",
   "minimum_bootstrap_version": 2,
   "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/legacy_relay_bridge.py",
@@ -11,14 +11,50 @@
     "sha256": "bd0febde0dc64d4ee7ac23ac6be30c49dd4a4445c74bd221c6ca9b2d3e83db23"
   },
   "files": [
-    {"path": "relay.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/relay.py", "sha256": "2ead38c5c69095e137a9752d51c45e2a4f9c20825a0389bfe2c8c90a4cc660da"},
-    {"path": "runtime.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/runtime.py", "sha256": "f69d8d8a7e028088c19667fe0d5317e8a48fffa82c0e12327be726cd02edbeb5"},
-    {"path": "controller.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/controller.py", "sha256": "ec46b5c4d11e607706200cb4044f3c0be66bbcfff0ea67cb44777fad0b3daa9d"},
-    {"path": "updater.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/updater.py", "sha256": "029a219a0336f2262705e0a82a1e65ab81e0f7d1ab5e90296931c45d82d21dc5"},
-    {"path": "e2e.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/e2e.py", "sha256": "5a51d0f8cba9d6b922f3b95dc9a1296d6470dc8b71f64caadd80a5efa0e3f190"},
-    {"path": "worker_smoke_test.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker_smoke_test.py", "sha256": "c58d466f3f2ec9a7d546fd2992d07734c8c87ec124f230821fa716d01c05d9a8"},
-    {"path": "worker-release-schema.json", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-release-schema.json", "sha256": "ce814db0ce9a54a03406e0f2a00f2c12b58852b80cad02b5fc73ae2bad36c045"},
-    {"path": "msetup_registration.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/msetup_registration.py", "sha256": "8bfadcafe72305c0a428e4d858620b02974c43be94fc4aaf30b58ded31897d64"},
-    {"path": "legacy_relay_bridge.py", "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/legacy_relay_bridge.py", "sha256": "659877b7c55dec6c0fa8c83b213fd3af260f0f4fff30c13ec3e72ff670207cee"}
+    {
+      "path": "relay.py",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/relay.py",
+      "sha256": "d740e68df05c62d2f551d0f0b22ca3cfe3afd2f5a62cef709cc7ff2cf7210dd7"
+    },
+    {
+      "path": "runtime.py",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/runtime.py",
+      "sha256": "f69d8d8a7e028088c19667fe0d5317e8a48fffa82c0e12327be726cd02edbeb5"
+    },
+    {
+      "path": "controller.py",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/controller.py",
+      "sha256": "da355d82acfecf5f1e2f879afe1a3ee3a813413b0558e8d3d01d45b4357e40e1"
+    },
+    {
+      "path": "updater.py",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/updater.py",
+      "sha256": "029a219a0336f2262705e0a82a1e65ab81e0f7d1ab5e90296931c45d82d21dc5"
+    },
+    {
+      "path": "e2e.py",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/e2e.py",
+      "sha256": "5a51d0f8cba9d6b922f3b95dc9a1296d6470dc8b71f64caadd80a5efa0e3f190"
+    },
+    {
+      "path": "worker_smoke_test.py",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker_smoke_test.py",
+      "sha256": "33939fb6d8ee0656ed048b85f93b4cc13879960a35b043ab2308e6ed0fb4ca94"
+    },
+    {
+      "path": "worker-release-schema.json",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-release-schema.json",
+      "sha256": "ce814db0ce9a54a03406e0f2a00f2c12b58852b80cad02b5fc73ae2bad36c045"
+    },
+    {
+      "path": "msetup_registration.py",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/msetup_registration.py",
+      "sha256": "8bfadcafe72305c0a428e4d858620b02974c43be94fc4aaf30b58ded31897d64"
+    },
+    {
+      "path": "legacy_relay_bridge.py",
+      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/legacy_relay_bridge.py",
+      "sha256": "659877b7c55dec6c0fa8c83b213fd3af260f0f4fff30c13ec3e72ff670207cee"
+    }
   ]
 }

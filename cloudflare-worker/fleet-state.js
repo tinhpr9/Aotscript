@@ -14,14 +14,17 @@ const COMMAND_MAX_TARGETS = 1000;
 const AOT_CONTROL_MAX_TARGETS = 128;
 const AOT_BATCH_ACTION = "OPEN_SWIFT_BACKUP";
 const AOT_APPS_ACTION = "OPEN_SWIFT_APPS";
+// Fixed, allowlisted, fail-closed full-chain RESTORE_DATA backup action.
+// Does not accept arbitrary labels, packages, or tap instructions from browser.
+const AOT_BACKUP_RESTORE_DATA_ACTION = "BACKUP_RESTORE_DATA";
 const AOT_BATCH_PACKAGE = "org.swiftapps.swiftbackup";
 const AOT_BATCH_TTL_MS = 75 * 1000;
 const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.11.9";
-const AOT_WORKER_TAG = "worker-v2026.08.11.9";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.11.10";
+const AOT_WORKER_TAG = "worker-v2026.08.11.10";
 const AOT_RELEASE_PROTOCOL = "github-release-v1";
 const AOT_RELEASE_REPOSITORY = "tinhpr9/Aotscript";
 const AOT_RELEASE_CACHE_MS = 5 * 60 * 1000;
@@ -2941,7 +2944,7 @@ export class FleetState
   }
 
   async dispatchFleetBatch(record, action, requestedTargetIds) {
-    const allowed = new Set([AOT_BATCH_ACTION, AOT_APPS_ACTION]);
+    const allowed = new Set([AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_BACKUP_RESTORE_DATA_ACTION]);
     if (!allowed.has(action)) return json({ ok: false, error: "invalid_batch_action" }, 400);
     const seen = new Set();
     const targets = [];
@@ -2978,6 +2981,9 @@ export class FleetState
     if (body.kind === "open_swift_backup" || body.kind === "open_swift_apps") {
       return this.dispatchFleetBatch(record, body.kind === "open_swift_apps" ? AOT_APPS_ACTION : AOT_BATCH_ACTION, Array.isArray(body.target_device_ids) ? body.target_device_ids : []);
     }
+    if (body.kind === "backup_restore_data") {
+      return this.dispatchFleetBatch(record, AOT_BACKUP_RESTORE_DATA_ACTION, Array.isArray(body.target_device_ids) ? body.target_device_ids : []);
+    }
     if (body.kind === "update_canary" || body.kind === "update_stable") {
       record.followers = Object.fromEntries(this.fleetMembers(record).map((m) => [m.device_id, m]));
       record.reference_device_id = this.fleetMembers(record)[0]?.device_id || null;
@@ -2991,7 +2997,7 @@ export class FleetState
   async dispatchFleetAck(request) {
     const body = await this.readJson(request);
     const id = validDeviceId(body?.device_id), actionId = String(body?.action_id || ""), action = String(body?.batch_action || "");
-    if (!id || !/^[A-Za-z0-9_-]{1,128}$/.test(actionId) || ![AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_UPDATE_ACTION].includes(action)) return json({ ok: false, error: "invalid_aot_ack" }, 400);
+    if (!id || !/^[A-Za-z0-9_-]{1,128}$/.test(actionId) || ![AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_BACKUP_RESTORE_DATA_ACTION, AOT_UPDATE_ACTION].includes(action)) return json({ ok: false, error: "invalid_aot_ack" }, 400);
     const record = await this.readFleet();
     if (action === AOT_UPDATE_ACTION) {
       record.followers = Object.fromEntries(this.fleetMembers(record).map((m) => [m.device_id, m]));
@@ -3002,9 +3008,9 @@ export class FleetState
       return response;
     }
     const batch = record.last_batch, device = batch?.devices?.[id];
-    const allowed = new Set(["ACCEPTED", "OPENED", "APPS_OPENED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "DUPLICATE"]);
+    const allowed = new Set(["ACCEPTED", "OPENED", "APPS_OPENED", "SWIFT_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED", "BACKUP_STARTED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "DUPLICATE"]);
     if (!batch || batch.action_id !== actionId || batch.action !== action || !device || !allowed.has(body.status)) return json({ ok: false, error: "invalid_batch_ack" }, 400);
-    const terminal = new Set(["OPENED", "APPS_OPENED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE"]);
+    const terminal = new Set(["OPENED", "APPS_OPENED", "BACKUP_STARTED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE"]);
     if (!terminal.has(device.status) && body.status !== "DUPLICATE") {
       const next = Date.now() >= batch.expires_at ? "TIMEOUT" : body.status;
       device.status = next; if (!device.history.includes(next)) device.history.push(next);

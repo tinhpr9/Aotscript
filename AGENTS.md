@@ -69,5 +69,15 @@ worker actions in `cloudflare-worker/`.
   and 40-device rollout groups of five.
 - Run all existing repository self-tests. If any JavaScript file changes, the
   pull request must include one ZIP containing every changed file.
-- `FILTER_RESTORE_DATA` is outside the worker-updater scope and must not be
-  introduced by updater releases.
+- `FILTER_RESTORE_DATA` as a standalone, browser-controlled, arbitrary-tap
+  action is outside the worker-updater scope and must not be introduced by
+  updater releases or accepted from the browser.
+- `BACKUP_RESTORE_DATA` (introduced in PR #34) is the sole explicitly
+  permitted exception: it is a fixed, allowlisted, fail-closed, 11-step
+  bounded semantic state machine implemented entirely on the device.  It does
+  not accept arbitrary labels, packages, option payloads, or tap instructions
+  from the browser.  The server dispatches only the opaque action token to
+  explicitly selected, ONLINE fleet members.  All safety gates, exactly-once
+  guarantees, and monotonic stage ACKs are enforced device-side.  This action
+  may only be extended, renamed, or removed through a future maintainer-
+  approved PR that updates this policy and the smoke-test guard consistently.

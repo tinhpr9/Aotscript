@@ -48,12 +48,18 @@ LIVE_STATUS_INTERVAL_SECONDS = 2.5
 SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
 OPEN_SWIFT_BACKUP_ACTION = "OPEN_SWIFT_BACKUP"
 OPEN_SWIFT_APPS_ACTION = "OPEN_SWIFT_APPS"
+# BACKUP_RESTORE_DATA_ACTION: fixed, allowlisted, fail-closed full-chain action.
+# AGENTS.md bans standalone browser-controlled arbitrary filter/tap actions.
+# This action is different: it is server-side allowlisted, implements an
+# 11-step bounded semantic state machine, and does not accept arbitrary labels,
+# packages, or tap instructions from the browser.  See PR #34 policy note.
+BACKUP_RESTORE_DATA_ACTION = "BACKUP_RESTORE_DATA"
 SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.11.9"
-WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic")
+WORKER_VERSION = "aot-worker-2026.08.11.10"
+WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic")
 
 
 class AotRelayError(RuntimeError):
@@ -625,15 +631,18 @@ def _handle_batch_action(
 ) -> bool:
     if message.get("type") != "aot_batch_action":
         return False
+    action = str(message.get("action", ""))
+    # Route BACKUP_RESTORE_DATA to its dedicated handler.
+    if action == BACKUP_RESTORE_DATA_ACTION:
+        return _handle_backup_restore_data(cfg, state, local_id=local_id, message=message)
     if (
         message.get("protocol") not in {HUB_PROTOCOL_VERSION, "phase4-1"}
-        or message.get("action") not in {OPEN_SWIFT_BACKUP_ACTION, OPEN_SWIFT_APPS_ACTION}
+        or action not in {OPEN_SWIFT_BACKUP_ACTION, OPEN_SWIFT_APPS_ACTION}
         or message.get("package") != SWIFT_BACKUP_PACKAGE
         or local_id not in normalize_target_ids(message.get("target_device_ids"))
     ):
         return True
     action_id = normalize_action_id(message.get("action_id"))
-    action = str(message.get("action"))
     if not action_id:
         return True
     try:
@@ -694,6 +703,113 @@ def _handle_batch_action(
         action=action,
         status="OPENED" if action == OPEN_SWIFT_BACKUP_ACTION else "APPS_OPENED",
         executed=executed,
+    )
+    return True
+
+
+def _handle_backup_restore_data(
+    cfg: dict[str, str],
+    state: dict[str, Any],
+    *,
+    local_id: str,
+    message: dict[str, Any],
+) -> bool:
+    """Handle BACKUP_RESTORE_DATA with monotonic per-stage ACKs.
+
+    Exactly-once guarantee: action_id is marked processed immediately after
+    ACCEPTED ACK.  If the process restarts, the next delivery returns DUPLICATE
+    and the hub knows the final tap may have occurred (safe, idempotent).
+    Only BACKUP_STARTED is emitted after the irreversible tap.
+    """
+    if (
+        message.get("protocol") not in {HUB_PROTOCOL_VERSION, "phase4-1"}
+        or message.get("package") != SWIFT_BACKUP_PACKAGE
+        or local_id not in normalize_target_ids(message.get("target_device_ids"))
+    ):
+        return True
+    action_id = normalize_action_id(message.get("action_id"))
+    if not action_id:
+        return True
+    try:
+        expires_at = int(message.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return True
+    if expires_at <= int(time.time() * 1000):
+        _send_batch_ack(
+            cfg,
+            device_id=local_id,
+            action_id=action_id,
+            action=BACKUP_RESTORE_DATA_ACTION,
+            status="TIMEOUT",
+            executed=False,
+        )
+        return True
+    if action_already_processed(state, action_id):
+        _send_batch_ack(
+            cfg,
+            device_id=local_id,
+            action_id=action_id,
+            action=BACKUP_RESTORE_DATA_ACTION,
+            status="DUPLICATE",
+            executed=False,
+        )
+        return True
+    # Mark processed immediately so a restart returns DUPLICATE instead of
+    # re-executing the full chain (including the irreversible final tap).
+    mark_action_processed(state, action_id)
+    _send_batch_ack(
+        cfg,
+        device_id=local_id,
+        action_id=action_id,
+        action=BACKUP_RESTORE_DATA_ACTION,
+        status="ACCEPTED",
+        executed=False,
+    )
+
+    def _stage_cb(stage: str) -> None:
+        """Send a monotonic stage ACK without terminal-state implication."""
+        _send_batch_ack(
+            cfg,
+            device_id=local_id,
+            action_id=action_id,
+            action=BACKUP_RESTORE_DATA_ACTION,
+            status=stage,
+            executed=False,
+        )
+
+    try:
+        # Step 1: Ensure Swift Backup is foreground (launch if needed).
+        swift_opened = _open_swift_backup()
+        _stage_cb("SWIFT_OPENED")
+        # Steps 2-11: Full semantic state machine in controller.
+        result = controller.backup_restore_data(
+            action_id,
+            stage_cb=_stage_cb,
+        )
+    except (AotRelayError, controller.AotControllerError) as exc:
+        reason = str(exc).split(":", 1)[0]
+        status = (
+            "FAILED_NOT_INSTALLED"
+            if reason in ("swift_backup_not_installed",)
+            else "FAILED"
+        )
+        _send_batch_ack(
+            cfg,
+            device_id=local_id,
+            action_id=action_id,
+            action=BACKUP_RESTORE_DATA_ACTION,
+            status=status,
+            executed=False,
+            reason=reason,
+        )
+        return True
+    _send_batch_ack(
+        cfg,
+        device_id=local_id,
+        action_id=action_id,
+        action=BACKUP_RESTORE_DATA_ACTION,
+        status="BACKUP_STARTED",
+        executed=True,
     )
     return True
 

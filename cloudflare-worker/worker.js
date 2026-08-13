@@ -867,20 +867,36 @@ async function handleAotControlAck(
   const status = String(body.status || "");
   const batchAction = String(body.batch_action || "");
   const isBatch = [AOT_HUB_PROTOCOL_VERSION, "phase4-1"].includes(body.protocol) &&
-    ["OPEN_SWIFT_BACKUP", "OPEN_SWIFT_APPS", "UPDATE_WORKER"].includes(batchAction);
+    ["OPEN_SWIFT_BACKUP", "OPEN_SWIFT_APPS", "BACKUP_RESTORE_DATA", "UPDATE_WORKER"].includes(batchAction);
   const allowedStatus = new Set(
     batchAction === "UPDATE_WORKER"
       ? ["DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING", "HEALTHY", "ROLLED_BACK", "FAILED"]
       : isBatch
-      ? [
-          "ACCEPTED",
-          "OPENED",
-          "APPS_OPENED",
-          "FAILED_NOT_INSTALLED",
-          "FAILED",
-          "TIMEOUT",
-          "DUPLICATE",
-        ]
+      ? (
+          batchAction === "BACKUP_RESTORE_DATA"
+          ? [
+              "ACCEPTED",
+              "SWIFT_OPENED",
+              "APPS_OPENED",
+              "FILTERED",
+              "SELECTED",
+              "OPTIONS_VERIFIED",
+              "BACKUP_STARTED",
+              "FAILED_NOT_INSTALLED",
+              "FAILED",
+              "TIMEOUT",
+              "DUPLICATE",
+            ]
+          : [
+              "ACCEPTED",
+              "OPENED",
+              "APPS_OPENED",
+              "FAILED_NOT_INSTALLED",
+              "FAILED",
+              "TIMEOUT",
+              "DUPLICATE",
+            ]
+        )
       : [
           "success",
           "duplicate",
@@ -1908,7 +1924,7 @@ function aotHubHtml() {
 }
 
 function fleetHubHtml() {
-  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AOT Hub</title><script src="https://telegram.org/js/telegram-web-app.js?63"></script><style>body{font:14px system-ui;background:#101114;color:#f5f7fb;margin:0}.app{max-width:900px;margin:auto;padding:16px}button{padding:10px;margin:4px;border:1px solid #555;border-radius:9px;background:#20232b;color:inherit}.device{display:flex;gap:10px;padding:10px;border-bottom:1px solid #333}.OFFLINE,.error{color:#ff9ca6}.ONLINE{color:#8df1b8}.error{min-height:22px}.result{font-family:monospace;padding:4px}</style></head><body><main class="app"><h1>AOT HUB</h1><button id="refresh">Làm mới</button><div><button id="selectOnline">Chọn máy online</button><button id="clear">Bỏ chọn hết</button><button id="backup">Mở Swift Backup</button><button id="apps">Mở Apps</button></div><div id="error" class="error"></div><section id="devices"></section><section id="results"></section><hr><button id="canary">Cập nhật 2 máy thử</button><button id="stable">Phát hành cho tất cả</button><div id="updateError" class="error"></div></main><script>(()=>{'use strict';const tg=window.Telegram&&window.Telegram.WebApp,auth=tg?String(tg.initData||''):'',selected=new Set();let state=null,ws=null,retry=0,timer=null;const el=id=>document.getElementById(id);if(tg){tg.ready();tg.expand()}const api=async(path,init={})=>{init.headers=Object.assign({},init.headers||{}, {'X-Telegram-Init-Data':auth,'Accept':'application/json'});if(init.body&&typeof init.body!=='string'){init.headers['Content-Type']='application/json';init.body=JSON.stringify(init.body)}const r=await fetch(path,init),d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.message||d.error||('HTTP '+r.status));return d},devices=()=>state&&Array.isArray(state.devices)?state.devices:[],render=()=>{el('devices').innerHTML=devices().map(d=>'<label class="device"><input type="checkbox" data-id="'+d.device_id+'" '+(selected.has(d.device_id)?'checked':'')+' '+(d.online?'':'disabled')+'><b>'+d.device_id+'</b><span class="'+(d.online?'ONLINE':'OFFLINE')+'">'+(d.online?'ONLINE':'OFFLINE')+'</span></label>').join('');el('devices').querySelectorAll('input').forEach(n=>n.onchange=()=>n.checked?selected.add(n.dataset.id):selected.delete(n.dataset.id));const b=state&&state.last_batch;el('results').innerHTML=b&&b.devices?b.devices.map(d=>'<div class="result">'+d.device_id+': '+d.history.join(' → ')+(d.reason?' — '+d.reason:'')+'</div>').join(''):''},load=async()=>{try{state=(await api('/aot/hub/api/state')).state;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},control=async(kind,ids)=>api('/aot/hub/api/control',{method:'POST',body:{kind,target_device_ids:ids}}),run=async kind=>{try{const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));if(!ids.length)throw Error('Hãy chọn ít nhất một máy ONLINE.');const d=await control(kind,ids);state.last_batch=d.batch;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},connect=()=>{if(!auth||!window.WebSocket)return;clearTimeout(timer);ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/aot/hub/api/ws?init_data='+encodeURIComponent(auth));ws.onopen=()=>{retry=0};ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='aot_hub_state'){state=d;render()}};ws.onclose=()=>{const delay=Math.min(30000,1000*Math.pow(2,retry++))*(.75+Math.random()*.5);timer=setTimeout(connect,delay)}};el('refresh').onclick=load;el('selectOnline').onclick=()=>{devices().filter(d=>d.online).forEach(d=>selected.add(d.device_id));render()};el('clear').onclick=()=>{selected.clear();render()};el('backup').onclick=()=>run('open_swift_backup');el('apps').onclick=()=>run('open_swift_apps');el('canary').onclick=()=>control('update_canary').catch(e=>el('updateError').textContent=e.message);el('stable').onclick=()=>control('update_stable').catch(e=>el('updateError').textContent=e.message);load();connect()})();</script></body></html>`;
+  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AOT Hub</title><script src="https://telegram.org/js/telegram-web-app.js?63"></script><style>body{font:14px system-ui;background:#101114;color:#f5f7fb;margin:0}.app{max-width:900px;margin:auto;padding:16px}button{padding:10px;margin:4px;border:1px solid #555;border-radius:9px;background:#20232b;color:inherit}.device{display:flex;gap:10px;padding:10px;border-bottom:1px solid #333}.OFFLINE,.error{color:#ff9ca6}.ONLINE{color:#8df1b8}.error{min-height:22px}.result{font-family:monospace;padding:4px}</style></head><body><main class="app"><h1>AOT HUB</h1><button id="refresh">Làm mới</button><div><button id="selectOnline">Chọn máy online</button><button id="clear">Bỏ chọn hết</button><button id="backup">Mở Swift Backup</button><button id="apps">Mở Apps</button><button id="backupRestoreData">Backup RESTORE_DATA</button></div><div id="error" class="error"></div><section id="devices"></section><section id="results"></section><hr><button id="canary">Cập nhật 2 máy thử</button><button id="stable">Phát hành cho tất cả</button><div id="updateError" class="error"></div></main><script>(()=>{'use strict';const tg=window.Telegram&&window.Telegram.WebApp,auth=tg?String(tg.initData||''):'',selected=new Set();let state=null,ws=null,retry=0,timer=null;const el=id=>document.getElementById(id);if(tg){tg.ready();tg.expand()}const api=async(path,init={})=>{init.headers=Object.assign({},init.headers||{}, {'X-Telegram-Init-Data':auth,'Accept':'application/json'});if(init.body&&typeof init.body!=='string'){init.headers['Content-Type']='application/json';init.body=JSON.stringify(init.body)}const r=await fetch(path,init),d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.message||d.error||('HTTP '+r.status));return d},devices=()=>state&&Array.isArray(state.devices)?state.devices:[],render=()=>{el('devices').innerHTML=devices().map(d=>'<label class="device"><input type="checkbox" data-id="'+d.device_id+'" '+(selected.has(d.device_id)?'checked':'')+' '+(d.online?'':'disabled')+'><b>'+d.device_id+'</b><span class="'+(d.online?'ONLINE':'OFFLINE')+'">'+(d.online?'ONLINE':'OFFLINE')+'</span></label>').join('');el('devices').querySelectorAll('input').forEach(n=>n.onchange=()=>n.checked?selected.add(n.dataset.id):selected.delete(n.dataset.id));const b=state&&state.last_batch;el('results').innerHTML=b&&b.devices?b.devices.map(d=>'<div class="result">'+d.device_id+': '+d.history.join(' → ')+(d.reason?' — '+d.reason:'')+'</div>').join(''):''},load=async()=>{try{state=(await api('/aot/hub/api/state')).state;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},control=async(kind,ids)=>api('/aot/hub/api/control',{method:'POST',body:{kind,target_device_ids:ids}}),run=async kind=>{try{const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));if(!ids.length)throw Error('Hãy chọn ít nhất một máy ONLINE.');const d=await control(kind,ids);state.last_batch=d.batch;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},connect=()=>{if(!auth||!window.WebSocket)return;clearTimeout(timer);ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/aot/hub/api/ws?init_data='+encodeURIComponent(auth));ws.onopen=()=>{retry=0};ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='aot_hub_state'){state=d;render()}};ws.onclose=()=>{const delay=Math.min(30000,1000*Math.pow(2,retry++))*(.75+Math.random()*.5);timer=setTimeout(connect,delay)}};el('refresh').onclick=load;el('selectOnline').onclick=()=>{devices().filter(d=>d.online).forEach(d=>selected.add(d.device_id));render()};el('clear').onclick=()=>{selected.clear();render()};el('backup').onclick=()=>run('open_swift_backup');el('apps').onclick=()=>run('open_swift_apps');el('backupRestoreData').onclick=()=>run('backup_restore_data');el('canary').onclick=()=>control('update_canary').catch(e=>el('updateError').textContent=e.message);el('stable').onclick=()=>control('update_stable').catch(e=>el('updateError').textContent=e.message);load();connect()})();</script></body></html>`;
 }
 
 async function handleAotHubPage() {
