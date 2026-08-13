@@ -528,10 +528,10 @@ def find_cookies(download_choice=None, preset_m_code=None):
                 clean_line = line.strip()
                 if not clean_line: continue
 
-                match = re.match(r'^([^a-z0-9]*)m(\d+)([^a-z0-9]|$)(.*)', clean_line.lower())
+                match = re.match(r'^m(\d+)([^a-z0-9]|$)(.*)', clean_line.lower())
                 is_header = False
                 if match:
-                    prefix, m_num, sep, suffix = match.groups()
+                    m_num, sep, suffix = match.groups()
                     if sep in (':', '|') and suffix.strip() != '':
                         pass # It's a User:Pass account, not a header
                     else:

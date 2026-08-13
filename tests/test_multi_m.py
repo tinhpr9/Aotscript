@@ -35,6 +35,7 @@ class TestMultiM(unittest.TestCase):
             f.write("m123:password:cookie123\n")
             f.write("user5:pass5:cookie5\n")
             f.write("m999:pass999:cookie999\n")
+            f.write("user7:pass7:cookie7\n")
             f.write("user6:pass6:cookie6\n")
             f.write("m124:password_with_spaces:cookie124\n")
 
@@ -45,7 +46,7 @@ class TestMultiM(unittest.TestCase):
             f.write("m124:  password_with_spaces\n") # whitespace-after-colon false-header
             f.write("user6:pass6\n") # another account after false-header
 
-            f.write("[M153]\n") # uppercase, brackets
+            f.write("M153\n") # valid header without brackets
             f.write("user2:pass2\n")
 
             f.write("M153:\n") # adjacent section (replaces [M153])
@@ -59,8 +60,10 @@ class TestMultiM(unittest.TestCase):
             f.write("m106\n")
             f.write("user5:pass5\n")
 
-            f.write("=== m91 ===\n") # Malformed/decorated
+            f.write("m91\n") # Valid header instead of decorated
             f.write("m999:pass999\n") # Another false header
+            f.write("=== m92 ===\n") # Malformed/decorated (ignored)
+            f.write("user7:pass7\n") # Stays in m91
 
     def tearDown(self):
         for f in ["acc.txt", "Data_Tong_Cookies.txt", "Ket_Qua_Tim_Duoc.txt", "Cookies.txt"]:
@@ -136,7 +139,7 @@ class TestMultiM(unittest.TestCase):
         Toolcheck.find_cookies(download_choice='n', preset_m_code='88 91')
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88,M91", out)
-        self.assertIn("TARGETS=5", out)
+        self.assertIn("TARGETS=6", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
