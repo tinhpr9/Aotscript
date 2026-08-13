@@ -532,7 +532,7 @@ def find_cookies(download_choice=None, preset_m_code=None):
                 is_header = False
                 if match:
                     prefix, m_num, sep, suffix = match.groups()
-                    if sep in (':', '|') and suffix != '' and not suffix.startswith(' '):
+                    if sep in (':', '|') and suffix.strip() != '':
                         pass # It's a User:Pass account, not a header
                     else:
                         current_m = "m" + m_num

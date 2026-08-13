@@ -8,15 +8,14 @@ import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+from unittest.mock import patch, MagicMock
 
-from unittest.mock import MagicMock
-sys.modules['requests'] = MagicMock()
+with patch.dict('sys.modules', {'requests': MagicMock()}):
+    with open(os.path.join(ROOT, "Toolcheck"), "r", encoding="utf-8") as f:
+        code = f.read()
 
-with open(os.path.join(ROOT, "Toolcheck"), "r", encoding="utf-8") as f:
-    code = f.read()
-
-Toolcheck = types.ModuleType("Toolcheck")
-exec(code, Toolcheck.__dict__)
+    Toolcheck = types.ModuleType("Toolcheck")
+    exec(code, Toolcheck.__dict__)
 
 class TestMultiM(unittest.TestCase):
     def setUp(self):
@@ -36,11 +35,15 @@ class TestMultiM(unittest.TestCase):
             f.write("m123:password:cookie123\n")
             f.write("user5:pass5:cookie5\n")
             f.write("m999:pass999:cookie999\n")
+            f.write("user6:pass6:cookie6\n")
+            f.write("m124:password_with_spaces:cookie124\n")
 
         with open(Toolcheck.ACC_FILE_PATH, "w", encoding="utf-8") as f:
             f.write("m88\n")
             f.write("m123:password\n") # Fake header in M88
             f.write("user1:pass1\n")
+            f.write("m124:  password_with_spaces\n") # whitespace-after-colon false-header
+            f.write("user6:pass6\n") # another account after false-header
 
             f.write("[M153]\n") # uppercase, brackets
             f.write("user2:pass2\n")
@@ -74,8 +77,8 @@ class TestMultiM(unittest.TestCase):
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88", out)
         self.assertIn("M_VALID=M88", out)
-        self.assertIn("TARGETS=2", out)
-        self.assertIn("FOUND=2", out)
+        self.assertIn("TARGETS=4", out)
+        self.assertIn("FOUND=4", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
@@ -97,8 +100,8 @@ class TestMultiM(unittest.TestCase):
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88,M153,M106", out)
         self.assertIn("M_VALID=M88,M153,M106", out)
-        self.assertIn("TARGETS=6", out)
-        self.assertIn("FOUND=6", out)
+        self.assertIn("TARGETS=8", out)
+        self.assertIn("FOUND=8", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
@@ -133,15 +136,16 @@ class TestMultiM(unittest.TestCase):
         Toolcheck.find_cookies(download_choice='n', preset_m_code='88 91')
         out = mock_stdout.getvalue()
         self.assertIn("M_SELECTED=M88,M91", out)
-        self.assertIn("TARGETS=3", out)
+        self.assertIn("TARGETS=5", out)
 
     @patch('builtins.input')
     @patch('sys.stdout', new_callable=StringIO)
     def test_false_header(self, mock_stdout, mock_input):
-        mock_input.side_effect = ["n", "123 999"]
+        mock_input.side_effect = ["n", "123 124 999"]
         Toolcheck.find_cookies()
         out = mock_stdout.getvalue()
         self.assertIn("[-] M123: Không tồn tại", out)
+        self.assertIn("[-] M124: Không tồn tại", out)
         self.assertIn("[-] M999: Không tồn tại", out)
 
 if __name__ == '__main__':
