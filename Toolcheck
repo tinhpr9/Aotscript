@@ -528,12 +528,19 @@ def find_cookies(download_choice=None, preset_m_code=None):
                 clean_line = line.strip()
                 if not clean_line: continue
 
-                match = re.match(r'^m?(\d+)$', clean_line.lower())
+                match = re.match(r'^([^a-z0-9]*)m(\d+)([^a-z0-9]|$)(.*)', clean_line.lower())
+                is_header = False
                 if match:
-                    current_m = "m" + match.group(1)
-                    if current_m not in sections:
-                        sections[current_m] = []
-                else:
+                    prefix, m_num, sep, suffix = match.groups()
+                    if sep in (':', '|') and suffix != '' and not suffix.startswith(' '):
+                        pass # It's a User:Pass account, not a header
+                    else:
+                        current_m = "m" + m_num
+                        if current_m not in sections:
+                            sections[current_m] = []
+                        is_header = True
+
+                if not is_header:
                     if current_m and ":" in clean_line:
                         sections[current_m].append(clean_line)
 
