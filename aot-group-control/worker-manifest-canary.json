@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "aot-worker-2026.08.11.10",
+  "version": "aot-worker-2026.08.11.11",
   "channel": "canary",
   "minimum_bootstrap_version": 2,
   "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/legacy_relay_bridge.py",
@@ -14,7 +14,7 @@
     {
       "path": "relay.py",
       "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/relay.py",
-      "sha256": "23099a060a3ce6e3517340e5352ce80a640c0349a1f7134924a9e5bded58e656"
+      "sha256": "feff4ffb4adf29cd64338335b238bed02718106de39316fee29482b78186acca"
     },
     {
       "path": "runtime.py",
@@ -39,7 +39,7 @@
     {
       "path": "worker_smoke_test.py",
       "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker_smoke_test.py",
-      "sha256": "33939fb6d8ee0656ed048b85f93b4cc13879960a35b043ab2308e6ed0fb4ca94"
+      "sha256": "350246fb4d9f8533572993f2a54166871915b49742a874fe3349ffd21d42ddc9"
     },
     {
       "path": "worker-release-schema.json",
