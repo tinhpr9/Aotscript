@@ -66,13 +66,18 @@ with tempfile.TemporaryDirectory() as folder:
     finally:
         module._send_ack, module._open_swift_backup, module.controller.open_swift_apps = old_ack, old_open, old_apps
 
-# Interval and jitter bounds
-assert module._get_live_status_interval(None) == 60.0
+# Interval, jitter bounds, and initial phase
+assert module._get_live_status_interval(None) == 900.0
 i1 = module._get_live_status_interval("device1")
 i2 = module._get_live_status_interval("device2")
-assert 50.0 <= i1 <= 70.0
-assert 50.0 <= i2 <= 70.0
+assert 840.0 <= i1 <= 960.0
+assert 840.0 <= i2 <= 960.0
 assert module._get_live_status_interval("device1") == i1  # deterministic
+
+d1 = module._get_live_status_initial_delay("device1")
+d2 = module._get_live_status_initial_delay("device2")
+assert 0.0 <= d1 < 900.0
+assert 0.0 <= d2 < 900.0
 
 # Immediate forced status semantics
 def fake_snapshot(*_a, **_kw):

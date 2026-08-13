@@ -44,23 +44,33 @@ MAX_HTTP_JSON_BYTES = 384 * 1024
 MAX_PREVIEW_BYTES = 180 * 1024
 PROCESSED_ACTIONS_MAX = 256
 HUB_PROTOCOL_VERSION = "fleet-batch-v1"
-LIVE_STATUS_INTERVAL_SECONDS = 60.0
+LIVE_STATUS_INTERVAL_SECONDS = 900.0
 
 def _get_live_status_interval(device_id: str | None) -> float:
     """
     Calculate deterministic per-device status interval to distribute load.
 
-    Returns a baseline 60-second heartbeat plus deterministic per-device jitter
-    bounded between +/- 10 seconds. This avoids clients synchronizing and
-    reduces daily status messages from 1.38M to ~57k for 40 devices, preserving
+    Returns a baseline 15-minute (900-second) heartbeat plus deterministic per-device jitter
+    bounded between +/- 60 seconds (120s span). This avoids clients synchronizing and
+    reduces daily status messages from 1.38M to ~3,840 for 40 devices, preserving
     Cloudflare quotas while maintaining real-time event-driven responsiveness.
     """
     if not device_id:
         return LIVE_STATUS_INTERVAL_SECONDS
     import zlib
-    val = zlib.crc32(device_id.encode("utf-8")) % 20000
-    jitter = (val / 1000.0) - 10.0
+    val = zlib.crc32(device_id.encode("utf-8")) % 120000
+    jitter = (val / 1000.0) - 60.0
     return LIVE_STATUS_INTERVAL_SECONDS + jitter
+
+def _get_live_status_initial_delay(device_id: str | None) -> float:
+    """
+    Derives an initial phase delay from the device ID so reconnect storms
+    do not perfectly align their first periodic messages. Spreads over baseline interval.
+    """
+    if not device_id:
+        return LIVE_STATUS_INTERVAL_SECONDS
+    import zlib
+    return float(zlib.crc32((device_id + "_init").encode("utf-8")) % int(LIVE_STATUS_INTERVAL_SECONDS))
 SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
 OPEN_SWIFT_BACKUP_ACTION = "OPEN_SWIFT_BACKUP"
 OPEN_SWIFT_APPS_ACTION = "OPEN_SWIFT_APPS"
@@ -1377,7 +1387,7 @@ def reference_loop(
             )
             next_status = (
                 time.monotonic()
-                + _get_live_status_interval(local_id)
+                + _get_live_status_initial_delay(local_id)
             )
             while True:
                 now = time.monotonic()
@@ -1591,7 +1601,7 @@ def follower_loop(
                 pass
             next_status = (
                 time.monotonic()
-                + _get_live_status_interval(local_id)
+                + _get_live_status_initial_delay(local_id)
             )
 
             while True:
@@ -1960,12 +1970,12 @@ def fleet_loop(*, open_package: str | None = None) -> int:
                 updater.notify_pending_healthy()
             except Exception:
                 pass
-            _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
-            next_status = time.monotonic() + _get_live_status_interval(local_id)
+            previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
+            next_status = time.monotonic() + _get_live_status_initial_delay(local_id)
             while True:
                 if time.monotonic() >= next_status:
                     try:
-                        _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
+                        previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=previous_fingerprint)
                     except (OSError, controller.AotControllerError):
                         pass
                     next_status = time.monotonic() + _get_live_status_interval(local_id)
