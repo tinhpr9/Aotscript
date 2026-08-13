@@ -38,15 +38,23 @@ if updater.normalize_channel("other") is not None:
 load("aot_release_smoke_controller", "controller.py")
 load("aot_release_smoke_runtime", "runtime.py")
 relay = load("aot_release_smoke_relay", "relay.py")
-if relay.WORKER_VERSION != "aot-worker-2026.08.11.9":
+if relay.WORKER_VERSION != "aot-worker-2026.08.11.10":
     raise SystemExit("worker_version_mismatch")
 if "dynamic_update_channel" not in relay.WORKER_CAPABILITIES:
     raise SystemExit("dynamic_channel_capability_missing")
+if "backup_restore_data_semantic" not in relay.WORKER_CAPABILITIES:
+    raise SystemExit("backup_restore_data_capability_missing")
 
 relay_source = (ROOT / "relay.py").read_text(encoding="utf-8")
-if 'WORKER_VERSION = "aot-worker-2026.08.11.9"' not in relay_source:
+if 'WORKER_VERSION = "aot-worker-2026.08.11.10"' not in relay_source:
     raise SystemExit("worker_version_mismatch")
+# Policy: standalone browser-controlled FILTER_RESTORE_DATA is banned.
+# BACKUP_RESTORE_DATA is permitted as the fixed, allowlisted, fail-closed
+# full-chain action (PR #34).  Verify the banned form is absent and the
+# allowlisted full-chain constant is present.
 if "FILTER_RESTORE_DATA" in relay_source:
     raise SystemExit("forbidden_restore_action")
+if "BACKUP_RESTORE_DATA_ACTION" not in relay_source:
+    raise SystemExit("backup_restore_data_action_missing")
 
 print("AOT_WORKER_SMOKE_TEST=OK")

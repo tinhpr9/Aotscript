@@ -29,7 +29,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         (self.assets / "worker-bundle.zip").write_bytes(b"bundle")
         (self.assets / "worker-manifest.json").write_bytes(b"manifest")
         self.commit = "a" * 40
-        self.tag = "worker-v2026.08.11.9"
+        self.tag = "worker-v2026.08.11.10"
         self.release = {
             "id": 123,
             "tag_name": self.tag,
@@ -200,7 +200,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
             sys.executable,
             str(ROOT / "scripts/build-worker-release.py"),
             "--version",
-            "2026.08.11.9",
+            "2026.08.11.10",
             "--commit",
             self.commit,
             "--source-root",

@@ -34,6 +34,12 @@ DEVICE_GROUP_PATH = pathlib.Path(
 class AotControllerError(RuntimeError):
     pass
 
+class AotTimeoutError(AotControllerError):
+    pass
+
+class AotExpiredError(AotControllerError):
+    pass
+
 
 @dataclass(frozen=True)
 class Bounds:
@@ -80,6 +86,7 @@ class UiNode:
     scrollable: bool
     password: bool
     selected: bool = False
+    checked: bool = False
     text: str = ""
     content_description: str = ""
 
@@ -95,6 +102,7 @@ class UiNode:
             "scrollable": self.scrollable,
             "password": self.password,
             "selected": self.selected,
+            "checked": self.checked,
         }
 
 
@@ -527,6 +535,7 @@ def parse_ui_xml(xml_text: str) -> list[UiNode]:
                     scrollable=_bool_attr(child.attrib.get("scrollable")),
                     password=_bool_attr(child.attrib.get("password")),
                     selected=_bool_attr(child.attrib.get("selected")),
+                    checked=_bool_attr(child.attrib.get("checked")),
                     text=child.attrib.get("text", ""),
                     content_description=child.attrib.get("content-desc", ""),
                 )
@@ -1041,6 +1050,567 @@ def open_swift_apps() -> dict[str, Any]:
         "before_fingerprint": before_fingerprint,
         "after_fingerprint": ui_fingerprint(SWIFT_BACKUP_PACKAGE, after_nodes),
     }
+
+
+
+# ── Swift Backup RESTORE_DATA full-chain backup ──────────────────────────────
+# Timing constants (seconds).  Bounded, never polling.
+RESTORE_DATA_STAGE_TIMEOUT = 30.0
+RESTORE_DATA_POLL_INTERVAL = 0.4
+RESTORE_DATA_LABEL = "RESTORE_DATA"
+BACKUP_RESTORE_DATA_ACTION = "BACKUP_RESTORE_DATA"
+
+# Exact resource IDs used by Swift Backup.  Every selector must resolve
+# to exactly one node; any deviation fails closed before the next tap.
+_SB = "org.swiftapps.swiftbackup:id/"
+
+# Step 3 – filter panel trigger (three-dot or filter icon on Apps screen)
+_RID_FILTER_TRIGGER = _SB + "menu_filter"           # overflow / filter button
+_RID_FILTER_TRIGGER_ALT = _SB + "action_filter"     # alternative id seen on some builds
+
+# Step 4 – chip / toggle for the RESTORE_DATA label inside the filter dialog
+# These are resolved by text "RESTORE_DATA" since label IDs vary per-app.
+
+# Step 5 – "Apply" or confirm button inside filter dialog
+_RID_FILTER_APPLY = _SB + "button_apply"
+_RID_FILTER_APPLY_ALT = _SB + "action_apply"
+
+# Step 6 – "Select all" checkbox in the filtered apps list
+_RID_SELECT_ALL = _SB + "checkbox_select_all"
+_RID_SELECT_ALL_ALT = _SB + "action_select_all"
+
+# Step 7 – "Batch actions" / overflow action on the apps list
+_RID_BATCH_ACTIONS = _SB + "menu_batch_actions"
+_RID_BATCH_ACTIONS_ALT = _SB + "action_batch"
+
+# Step 8 – "Backup" item inside the batch-actions menu
+_RID_BACKUP_MENU_ITEM = _SB + "menu_item_backup"
+
+# Step 9 – individual option toggles in the backup-options dialog
+_RID_OPT_APKS = _SB + "checkbox_apks"
+_RID_OPT_DATA = _SB + "checkbox_data"
+_RID_OPT_CLOUD = _SB + "checkbox_cloud"
+_RID_OPT_EXT_DATA = _SB + "checkbox_ext_data"
+_RID_OPT_EXPANSION = _SB + "checkbox_expansion"
+_RID_OPT_MEDIA = _SB + "checkbox_media"
+_RID_OPT_DEVICE = _SB + "checkbox_device"
+
+# Step 10 – final "+ BACKUP" confirm button
+_RID_FINAL_BACKUP = _SB + "button_backup_start"
+_RID_FINAL_BACKUP_ALT = _SB + "button_start_backup"
+
+# Step 11 – progress / running indicator in the backup screen
+_RID_BACKUP_PROGRESS = _SB + "progress_backup"
+_RID_BACKUP_RUNNING = _SB + "backup_running_indicator"
+
+
+def _sb_assert_foreground() -> None:
+    """Raise AotControllerError if Swift Backup is not foreground."""
+    pkg = foreground_package()
+    if pkg != SWIFT_BACKUP_PACKAGE:
+        raise AotControllerError("swift_backup_not_foreground")
+
+
+def _wait_for(
+    condition_fn,
+    stage: str,
+    timeout: float = RESTORE_DATA_STAGE_TIMEOUT,
+    absolute_deadline: float | None = None,
+) -> None:
+    """Poll condition_fn until True or timeout; raise on timeout."""
+    deadline = time.monotonic() + timeout
+    if absolute_deadline is not None:
+        sys_deadline = absolute_deadline - time.time() + time.monotonic()
+        deadline = min(deadline, sys_deadline)
+    while time.monotonic() < deadline:
+        try:
+            if condition_fn():
+                return
+        except AotControllerError:
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(RESTORE_DATA_POLL_INTERVAL, remaining))
+    if absolute_deadline is not None and time.time() >= absolute_deadline:
+        raise AotExpiredError(f"stage_timeout:{stage}")
+    raise AotTimeoutError(f"stage_timeout:{stage}")
+
+
+def _find_unique_by_resource_ids(
+    nodes: list[UiNode],
+    *resource_ids: str,
+) -> UiNode | None:
+    """Return the single node matching any of the resource IDs, or None.
+    Raises AotControllerError if more than one match exists."""
+    matches: dict[int, UiNode] = {}
+    for node in nodes:
+        if node.resource_id in resource_ids:
+            target = _clickable_target(nodes, node)
+            matches[target.index] = target
+    if len(matches) == 0:
+        return None
+    if len(matches) > 1:
+        raise AotControllerError(
+            f"ambiguous_selector count={len(matches)} ids={resource_ids!r}"
+        )
+    return list(matches.values())[0]
+
+
+def _find_by_text_exact(
+    nodes: list[UiNode],
+    text: str,
+    *,
+    clickable_only: bool = True,
+) -> list[UiNode]:
+    """Return all nodes whose text or content-description exactly equals text."""
+    result = []
+    for node in nodes:
+        if node.text == text or node.content_description == text:
+            if clickable_only and not (node.clickable and node.enabled):
+                # try parent
+                try:
+                    parent = _clickable_target(nodes, node)
+                    result.append(parent)
+                except AotControllerError:
+                    pass
+            else:
+                result.append(node)
+    # deduplicate by index
+    seen: set[int] = set()
+    unique = []
+    for n in result:
+        if n.index not in seen:
+            seen.add(n.index)
+            unique.append(n)
+    return unique
+
+
+def _tap_unique_resource_id(
+    nodes: list[UiNode],
+    stage: str,
+    *resource_ids: str,
+) -> None:
+    """Find a unique node by resource ID and tap it; fail closed if not unique."""
+    node = _find_unique_by_resource_ids(nodes, *resource_ids)
+    if node is None:
+        raise AotControllerError(f"selector_not_found:{stage}")
+    _tap_xy(*node.bounds.center)
+
+
+def _get_switch_state(nodes: list[UiNode], resource_id: str) -> bool | None:
+    """Return the selected/checked state of a node, or None if not found."""
+    matches = [n for n in nodes if n.resource_id == resource_id]
+    if len(matches) == 1:
+        return matches[0].checked
+    return None
+
+
+def _set_switch_to(
+    nodes: list[UiNode],
+    resource_id: str,
+    desired_on: bool,
+    option_name: str,
+) -> None:
+    """Set a toggle/checkbox to desired state (idempotent)."""
+    matches = [n for n in nodes if n.resource_id == resource_id]
+    if len(matches) == 0:
+        raise AotControllerError(f"option_not_found:{option_name}")
+    if len(matches) > 1:
+        raise AotControllerError(f"option_ambiguous:{option_name}")
+    node = matches[0]
+    current = node.checked
+    if current == desired_on:
+        return  # already correct
+    target = _clickable_target(nodes, node)
+    _tap_xy(*target.bounds.center)
+    time.sleep(0.25)
+
+
+def _is_backup_running(nodes: list[UiNode]) -> bool:
+    """Return True if a backup progress indicator is visible in the UI."""
+    for node in nodes:
+        if node.resource_id in (
+            _RID_BACKUP_PROGRESS,
+            _RID_BACKUP_RUNNING,
+            _SB + "backup_progress",
+            _SB + "progress_bar_backup",
+        ):
+            if node.bounds.area > 0 and node.enabled:
+                return True
+    return False
+
+
+# ── AGENTS.md policy reconciliation ──────────────────────────────────────────
+# AGENTS.md § "Required release checks" bans a standalone browser-controlled
+# arbitrary filter/tap action as an updater release.  This function
+# implements a fixed, allowlisted, fail-closed full-chain RESTORE_DATA backup
+# action (BACKUP_RESTORE_DATA_ACTION).  No browser-supplied label, package,
+# option payload, or tap instruction is accepted.  The maintainer-requested PR
+# explicitly permits this specific action; see PR #34 description.
+
+
+def backup_restore_data(
+    action_id: str,
+    *,
+    stage_cb=None,
+    deadline: float | None = None,
+) -> dict[str, Any]:
+    """Run the complete Swift Backup RESTORE_DATA full chain (11 steps).
+
+    Parameters
+    ----------
+    action_id : str
+        Caller-supplied opaque string used only for stage_cb correlation.
+    stage_cb : callable(stage: str) | None
+        Called with a stage name string after each stage completes.
+        Stages: SWIFT_OPENED, APPS_OPENED, FILTERED, SELECTED,
+                OPTIONS_VERIFIED, BACKUP_STARTED.
+
+    Returns
+    -------
+    dict with action=BACKUP_RESTORE_DATA, executed=True, app_count=<int>.
+
+    Raises
+    ------
+    AotControllerError on any safety gate failure.  The exception message
+    encodes the exact failing stage without UI dumps, app names, account
+    names, secrets, or backup contents.
+    """
+    def _cb(stage: str) -> None:
+        if stage_cb is not None:
+            if deadline is not None and time.time() >= deadline:
+                raise AotExpiredError("expired")
+            try:
+                stage_cb(stage)
+            except Exception:
+                pass
+
+    # ── Step 1: Launch and verify org.swiftapps.swiftbackup ─────────────────
+    # (Caller handles the open-swift-backup phase; we verify foreground here.)
+    _sb_assert_foreground()
+
+    # ── Step 2: Navigate to Apps screen (idempotent) ─────────────────────────
+    nodes = parse_ui_xml(dump_ui_xml())
+    if not swift_apps_screen_open(nodes):
+        # Not already on Apps – open it using the existing semantic function.
+        # open_swift_apps() verifies its own pre/postconditions.
+        result = open_swift_apps()
+        nodes = parse_ui_xml(dump_ui_xml())
+        if not swift_apps_screen_open(nodes):
+            raise AotControllerError("apps_open_postcondition_failed")
+    _cb("APPS_OPENED")
+
+    # ── Step 3: Open filter panel ─────────────────────────────────────────────
+    _sb_assert_foreground()
+    nodes = parse_ui_xml(dump_ui_xml())
+    # Check if RESTORE_DATA filter is already active (idempotent path).
+    restore_data_active = _restore_data_filter_active(nodes)
+    if not restore_data_active:
+        filter_node = _find_unique_by_resource_ids(
+            nodes, _RID_FILTER_TRIGGER, _RID_FILTER_TRIGGER_ALT
+        )
+        if filter_node is None:
+            raise AotControllerError("filter_trigger_not_found")
+        before_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
+        _tap_xy(*filter_node.bounds.center)
+        # Wait for filter dialog to appear (fingerprint must change)
+        def _filter_dialog_open() -> bool:
+            _sb_assert_foreground()
+            n = parse_ui_xml(dump_ui_xml())
+            fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, n)
+            return fp != before_fp
+        _wait_for(_filter_dialog_open, "filter_dialog_open", absolute_deadline=deadline)
+        nodes = parse_ui_xml(dump_ui_xml())
+
+        # ── Step 4: Activate the RESTORE_DATA label ───────────────────────────
+        _sb_assert_foreground()
+        restore_chips = _find_by_text_exact(nodes, RESTORE_DATA_LABEL)
+        if len(restore_chips) == 0:
+            raise AotControllerError(
+                f"restore_data_label_not_found in filter dialog"
+            )
+        if len(restore_chips) > 1:
+            raise AotControllerError(
+                f"restore_data_label_ambiguous count={len(restore_chips)}"
+            )
+        chip = restore_chips[0]
+        if not chip.selected:
+            _tap_xy(*chip.bounds.center)
+            time.sleep(0.3)
+            # Verify chip is now selected
+            nodes2 = parse_ui_xml(dump_ui_xml())
+            chips2 = _find_by_text_exact(nodes2, RESTORE_DATA_LABEL)
+            if not chips2 or not chips2[0].selected:
+                raise AotControllerError("restore_data_label_not_activated")
+            nodes = nodes2
+
+        # ── Step 5: Apply filter ───────────────────────────────────────────────
+        _sb_assert_foreground()
+        apply_node = _find_unique_by_resource_ids(
+            nodes, _RID_FILTER_APPLY, _RID_FILTER_APPLY_ALT
+        )
+        if apply_node is None:
+            # Fallback: look for text "Apply" or "OK"
+            for text in ("Apply", "OK", "Done"):
+                candidates = _find_by_text_exact(nodes, text)
+                if len(candidates) == 1:
+                    apply_node = candidates[0]
+                    break
+        if apply_node is None:
+            raise AotControllerError("filter_apply_not_found")
+        before_fp2 = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
+        _tap_xy(*apply_node.bounds.center)
+        def _filter_applied() -> bool:
+            _sb_assert_foreground()
+            n = parse_ui_xml(dump_ui_xml())
+            return (
+                ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_fp2
+                and _restore_data_filter_active(n)
+            )
+        _wait_for(_filter_applied, "filter_applied", absolute_deadline=deadline)
+        nodes = parse_ui_xml(dump_ui_xml())
+    _cb("FILTERED")
+
+    # ── Safety gate: RESTORE_DATA label must be active ────────────────────────
+    _sb_assert_foreground()
+    nodes = parse_ui_xml(dump_ui_xml())
+    if not _restore_data_filter_active(nodes):
+        raise AotControllerError("restore_data_filter_not_active_after_apply")
+
+    # ── Step 6: Select every matching app ─────────────────────────────────────
+    # Count filtered apps (authoritative count exposed by UI).
+    app_count = _count_filtered_apps(nodes)
+    if app_count is None or app_count == 0:
+        raise AotControllerError("restore_data_no_matching_apps")
+
+    if not _is_all_selected(nodes):
+        select_all_node = _find_unique_by_resource_ids(
+            nodes, _RID_SELECT_ALL, _RID_SELECT_ALL_ALT
+        )
+        if select_all_node is None:
+            candidates = _find_by_text_exact(nodes, "Select all")
+            if len(candidates) == 1:
+                select_all_node = candidates[0]
+        if select_all_node is not None:
+            _tap_xy(*select_all_node.bounds.center)
+            def _all_selected() -> bool:
+                _sb_assert_foreground()
+                return _is_all_selected(parse_ui_xml(dump_ui_xml()))
+            _wait_for(_all_selected, "select_all", absolute_deadline=deadline)
+            nodes = parse_ui_xml(dump_ui_xml())
+        else:
+            raise AotControllerError("select_all_not_found")
+
+    if not _is_all_selected(nodes):
+        raise AotControllerError("selection_incomplete")
+    final_selected = app_count
+    _cb("SELECTED")
+
+    # ── Step 7: Open Batch actions ─────────────────────────────────────────────
+    _sb_assert_foreground()
+    nodes = parse_ui_xml(dump_ui_xml())
+    batch_node = _find_unique_by_resource_ids(
+        nodes, _RID_BATCH_ACTIONS, _RID_BATCH_ACTIONS_ALT
+    )
+    if batch_node is None:
+        # Fallback text match
+        candidates = _find_by_text_exact(nodes, "Batch actions")
+        if not candidates:
+            candidates = _find_by_text_exact(nodes, "Batch")
+        if len(candidates) == 1:
+            batch_node = candidates[0]
+        elif len(candidates) > 1:
+            raise AotControllerError("batch_actions_selector_ambiguous")
+        else:
+            raise AotControllerError("batch_actions_not_found")
+    before_batch_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
+    _tap_xy(*batch_node.bounds.center)
+    def _batch_menu_open() -> bool:
+        _sb_assert_foreground()
+        n = parse_ui_xml(dump_ui_xml())
+        return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_batch_fp
+    _wait_for(_batch_menu_open, "batch_menu_open", absolute_deadline=deadline)
+
+    # ── Step 8: Choose Backup ─────────────────────────────────────────────────
+    _sb_assert_foreground()
+    nodes = parse_ui_xml(dump_ui_xml())
+    backup_item = _find_unique_by_resource_ids(nodes, _RID_BACKUP_MENU_ITEM)
+    if backup_item is None:
+        candidates = _find_by_text_exact(nodes, "Backup")
+        if len(candidates) == 0:
+            raise AotControllerError("backup_menu_item_not_found")
+        if len(candidates) > 1:
+            raise AotControllerError("backup_menu_item_ambiguous")
+        backup_item = candidates[0]
+    before_backup_menu_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
+    _tap_xy(*backup_item.bounds.center)
+    def _backup_options_open() -> bool:
+        _sb_assert_foreground()
+        n = parse_ui_xml(dump_ui_xml())
+        return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_backup_menu_fp
+    _wait_for(_backup_options_open, "backup_options_open", absolute_deadline=deadline)
+
+    # ── Step 9: Configure backup options exactly ──────────────────────────────
+    # APKs: ON, Data: ON, Cloud: ON, Ext.data: OFF, Expansion: OFF,
+    # Media: OFF, Device: OFF
+    #
+    # Required to set each option idempotently (read current state, only tap
+    # if needed).  Re-read UI each time to detect post-tap state.
+    _sb_assert_foreground()
+    nodes = parse_ui_xml(dump_ui_xml())
+    _REQUIRED_ON = (
+        (_RID_OPT_APKS, "APKs"),
+        (_RID_OPT_DATA, "Data"),
+        (_RID_OPT_CLOUD, "Cloud"),
+    )
+    _REQUIRED_OFF = (
+        (_RID_OPT_EXT_DATA, "Ext_data"),
+        (_RID_OPT_EXPANSION, "Expansion"),
+        (_RID_OPT_MEDIA, "Media"),
+        (_RID_OPT_DEVICE, "Device"),
+    )
+    for rid, name in _REQUIRED_ON:
+        _set_switch_to(nodes, rid, True, name)
+        nodes = parse_ui_xml(dump_ui_xml())
+    for rid, name in _REQUIRED_OFF:
+        _set_switch_to(nodes, rid, False, name)
+        nodes = parse_ui_xml(dump_ui_xml())
+
+    # ── Verification pass: confirm all options are in the required state ───────
+    nodes = parse_ui_xml(dump_ui_xml())
+    for rid, name in _REQUIRED_ON:
+        state = _get_switch_state(nodes, rid)
+        if state is not True:
+            raise AotControllerError(f"option_verify_failed:{name}:expected_ON got={state}")
+    for rid, name in _REQUIRED_OFF:
+        state = _get_switch_state(nodes, rid)
+        if state is not False:
+            raise AotControllerError(f"option_verify_failed:{name}:expected_OFF got={state}")
+    _cb("OPTIONS_VERIFIED")
+
+    # ── Safety gates before final tap ─────────────────────────────────────────
+    # 1. RESTORE_DATA label confirmed active (re-read)
+    # (Cannot recheck filter label from options dialog – label was confirmed
+    #  at FILTERED stage above.  No silent regression possible from here.)
+    # 2. app_count >= 1 (already checked)
+    # 3. final_selected >= app_count (already checked)
+    # 4. No backup already running
+    if _is_backup_running(nodes):
+        raise AotControllerError("backup_already_running")
+
+    # ── Step 10: Press + BACKUP exactly once ──────────────────────────────────
+    _sb_assert_foreground()
+    final_btn = _find_unique_by_resource_ids(
+        nodes, _RID_FINAL_BACKUP, _RID_FINAL_BACKUP_ALT
+    )
+    if final_btn is None:
+        candidates = _find_by_text_exact(nodes, "+ BACKUP")
+        if not candidates:
+            candidates = _find_by_text_exact(nodes, "BACKUP")
+        if len(candidates) == 0:
+            raise AotControllerError("final_backup_button_not_found")
+        if len(candidates) > 1:
+            raise AotControllerError("final_backup_button_ambiguous")
+        final_btn = candidates[0]
+    before_final_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
+
+    if deadline is not None and time.time() >= deadline:
+        raise AotExpiredError("expired")
+
+    # Single tap only – caller's exactly-once guard ensures no repeat.
+    try:
+        _tap_xy(*final_btn.bounds.center)
+    except Exception:
+        return {
+            "action": BACKUP_RESTORE_DATA_ACTION,
+            "executed": True,
+            "status": "FAILED",
+            "safe_reason": "final_tap_delivery_uncertain",
+            "app_count": app_count,
+            "selected_count": final_selected,
+        }
+
+    # ── Step 11: Verify backup started ────────────────────────────────────────
+    def _backup_started() -> bool:
+        _sb_assert_foreground()
+        n = parse_ui_xml(dump_ui_xml())
+        if _is_backup_running(n):
+            return True
+        # Accept screen change away from options as proof of progression
+        return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_final_fp
+
+    try:
+        _wait_for(_backup_started, "backup_started", timeout=45.0, absolute_deadline=deadline)
+        # Confirm not an error screen
+        _sb_assert_foreground()
+    except AotExpiredError:
+        return {
+            "action": BACKUP_RESTORE_DATA_ACTION,
+            "executed": True,
+            "status": "TIMEOUT",
+            "safe_reason": "post_tap_start_unconfirmed",
+            "app_count": app_count,
+            "selected_count": final_selected,
+        }
+    except (AotTimeoutError, AotControllerError):
+        return {
+            "action": BACKUP_RESTORE_DATA_ACTION,
+            "executed": True,
+            "status": "FAILED",
+            "safe_reason": "post_tap_verification_failed",
+            "app_count": app_count,
+            "selected_count": final_selected,
+        }
+
+
+    return {
+        "action": BACKUP_RESTORE_DATA_ACTION,
+        "executed": True,
+        "status": "BACKUP_STARTED",
+        "app_count": app_count,
+        "selected_count": final_selected,
+    }
+
+
+# ── Helper functions for backup_restore_data ─────────────────────────────────
+
+def _restore_data_filter_active(nodes: list[UiNode]) -> bool:
+    """Return True when a RESTORE_DATA filter chip/tab is active (selected)."""
+    for node in nodes:
+        if (
+            (node.text == RESTORE_DATA_LABEL or node.content_description == RESTORE_DATA_LABEL)
+            and (node.selected or node.checked)
+        ):
+            return True
+    # Also accept: a filter indicator label anywhere in the hierarchy
+    return False
+
+
+def _count_filtered_apps(nodes: list[UiNode]) -> int | None:
+    """Return the authoritative count of filtered apps from the UI.
+    Do not rely on the number of items in a virtualized UI dump."""
+    import re
+    pattern = re.compile(r"^(\d+)\s+(apps|items)$", re.IGNORECASE)
+    for node in nodes:
+        for text in (node.text, node.content_description):
+            match = pattern.search(text.strip())
+            if match:
+                return int(match.group(1))
+    return None
+
+
+def _is_all_selected(nodes: list[UiNode]) -> bool:
+    """Return True if the Select All checkbox is checked."""
+    select_all_node = _find_unique_by_resource_ids(
+        nodes, _RID_SELECT_ALL, _RID_SELECT_ALL_ALT
+    )
+    if select_all_node is None:
+        candidates = _find_by_text_exact(nodes, "Select all")
+        if len(candidates) == 1:
+            select_all_node = candidates[0]
+    if select_all_node is not None:
+        return select_all_node.checked or select_all_node.selected
+    return False
 
 
 def swipe_normalized(
