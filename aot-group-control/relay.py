@@ -44,7 +44,23 @@ MAX_HTTP_JSON_BYTES = 384 * 1024
 MAX_PREVIEW_BYTES = 180 * 1024
 PROCESSED_ACTIONS_MAX = 256
 HUB_PROTOCOL_VERSION = "fleet-batch-v1"
-LIVE_STATUS_INTERVAL_SECONDS = 2.5
+LIVE_STATUS_INTERVAL_SECONDS = 60.0
+
+def _get_live_status_interval(device_id: str | None) -> float:
+    """
+    Calculate deterministic per-device status interval to distribute load.
+
+    Returns a baseline 60-second heartbeat plus deterministic per-device jitter
+    bounded between +/- 10 seconds. This avoids clients synchronizing and
+    reduces daily status messages from 1.38M to ~57k for 40 devices, preserving
+    Cloudflare quotas while maintaining real-time event-driven responsiveness.
+    """
+    if not device_id:
+        return LIVE_STATUS_INTERVAL_SECONDS
+    import zlib
+    val = zlib.crc32(device_id.encode("utf-8")) % 20000
+    jitter = (val / 1000.0) - 10.0
+    return LIVE_STATUS_INTERVAL_SECONDS + jitter
 SWIFT_BACKUP_PACKAGE = "org.swiftapps.swiftbackup"
 OPEN_SWIFT_BACKUP_ACTION = "OPEN_SWIFT_BACKUP"
 OPEN_SWIFT_APPS_ACTION = "OPEN_SWIFT_APPS"
@@ -1008,28 +1024,23 @@ def _send_live_status(
     sock: socket.socket,
     *,
     device_id: str,
-    previous_preview_sha: str | None,
+    previous_fingerprint: str | None,
     force_preview: bool = False,
     role: str | None = None,
     session_id: str | None = None,
 ) -> str | None:
+    snap = controller.snapshot(include_nodes=False)
+    current_fingerprint = snap.get("fingerprint")
+    meaningful_change = (current_fingerprint != previous_fingerprint)
+
+    include_preview = force_preview or meaningful_change
+
     payload = _live_status_payload(
         device_id=device_id,
-        include_preview=True,
+        include_preview=include_preview,
     )
-    current_sha = payload.get("preview_sha256")
-    if (
-        not force_preview
-        and current_sha
-        and current_sha == previous_preview_sha
-    ):
-        payload.pop("preview_b64", None)
     _ws_send_json(sock, payload)
-    return (
-        current_sha
-        if isinstance(current_sha, str)
-        else previous_preview_sha
-    )
+    return current_fingerprint
 
 
 def _send_control_result(
@@ -1355,30 +1366,30 @@ def reference_loop(
                 updater.notify_pending_healthy()
             except Exception:
                 pass
-            previous_sha = None
-            previous_sha = _send_live_status(
+            previous_fingerprint = None
+            previous_fingerprint = _send_live_status(
                 sock,
                 role="reference",
                 session_id=session_id,
                 device_id=local_id,
-                previous_preview_sha=previous_sha,
+                previous_fingerprint=previous_fingerprint,
                 force_preview=True,
             )
             next_status = (
                 time.monotonic()
-                + LIVE_STATUS_INTERVAL_SECONDS
+                + _get_live_status_interval(local_id)
             )
             while True:
                 now = time.monotonic()
                 if now >= next_status:
                     try:
-                        previous_sha = (
+                        previous_fingerprint = (
                             _send_live_status(
                                 sock,
                                 role="reference",
                                 session_id=session_id,
                                 device_id=local_id,
-                                previous_preview_sha=previous_sha,
+                                previous_fingerprint=previous_fingerprint,
                             )
                         )
                     except (
@@ -1388,7 +1399,7 @@ def reference_loop(
                         pass
                     next_status = (
                         time.monotonic()
-                        + LIVE_STATUS_INTERVAL_SECONDS
+                        + _get_live_status_interval(local_id)
                     )
                 try:
                     opcode, payload = (
@@ -1447,13 +1458,13 @@ def reference_loop(
                         message=message,
                     )
                     try:
-                        previous_sha = (
+                        previous_fingerprint = (
                             _send_live_status(
                                 sock,
                                 role="reference",
                                 session_id=session_id,
                                 device_id=local_id,
-                                previous_preview_sha=previous_sha,
+                                previous_fingerprint=previous_fingerprint,
                                 force_preview=True,
                             )
                         )
@@ -1563,14 +1574,14 @@ def follower_loop(
                 updater.notify_pending_healthy()
             except Exception:
                 pass
-            previous_sha = None
+            previous_fingerprint = None
             try:
-                previous_sha = _send_live_status(
+                previous_fingerprint = _send_live_status(
                     sock,
                     role="follower",
                     session_id=session_id,
                     device_id=local_id,
-                    previous_preview_sha=previous_sha,
+                    previous_fingerprint=previous_fingerprint,
                     force_preview=True,
                 )
             except (
@@ -1580,20 +1591,20 @@ def follower_loop(
                 pass
             next_status = (
                 time.monotonic()
-                + LIVE_STATUS_INTERVAL_SECONDS
+                + _get_live_status_interval(local_id)
             )
 
             while True:
                 now = time.monotonic()
                 if now >= next_status:
                     try:
-                        previous_sha = (
+                        previous_fingerprint = (
                             _send_live_status(
                                 sock,
                                 role="follower",
                                 session_id=session_id,
                                 device_id=local_id,
-                                previous_preview_sha=previous_sha,
+                                previous_fingerprint=previous_fingerprint,
                             )
                         )
                     except (
@@ -1603,7 +1614,7 @@ def follower_loop(
                         pass
                     next_status = (
                         time.monotonic()
-                        + LIVE_STATUS_INTERVAL_SECONDS
+                        + _get_live_status_interval(local_id)
                     )
                 try:
                     opcode, payload = (
@@ -1881,13 +1892,13 @@ def follower_loop(
                     + action_id
                 )
                 try:
-                    previous_sha = (
+                    previous_fingerprint = (
                         _send_live_status(
                             sock,
                             role="follower",
                             session_id=session_id,
                             device_id=local_id,
-                            previous_preview_sha=previous_sha,
+                            previous_fingerprint=previous_fingerprint,
                             force_preview=True,
                         )
                     )
@@ -1949,15 +1960,15 @@ def fleet_loop(*, open_package: str | None = None) -> int:
                 updater.notify_pending_healthy()
             except Exception:
                 pass
-            _send_live_status(sock, device_id=local_id, previous_preview_sha=None)
-            next_status = time.monotonic() + LIVE_STATUS_INTERVAL_SECONDS
+            _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
+            next_status = time.monotonic() + _get_live_status_interval(local_id)
             while True:
                 if time.monotonic() >= next_status:
                     try:
-                        _send_live_status(sock, device_id=local_id, previous_preview_sha=None)
+                        _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
                     except (OSError, controller.AotControllerError):
                         pass
-                    next_status = time.monotonic() + LIVE_STATUS_INTERVAL_SECONDS
+                    next_status = time.monotonic() + _get_live_status_interval(local_id)
                 try:
                     opcode, payload = _ws_recv_frame(sock)
                 except socket.timeout:
