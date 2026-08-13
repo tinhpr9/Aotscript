@@ -3,7 +3,7 @@ import importlib.util, pathlib, sys, tempfile, time
 root = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("relay", root / "relay.py")
 module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
-assert module.WORKER_VERSION == "aot-worker-2026.08.11.10"
+assert module.WORKER_VERSION == "aot-worker-2026.08.11.11"
 assert module.websocket_url("https://example.test/report", device_id="m301") == "wss://example.test/aot/control/ws?device_id=m301"
 assert module.build_parser().parse_args(["fleet"]).command == "fleet"
 assert "backup_restore_data_semantic" in module.WORKER_CAPABILITIES
@@ -65,4 +65,65 @@ with tempfile.TemporaryDirectory() as folder:
         assert sent[-1]["status"] == "TIMEOUT"
     finally:
         module._send_ack, module._open_swift_backup, module.controller.open_swift_apps = old_ack, old_open, old_apps
+
+# Interval, jitter bounds, and initial phase
+assert module._get_live_status_interval(None) == 900.0
+i1 = module._get_live_status_interval("device1")
+i2 = module._get_live_status_interval("device2")
+assert 840.0 <= i1 <= 960.0
+assert 840.0 <= i2 <= 960.0
+assert module._get_live_status_interval("device1") == i1  # deterministic
+
+d1 = module._get_live_status_initial_delay("device1")
+d2 = module._get_live_status_initial_delay("device2")
+assert 0.0 <= d1 < 900.0
+assert 0.0 <= d2 < 900.0
+
+# Immediate forced status semantics
+def fake_snapshot(*_a, **_kw):
+    return {"fingerprint": "fp1"}
+module.controller.snapshot = fake_snapshot
+module.controller.screenshot_bytes = lambda: b"fake_screenshot"
+sent_status = []
+module._ws_send_json = lambda sock, p: sent_status.append(p)
+# Initial: fingerprint changes from None to fp1 -> includes preview bytes
+res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
+assert res == "fp1"
+assert "preview_sha256" in sent_status[-1]
+
+# Next periodic: same fingerprint -> NO preview
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1", force_preview=False)
+assert res == "fp1"
+assert "preview_sha256" not in sent_status[-1]
+
+# Forced: same fingerprint BUT force_preview -> includes preview
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1", force_preview=True)
+assert res == "fp1"
+assert "preview_sha256" in sent_status[-1]
+
+# Meaningful change: new fingerprint -> includes preview
+def fake_snapshot2(*_a, **_kw):
+    return {"fingerprint": "fp2"}
+module.controller.snapshot = fake_snapshot2
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1", force_preview=False)
+assert res == "fp2"
+assert "preview_sha256" in sent_status[-1]
+
+# Preview decision and payload must reuse one snapshot. A second read could
+# otherwise pair an fp2 payload with the preview decision made for fp1.
+snapshot_calls = []
+def sequential_snapshot(*_a, **_kw):
+    snapshot_calls.append(True)
+    return {"fingerprint": "fp1" if len(snapshot_calls) == 1 else "fp2"}
+module.controller.snapshot = sequential_snapshot
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint="old", force_preview=False)
+assert len(snapshot_calls) == 1
+assert res == "fp1"
+assert sent_status[-1]["fingerprint"] == "fp1"
+assert "preview_sha256" in sent_status[-1]
+
 print("AOT_RELAY_SELFTEST=OK")

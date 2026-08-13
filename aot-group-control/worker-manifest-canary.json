@@ -1,59 +1,59 @@
 {
   "schema_version": 2,
-  "version": "aot-worker-2026.08.11.10",
+  "version": "aot-worker-2026.08.11.11",
   "channel": "canary",
   "minimum_bootstrap_version": 2,
-  "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/legacy_relay_bridge.py",
+  "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/legacy_relay_bridge.py",
   "sha256": "659877b7c55dec6c0fa8c83b213fd3af260f0f4fff30c13ec3e72ff670207cee",
   "bootstrap": {
     "version": 6,
-    "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/bootstrap.py",
+    "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/bootstrap.py",
     "sha256": "bd0febde0dc64d4ee7ac23ac6be30c49dd4a4445c74bd221c6ca9b2d3e83db23"
   },
   "files": [
     {
       "path": "relay.py",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/relay.py",
-      "sha256": "efef23b5835fabaf828a912b7ceecb26e87d402740ce3663c1074f5b67755df6"
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/relay.py",
+      "sha256": "134b7761b0583a245b7834f3e828c846c37844a25bb14b34494e0757b37a9154"
     },
     {
       "path": "runtime.py",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/runtime.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/runtime.py",
       "sha256": "f69d8d8a7e028088c19667fe0d5317e8a48fffa82c0e12327be726cd02edbeb5"
     },
     {
       "path": "controller.py",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/controller.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/controller.py",
       "sha256": "eef9b3fe44de0313eb0d774b9b2b0a0bdebf086f08096b7fa8f685f48e436923"
     },
     {
       "path": "updater.py",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/updater.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/updater.py",
       "sha256": "029a219a0336f2262705e0a82a1e65ab81e0f7d1ab5e90296931c45d82d21dc5"
     },
     {
       "path": "e2e.py",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/e2e.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/e2e.py",
       "sha256": "5a51d0f8cba9d6b922f3b95dc9a1296d6470dc8b71f64caadd80a5efa0e3f190"
     },
     {
       "path": "worker_smoke_test.py",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker_smoke_test.py",
-      "sha256": "33939fb6d8ee0656ed048b85f93b4cc13879960a35b043ab2308e6ed0fb4ca94"
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/worker_smoke_test.py",
+      "sha256": "350246fb4d9f8533572993f2a54166871915b49742a874fe3349ffd21d42ddc9"
     },
     {
       "path": "worker-release-schema.json",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-release-schema.json",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/worker-release-schema.json",
       "sha256": "ce814db0ce9a54a03406e0f2a00f2c12b58852b80cad02b5fc73ae2bad36c045"
     },
     {
       "path": "msetup_registration.py",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/msetup_registration.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/msetup_registration.py",
       "sha256": "8bfadcafe72305c0a428e4d858620b02974c43be94fc4aaf30b58ded31897d64"
     },
     {
       "path": "legacy_relay_bridge.py",
-      "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/legacy_relay_bridge.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.11/legacy_relay_bridge.py",
       "sha256": "659877b7c55dec6c0fa8c83b213fd3af260f0f4fff30c13ec3e72ff670207cee"
     }
   ]
