@@ -1514,7 +1514,7 @@ export class FleetState
             history = [...history, "TIMEOUT"];
           }
         }
-        const reason = status === "TIMEOUT"
+        const reason = (status === "TIMEOUT" && !item.reason)
           ? "worker_ack_timeout"
           : String(item.reason || "").trim().slice(0, 160);
         return {
@@ -1525,6 +1525,8 @@ export class FleetState
           reason: reason || null,
           executed: item.executed === true,
           updated_at: Number(item.updated_at || batch.created_at || 0),
+          app_count: Number.isSafeInteger(item.app_count) ? item.app_count : null,
+          selected_count: Number.isSafeInteger(item.selected_count) ? item.selected_count : null,
         };
       });
     devices.sort((left, right) =>
@@ -3023,7 +3025,13 @@ export class FleetState
       const next = Date.now() >= batch.expires_at ? "TIMEOUT" : body.status;
       if ((ranks[next] || 0) > (ranks[device.status] || 0)) {
         device.status = next; if (!device.history.includes(next)) device.history.push(next);
-        device.reason = ["FAILED", "FAILED_NOT_INSTALLED", "TIMEOUT"].includes(next) ? String(body.reason || "worker_reported_failure").slice(0, 160) : null;
+        if (action === AOT_BACKUP_RESTORE_DATA_ACTION) {
+          device.reason = typeof body.reason === "string" ? body.reason : (["FAILED", "FAILED_NOT_INSTALLED", "TIMEOUT"].includes(next) ? String(body.reason || "worker_reported_failure").slice(0, 160) : null);
+          if (Number.isSafeInteger(body.app_count) && body.app_count >= 0) device.app_count = body.app_count;
+          if (Number.isSafeInteger(body.selected_count) && body.selected_count >= 0) device.selected_count = body.selected_count;
+        } else {
+          device.reason = ["FAILED", "FAILED_NOT_INSTALLED", "TIMEOUT"].includes(next) ? String(body.reason || "worker_reported_failure").slice(0, 160) : null;
+        }
         device.executed = body.executed === true; device.updated_at = Date.now();
         await this.writeFleet(record); await this.broadcastFleetState();
       }

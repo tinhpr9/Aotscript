@@ -74,6 +74,20 @@ await retentionAck("FAILED", false); // should be ignored
 const batchViewAfterFailed = fleet.aotBatchView((await fleet.readFleet()).last_batch);
 if (!batchViewAfterFailed.devices.find(d => d.device_id === ids[1]).executed || batchViewAfterFailed.devices.find(d => d.device_id === ids[1]).status !== "TIMEOUT") throw new Error("executed=true retention violated");
 
+// Test reason, app_count, and selected_count propagation
+response = await fleet.dispatchFleetBatch(record, "BACKUP_RESTORE_DATA", [ids[2]]);
+body = await response.json();
+const infoActionId = body.batch.action_id;
+const infoAck = async (status, extra = {}) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[2], action_id: infoActionId, batch_action: "BACKUP_RESTORE_DATA", status, executed: false, ...extra }) }));
+await infoAck("BACKUP_STARTED", { app_count: 5, selected_count: 3, reason: "started_ok" });
+const batchViewAfterStarted = fleet.aotBatchView((await fleet.readFleet()).last_batch);
+const dStarted = batchViewAfterStarted.devices.find(d => d.device_id === ids[2]);
+if (dStarted.app_count !== 5 || dStarted.selected_count !== 3 || dStarted.reason !== "started_ok") throw new Error("count/reason propagation failed");
+await infoAck("FAILED", { reason: "test_reason" }); // ignored because BACKUP_STARTED is terminal
+const batchViewAfterInfoFailed = fleet.aotBatchView((await fleet.readFleet()).last_batch);
+const dFailedInfo = batchViewAfterInfoFailed.devices.find(d => d.device_id === ids[2]);
+if (dFailedInfo.status !== "BACKUP_STARTED" || dFailedInfo.reason !== "started_ok") throw new Error("reason overwritten by late ack");
+
 const file = source;
 if (!file.includes("AOT_UPDATE_GROUP_SIZE = 5") || !file.includes("ROLLED_BACK")) throw new Error("update rollout/rollback lost");
 const fleetProtocol = file.slice(file.indexOf("async readFleet()"));

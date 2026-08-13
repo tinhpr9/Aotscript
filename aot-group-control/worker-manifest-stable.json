@@ -14,7 +14,7 @@
     {
       "path": "relay.py",
       "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/relay.py",
-      "sha256": "d740e68df05c62d2f551d0f0b22ca3cfe3afd2f5a62cef709cc7ff2cf7210dd7"
+      "sha256": "baf409768fc6101a9bc29ce2a652b00ebf53765886617e1134daedbf7c4e2ee4"
     },
     {
       "path": "runtime.py",
@@ -24,7 +24,7 @@
     {
       "path": "controller.py",
       "url": "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/controller.py",
-      "sha256": "da355d82acfecf5f1e2f879afe1a3ee3a813413b0558e8d3d01d45b4357e40e1"
+      "sha256": "12a32a3d187197d4145b7fb222281208296d111eee405228fed8b3ad9587519a"
     },
     {
       "path": "updater.py",
