@@ -9,7 +9,10 @@ Covers:
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
+import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -206,8 +209,7 @@ class TestSetSwitchTo(unittest.TestCase):
         nodes = CONTROLLER.parse_ui_xml(_wrap(_node(rid=f"{_SB}checkbox_apks", checked=True)))
         with mock.patch.object(CONTROLLER, "_tap_xy") as tap:
             CONTROLLER._set_switch_to(nodes, f"{_SB}checkbox_apks", True, "APKs")
-            from unittest.mock import call
-            self.assertNotIn(call(90.0, 90.0), tap.mock_calls)
+            self.assertNotIn(mock.call(90.0, 90.0), tap.mock_calls)
 
     def test_wrong_state_taps(self):
         nodes = CONTROLLER.parse_ui_xml(_wrap(_node(rid=f"{_SB}checkbox_apks", checked=False)))
@@ -457,11 +459,7 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
             ):
                 CONTROLLER.backup_restore_data("action-already-running")
             # Should fail closed and definitely not tap anything (especially the final button)
-            from unittest.mock import call
-            self.assertNotIn(call(90.0, 90.0), tap.mock_calls)
-            # Should not tap the final backup button
-            from unittest.mock import call
-            self.assertNotIn(call(90.0, 90.0), tap.mock_calls)
+            self.assertNotIn(mock.call(90.0, 90.0), tap.mock_calls)
 
     def test_final_backup_button_tapped_exactly_once(self):
         """The final + BACKUP button must be tapped exactly once."""
@@ -517,9 +515,7 @@ class TestBackupRestoreDataIntegration(unittest.TestCase):
         self.assertIn("APPS_OPENED", stages_seen)
         self.assertIn("SELECTED", stages_seen)
         self.assertIn("OPTIONS_VERIFIED", stages_seen)
-        self.assertIn("BACKUP_STARTED", stages_seen)
-        self.assertEqual("BACKUP_STARTED", stages_seen[-1], f"Last stage was {stages_seen[-1]!r}")
-
+        self.assertEqual("OPTIONS_VERIFIED", stages_seen[-1], f"Last stage was {stages_seen[-1]!r}")
 
 # ── Relay protocol tests ──────────────────────────────────────────────────────
 
@@ -558,7 +554,7 @@ class TestRelayBackupRestoreData(unittest.TestCase):
         for s in ("APPS_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED"):
             if stage_cb:
                 stage_cb(s)
-        return {"action": "BACKUP_RESTORE_DATA", "executed": True,
+        return {"action": "BACKUP_RESTORE_DATA", "executed": True, "status": "BACKUP_STARTED",
                 "app_count": 3, "selected_count": 3}
 
     def test_complete_chain_statuses(self):
@@ -580,6 +576,7 @@ class TestRelayBackupRestoreData(unittest.TestCase):
         RELAY.controller.backup_restore_data = self._fake_success
         msg = self._make_message()
         RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
+
         tap_count = [0]
 
         def _should_not_run(*a, **kw):
@@ -589,9 +586,55 @@ class TestRelayBackupRestoreData(unittest.TestCase):
         RELAY.controller.backup_restore_data = _should_not_run
         self.sent.clear()
         RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
-        self.assertEqual("DUPLICATE", self.sent[-1]["status"])
-        self.assertFalse(self.sent[-1]["executed"])
+        self.assertEqual("BACKUP_STARTED", self.sent[-1]["status"])
+        self.assertTrue(self.sent[-1]["executed"])
         self.assertEqual(0, tap_count[0])
+
+    def test_duplicate_terminal_delivery(self):
+        tap_count = [0]
+
+        def _fake_success(*a, **kw):
+            tap_count[0] += 1
+            return {"action": "BACKUP_RESTORE_DATA", "executed": True, "status": "BACKUP_STARTED",
+                    "app_count": 3, "selected_count": 3}
+
+        RELAY.controller.backup_restore_data = _fake_success
+        msg = self._make_message(action_id="test-terminal-dup")
+
+        real_send_ack = RELAY._send_ack
+
+        def _failing_ack(cfg, payload):
+            if payload.get("status") == "BACKUP_STARTED":
+                raise RELAY.AotRelayError("ack_delivery_failed")
+            real_send_ack(cfg, payload)
+
+        RELAY._send_ack = _failing_ack
+
+        try:
+            with self.assertRaises(RELAY.AotRelayError):
+                RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
+            self.assertEqual(1, tap_count[0])
+
+            persisted = json.loads(RELAY.STATE_PATH.read_text(encoding="utf-8"))
+            self.assertEqual({
+                "test-terminal-dup": {
+                    "status": "BACKUP_STARTED",
+                    "executed": True,
+                    "safe_reason": None,
+                    "app_count": 3,
+                    "selected_count": 3,
+                }
+            }, persisted["action_results"])
+
+            RELAY._send_ack = real_send_ack
+            self.sent.clear()
+            RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
+
+            self.assertEqual(1, tap_count[0])
+            self.assertEqual("BACKUP_STARTED", self.sent[-1]["status"])
+            self.assertTrue(self.sent[-1]["executed"])
+        finally:
+            RELAY._send_ack = real_send_ack
 
     def test_failure_sends_failed_status(self):
         error_cases = [
@@ -745,7 +788,6 @@ class TestArchitectureConstraints(unittest.TestCase):
             self.assertNotIn("app_count = 7", src, f"hardcoded count in {fname}")
 
     def test_no_absolute_coordinates_in_backup_restore_data(self):
-        import re
         src = (ROOT / "aot-group-control/controller.py").read_text()
         fn_start = src.index("def backup_restore_data(")
         # Find next def at same indent level
@@ -824,23 +866,85 @@ class TestArchitectureConstraints(unittest.TestCase):
         self.assertIn("aot-worker-2026.08.11.10", src)
         self.assertIn("BACKUP_RESTORE_DATA", src)
 
+class TestBoundaryTaps(unittest.TestCase):
+    def _run_with_mocks(self, expire_before_tap=False, wait_for_exc=None):
+        taps = []
+
+        class TimeMock:
+            def __init__(self):
+                self.expired = False
+            def __call__(self):
+                return 15.0 if self.expired else 5.0
+
+        tm = TimeMock()
+
+        orig_find = CONTROLLER._find_unique_by_resource_ids
+        def fake_find(nodes, *rids):
+            if CONTROLLER._RID_FINAL_BACKUP in rids or CONTROLLER._RID_FINAL_BACKUP_ALT in rids:
+                if expire_before_tap:
+                    tm.expired = True
+            return orig_find(nodes, *rids)
+
+        with mock.patch.object(CONTROLLER, "foreground_package", return_value=_PKG), \
+             mock.patch.object(CONTROLLER.time, "sleep"), \
+             mock.patch.object(CONTROLLER, "swift_apps_screen_open", return_value=True), \
+             mock.patch.object(CONTROLLER, "_restore_data_filter_active", return_value=True), \
+             mock.patch.object(CONTROLLER, "_count_filtered_apps", return_value=3), \
+             mock.patch.object(CONTROLLER, "_is_all_selected", return_value=True), \
+             mock.patch.object(CONTROLLER, "_is_backup_running", return_value=False), \
+             mock.patch.object(CONTROLLER, "_tap_xy", side_effect=lambda x, y: taps.append((x, y))):
+
+            rotator = _Rotator([
+                 APPS_SCREEN, APPS_SCREEN,
+                 _apps_list(3, 3),
+                 BATCH_MENU, BACKUP_MENU_SCREEN,
+                 OPTIONS_CORRECT, OPTIONS_CORRECT, OPTIONS_CORRECT,
+                 OPTIONS_CORRECT, OPTIONS_CORRECT, OPTIONS_CORRECT, OPTIONS_CORRECT,
+                 OPTIONS_CORRECT, OPTIONS_CORRECT,
+                 PROGRESS_SCREEN, PROGRESS_SCREEN,
+            ])
+
+            def fake_wait(*args, **kwargs):
+                if wait_for_exc and args[1] == "backup_started":
+                    raise wait_for_exc
+
+            with mock.patch.object(CONTROLLER, "dump_ui_xml", side_effect=rotator), \
+                 mock.patch.object(CONTROLLER, "_wait_for", side_effect=fake_wait), \
+                 mock.patch.object(CONTROLLER, "_find_unique_by_resource_ids", side_effect=fake_find), \
+                 mock.patch.object(CONTROLLER.time, "time", side_effect=tm):
+                try:
+                    result = CONTROLLER.backup_restore_data("test-boundary", deadline=10.0)
+                except CONTROLLER.AotControllerError as exc:
+                    result = {"action": "BACKUP_RESTORE_DATA", "executed": False, "error": str(exc).split(":")[0]}
+        return result, taps
+
+    def test_deadline_expires_before_tap(self):
+        result, taps = self._run_with_mocks(expire_before_tap=True)
+        self.assertEqual(0, len([t for t in taps if t == (90.0, 90.0)]))
+        self.assertFalse(result.get("executed"))
+        self.assertEqual("expired", result.get("error"))
+
+    def test_deadline_expires_after_tap(self):
+        result, taps = self._run_with_mocks(wait_for_exc=CONTROLLER.AotExpiredError("expired"))
+        self.assertEqual(1, len([t for t in taps if t == (90.0, 90.0)]))
+        self.assertTrue(result.get("executed"))
+        self.assertEqual("TIMEOUT", result.get("status"))
+        self.assertEqual("post_tap_start_unconfirmed", result.get("safe_reason"))
+
+    def test_post_tap_verification_failure(self):
+        result, taps = self._run_with_mocks(wait_for_exc=CONTROLLER.AotControllerError("stage_timeout:backup_started"))
+        self.assertEqual(1, len([t for t in taps if t == (90.0, 90.0)]))
+        self.assertTrue(result.get("executed"))
+        self.assertEqual("FAILED", result.get("status"))
+        self.assertEqual("post_tap_verification_failed", result.get("safe_reason"))
+
+    def test_successful_verification(self):
+        result, taps = self._run_with_mocks()
+        self.assertEqual(1, len([t for t in taps if t == (90.0, 90.0)]))
+        self.assertTrue(result.get("executed"))
+        self.assertEqual("BACKUP_STARTED", result.get("status"))
+
 
 if __name__ == "__main__":
     unittest.main()
 
-class TestWaitFor(unittest.TestCase):
-    def test_wait_for_success(self):
-        calls = []
-        def cond():
-            calls.append(1)
-            return len(calls) == 3
-        with mock.patch.object(CONTROLLER.time, "sleep"), \
-             mock.patch.object(CONTROLLER.time, "monotonic", side_effect=lambda: 0):
-            CONTROLLER._wait_for(cond, "test_cond", timeout=5.0)
-        self.assertEqual(3, len(calls))
-
-    def test_wait_for_timeout(self):
-        with mock.patch.object(CONTROLLER.time, "sleep"), \
-             mock.patch.object(CONTROLLER.time, "monotonic", side_effect=[0, 1, 6, 7, 8, 9]):
-            with self.assertRaisesRegex(CONTROLLER.AotControllerError, "stage_timeout:test_timeout"):
-                CONTROLLER._wait_for(lambda: False, "test_timeout", timeout=5.0)

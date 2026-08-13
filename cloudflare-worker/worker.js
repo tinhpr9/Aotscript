@@ -2016,7 +2016,7 @@ function normalizeAotHubControl(body) {
     const control = {
       kind,
     };
-    if (["open_swift_backup", "open_swift_apps"].includes(kind)) {
+    if (["open_swift_backup", "open_swift_apps", "backup_restore_data"].includes(kind)) {
       if (
         !Array.isArray(body.target_device_ids) ||
         body.target_device_ids.length < 1 ||

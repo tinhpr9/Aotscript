@@ -434,6 +434,7 @@ def action_already_processed(
 def mark_action_processed(
     state: dict[str, Any],
     action_id: str,
+    result: dict[str, Any] | None = None,
 ) -> None:
     values = [
         item
@@ -442,6 +443,26 @@ def mark_action_processed(
     ]
     values.append(action_id)
     state["processed_action_ids"] = values[-PROCESSED_ACTIONS_MAX:]
+    if result is not None and result.get("executed") is True:
+        results = state.get("action_results")
+        if not isinstance(results, dict):
+            results = {}
+        # Sanitize to fixed schema and allowlisted status/reason
+        status = result.get("status")
+        if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED"}:
+            status = "FAILED"
+        reason = result.get("safe_reason")
+        if reason not in {"post_tap_start_unconfirmed", "post_tap_verification_failed"}:
+            reason = None
+        results[action_id] = {
+            "status": status,
+            "executed": True,
+            "safe_reason": reason,
+            "app_count": result.get("app_count") if isinstance(result.get("app_count"), int) else None,
+            "selected_count": result.get("selected_count") if isinstance(result.get("selected_count"), int) else None,
+        }
+        valid_ids = set(state["processed_action_ids"])
+        state["action_results"] = {k: v for k, v in results.items() if k in valid_ids}
     _save_state(state)
 
 
@@ -747,14 +768,29 @@ def _handle_backup_restore_data(
         )
         return True
     if action_already_processed(state, action_id):
-        _send_batch_ack(
-            cfg,
-            device_id=local_id,
-            action_id=action_id,
-            action=BACKUP_RESTORE_DATA_ACTION,
-            status="DUPLICATE",
-            executed=False,
-        )
+        action_results = state.get("action_results")
+        cached_result = action_results.get(action_id) if isinstance(action_results, dict) else None
+        if isinstance(cached_result, dict) and cached_result.get("executed") is True:
+            _send_batch_ack(
+                cfg,
+                device_id=local_id,
+                action_id=action_id,
+                action=BACKUP_RESTORE_DATA_ACTION,
+                status=cached_result.get("status", "BACKUP_STARTED"),
+                executed=True,
+                reason=cached_result.get("safe_reason"),
+                app_count=cached_result.get("app_count"),
+                selected_count=cached_result.get("selected_count"),
+            )
+        else:
+            _send_batch_ack(
+                cfg,
+                device_id=local_id,
+                action_id=action_id,
+                action=BACKUP_RESTORE_DATA_ACTION,
+                status="DUPLICATE",
+                executed=False,
+            )
         return True
     # Mark processed immediately so a restart returns DUPLICATE instead of
     # re-executing the full chain (including the irreversible final tap).
@@ -791,11 +827,14 @@ def _handle_backup_restore_data(
         )
     except (AotRelayError, controller.AotControllerError) as exc:
         reason = str(exc).split(":", 1)[0]
-        status = (
-            "FAILED_NOT_INSTALLED"
-            if reason in ("swift_backup_not_installed",)
-            else "FAILED"
-        )
+        if reason == "expired":
+            status = "TIMEOUT"
+        else:
+            status = (
+                "FAILED_NOT_INSTALLED"
+                if reason in ("swift_backup_not_installed",)
+                else "FAILED"
+            )
         _send_batch_ack(
             cfg,
             device_id=local_id,
@@ -806,6 +845,21 @@ def _handle_backup_restore_data(
             reason=reason,
         )
         return True
+
+    if result.get("status") != "BACKUP_STARTED":
+        mark_action_processed(state, action_id, result)
+        _send_batch_ack(
+            cfg,
+            device_id=local_id,
+            action_id=action_id,
+            action=BACKUP_RESTORE_DATA_ACTION,
+            status=result.get("status", "FAILED"),
+            executed=result.get("executed", True),
+            reason=result.get("safe_reason"),
+        )
+        return True
+
+    mark_action_processed(state, action_id, result)
     _send_batch_ack(
         cfg,
         device_id=local_id,
@@ -817,7 +871,6 @@ def _handle_backup_restore_data(
         selected_count=result.get("selected_count"),
     )
     return True
-
 
 def _handle_worker_update(
     state: dict[str, Any],

@@ -52,7 +52,7 @@ if (!response.ok || (await fleet.readFleet()).last_batch.devices[ids[0]].status 
 response = await fleet.dispatchFleetBatch(record, "BACKUP_RESTORE_DATA", [ids[0]]);
 body = await response.json();
 const bActionId = body.batch.action_id;
-const ack = async (status) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[0], action_id: bActionId, batch_action: "BACKUP_RESTORE_DATA", status, executed: false }) }));
+const ack = async (status, executed = false) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[0], action_id: bActionId, batch_action: "BACKUP_RESTORE_DATA", status, executed }) }));
 await ack("ACCEPTED");
 await ack("FILTERED");
 await ack("SWIFT_OPENED"); // regressive
@@ -60,6 +60,19 @@ if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "FILTERED") 
 await ack("BACKUP_STARTED"); // terminal for this action
 await ack("SELECTED"); // late/post-terminal
 if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "BACKUP_STARTED") throw new Error("monotonicity violated (post-terminal)");
+
+// Terminal executed=true retention test
+response = await fleet.dispatchFleetBatch(record, "BACKUP_RESTORE_DATA", [ids[1]]);
+body = await response.json();
+const retentionActionId = body.batch.action_id;
+const retentionAck = async (status, executed) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[1], action_id: retentionActionId, batch_action: "BACKUP_RESTORE_DATA", status, executed }) }));
+await retentionAck("ACCEPTED", false);
+await retentionAck("TIMEOUT", true); // terminal transition
+const batchViewAfterTimeout = fleet.aotBatchView((await fleet.readFleet()).last_batch);
+if (!batchViewAfterTimeout.devices.find(d => d.device_id === ids[1]).executed) throw new Error("executed=true not propagated to dashboard");
+await retentionAck("FAILED", false); // should be ignored
+const batchViewAfterFailed = fleet.aotBatchView((await fleet.readFleet()).last_batch);
+if (!batchViewAfterFailed.devices.find(d => d.device_id === ids[1]).executed || batchViewAfterFailed.devices.find(d => d.device_id === ids[1]).status !== "TIMEOUT") throw new Error("executed=true retention violated");
 
 const file = source;
 if (!file.includes("AOT_UPDATE_GROUP_SIZE = 5") || !file.includes("ROLLED_BACK")) throw new Error("update rollout/rollback lost");

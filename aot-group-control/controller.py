@@ -34,6 +34,12 @@ DEVICE_GROUP_PATH = pathlib.Path(
 class AotControllerError(RuntimeError):
     pass
 
+class AotTimeoutError(AotControllerError):
+    pass
+
+class AotExpiredError(AotControllerError):
+    pass
+
 
 @dataclass(frozen=True)
 class Bounds:
@@ -1125,7 +1131,9 @@ def _wait_for(
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(RESTORE_DATA_POLL_INTERVAL, remaining))
-    raise AotControllerError(f"stage_timeout:{stage}")
+    if absolute_deadline is not None and time.time() >= absolute_deadline:
+        raise AotExpiredError(f"stage_timeout:{stage}")
+    raise AotTimeoutError(f"stage_timeout:{stage}")
 
 
 def _find_unique_by_resource_ids(
@@ -1270,8 +1278,8 @@ def backup_restore_data(
     """
     def _cb(stage: str) -> None:
         if stage_cb is not None:
-            if deadline is not None and time.time() > deadline:
-                raise AotControllerError("expired")
+            if deadline is not None and time.time() >= deadline:
+                raise AotExpiredError("expired")
             try:
                 stage_cb(stage)
             except Exception:
@@ -1392,7 +1400,7 @@ def backup_restore_data(
             nodes = parse_ui_xml(dump_ui_xml())
         else:
             raise AotControllerError("select_all_not_found")
-    
+
     if not _is_all_selected(nodes):
         raise AotControllerError("selection_incomplete")
     final_selected = app_count
@@ -1489,8 +1497,6 @@ def backup_restore_data(
     # 4. No backup already running
     if _is_backup_running(nodes):
         raise AotControllerError("backup_already_running")
-    if deadline is not None and time.time() > deadline:
-        raise AotControllerError("expired")
 
     # ── Step 10: Press + BACKUP exactly once ──────────────────────────────────
     _sb_assert_foreground()
@@ -1507,6 +1513,10 @@ def backup_restore_data(
             raise AotControllerError("final_backup_button_ambiguous")
         final_btn = candidates[0]
     before_final_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
+
+    if deadline is not None and time.time() >= deadline:
+        raise AotExpiredError("expired")
+
     # Single tap only – caller's exactly-once guard ensures no repeat.
     _tap_xy(*final_btn.bounds.center)
 
@@ -1518,15 +1528,35 @@ def backup_restore_data(
             return True
         # Accept screen change away from options as proof of progression
         return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_final_fp
-    _wait_for(_backup_started, "backup_started", timeout=45.0, absolute_deadline=deadline)
 
-    # Confirm not an error screen
-    _sb_assert_foreground()
+    try:
+        _wait_for(_backup_started, "backup_started", timeout=45.0, absolute_deadline=deadline)
+        # Confirm not an error screen
+        _sb_assert_foreground()
+    except AotExpiredError:
+        return {
+            "action": BACKUP_RESTORE_DATA_ACTION,
+            "executed": True,
+            "status": "TIMEOUT",
+            "safe_reason": "post_tap_start_unconfirmed",
+            "app_count": app_count,
+            "selected_count": final_selected,
+        }
+    except (AotTimeoutError, AotControllerError):
+        return {
+            "action": BACKUP_RESTORE_DATA_ACTION,
+            "executed": True,
+            "status": "FAILED",
+            "safe_reason": "post_tap_verification_failed",
+            "app_count": app_count,
+            "selected_count": final_selected,
+        }
 
-    _cb("BACKUP_STARTED")
+
     return {
         "action": BACKUP_RESTORE_DATA_ACTION,
         "executed": True,
+        "status": "BACKUP_STARTED",
         "app_count": app_count,
         "selected_count": final_selected,
     }

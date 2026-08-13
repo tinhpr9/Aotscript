@@ -1523,6 +1523,7 @@ export class FleetState
           history,
           display_status: history.join(" → ") || status,
           reason: reason || null,
+          executed: item.executed === true,
           updated_at: Number(item.updated_at || batch.created_at || 0),
         };
       });
