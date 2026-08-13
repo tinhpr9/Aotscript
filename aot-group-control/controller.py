@@ -1580,7 +1580,7 @@ def _count_filtered_apps(nodes: list[UiNode]) -> int | None:
     """Return the authoritative count of filtered apps from the UI.
     Do not rely on the number of items in a virtualized UI dump."""
     import re
-    pattern = re.compile(r"^(\d+)\s+(apps|items|selected)$", re.IGNORECASE)
+    pattern = re.compile(r"^(\d+)\s+(apps|items)$", re.IGNORECASE)
     for node in nodes:
         for text in (node.text, node.content_description):
             match = pattern.search(text.strip())

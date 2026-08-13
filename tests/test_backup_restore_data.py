@@ -99,7 +99,7 @@ APPS_SCREEN = _wrap(
     _node(rid=f"{_SB}menu_filter", text="Filter"),
 )
 FILTER_DIALOG_UNSELECTED = _wrap(
-    _node(text="RESTORE_DATA", selected=False, checked=True, cls="android.widget.CheckBox"),
+    _node(text="RESTORE_DATA", selected=False, checked=False, cls="android.widget.CheckBox"),
     _node(rid=f"{_SB}button_apply", text="Apply"),
 )
 FILTER_DIALOG_CHIP_SELECTED = _wrap(
@@ -179,6 +179,12 @@ class TestCountFilteredApps(unittest.TestCase):
         nodes = CONTROLLER.parse_ui_xml(_apps_list(5))
         self.assertEqual(5, CONTROLLER._count_filtered_apps(nodes))
 
+    def test_ignores_selected(self):
+        nodes = CONTROLLER.parse_ui_xml(_wrap(
+            _node(text="3 selected"),
+            _node(text="4 apps")
+        ))
+        self.assertEqual(4, CONTROLLER._count_filtered_apps(nodes))
 
 class TestIsAllSelected(unittest.TestCase):
     def test_none_selected(self):

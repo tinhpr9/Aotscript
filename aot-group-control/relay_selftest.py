@@ -28,7 +28,8 @@ with tempfile.TemporaryDirectory() as folder:
         # BACKUP_RESTORE_DATA: complete stage sequence
         def _fake_backup_restore_data(action_id, *, stage_cb=None, deadline=None):
             for s in ("APPS_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED"):
-                if stage_cb: stage_cb(s)
+                if stage_cb:
+                    stage_cb(s)
             return {"action": "BACKUP_RESTORE_DATA", "executed": True, "status": "BACKUP_STARTED", "app_count": 3, "selected_count": 3}
         module.controller.backup_restore_data = _fake_backup_restore_data
         module._open_swift_backup = lambda: True
