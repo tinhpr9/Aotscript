@@ -639,8 +639,33 @@ class TestRelayBackupRestoreData(unittest.TestCase):
             self.assertEqual(1, tap_count[0])
             self.assertEqual("BACKUP_STARTED", self.sent[-1]["status"])
             self.assertTrue(self.sent[-1]["executed"])
+            self.assertEqual(3, self.sent[-1].get("app_count"))
+            self.assertEqual(3, self.sent[-1].get("selected_count"))
         finally:
             RELAY._send_ack = real_send_ack
+
+    def test_terminal_failed_metrics(self):
+        def _fake_failed(*a, **kw):
+            return {"action": "BACKUP_RESTORE_DATA", "executed": True, "status": "FAILED",
+                    "safe_reason": "post_tap_verification_failed", "app_count": 5, "selected_count": 2}
+
+        RELAY.controller.backup_restore_data = _fake_failed
+        msg = self._make_message(action_id="test-terminal-fail-metrics")
+
+        RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
+
+        self.assertEqual("FAILED", self.sent[-1]["status"])
+        self.assertTrue(self.sent[-1]["executed"])
+        self.assertEqual("post_tap_verification_failed", self.sent[-1]["reason"])
+        self.assertEqual(5, self.sent[-1].get("app_count"))
+        self.assertEqual(2, self.sent[-1].get("selected_count"))
+
+        # Test replay
+        self.sent.clear()
+        RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
+        self.assertEqual("FAILED", self.sent[-1]["status"])
+        self.assertEqual(5, self.sent[-1].get("app_count"))
+        self.assertEqual(2, self.sent[-1].get("selected_count"))
 
     def test_failure_sends_failed_status(self):
         error_cases = [

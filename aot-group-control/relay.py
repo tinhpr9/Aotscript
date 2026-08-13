@@ -856,6 +856,8 @@ def _handle_backup_restore_data(
             status=result.get("status", "FAILED"),
             executed=result.get("executed", True),
             reason=result.get("safe_reason"),
+            app_count=result.get("app_count"),
+            selected_count=result.get("selected_count"),
         )
         return True
 
