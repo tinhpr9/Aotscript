@@ -452,7 +452,7 @@ def mark_action_processed(
         if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED"}:
             status = "FAILED"
         reason = result.get("safe_reason")
-        if reason not in {"post_tap_start_unconfirmed", "post_tap_verification_failed"}:
+        if reason not in {"post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain"}:
             reason = None
         results[action_id] = {
             "status": status,

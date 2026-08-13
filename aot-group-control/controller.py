@@ -1518,7 +1518,17 @@ def backup_restore_data(
         raise AotExpiredError("expired")
 
     # Single tap only – caller's exactly-once guard ensures no repeat.
-    _tap_xy(*final_btn.bounds.center)
+    try:
+        _tap_xy(*final_btn.bounds.center)
+    except Exception:
+        return {
+            "action": BACKUP_RESTORE_DATA_ACTION,
+            "executed": True,
+            "status": "FAILED",
+            "safe_reason": "final_tap_delivery_uncertain",
+            "app_count": app_count,
+            "selected_count": final_selected,
+        }
 
     # ── Step 11: Verify backup started ────────────────────────────────────────
     def _backup_started() -> bool:

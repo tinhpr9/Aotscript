@@ -667,6 +667,61 @@ class TestRelayBackupRestoreData(unittest.TestCase):
         self.assertEqual(5, self.sent[-1].get("app_count"))
         self.assertEqual(2, self.sent[-1].get("selected_count"))
 
+    def test_final_tap_delivery_uncertain(self):
+        """Simulate _tap_xy raising specifically at the final button, assert exact behavior."""
+        import tests.test_backup_restore_data as tbrd
+
+        taps = []
+        msg = self._make_message(action_id="test-uncertain")
+
+        def fake_tap(x, y):
+            taps.append((x, y))
+            if x == 90.0 and y == 90.0:
+                raise Exception("Tap delivery uncertain")
+
+        RELAY.controller.backup_restore_data = self._old_brd
+
+        rotator = tbrd._Rotator([
+             tbrd.APPS_SCREEN, tbrd.APPS_SCREEN,
+             tbrd._apps_list(3, 3),
+             tbrd.BATCH_MENU, tbrd.BACKUP_MENU_SCREEN,
+             tbrd.OPTIONS_CORRECT, tbrd.OPTIONS_CORRECT, tbrd.OPTIONS_CORRECT,
+             tbrd.OPTIONS_CORRECT, tbrd.OPTIONS_CORRECT, tbrd.OPTIONS_CORRECT, tbrd.OPTIONS_CORRECT,
+             tbrd.OPTIONS_CORRECT, tbrd.OPTIONS_CORRECT,
+             tbrd.PROGRESS_SCREEN, tbrd.PROGRESS_SCREEN,
+        ])
+
+        with mock.patch.object(RELAY.controller, "foreground_package", return_value=tbrd._PKG), \
+             mock.patch.object(RELAY.controller.time, "sleep"), \
+             mock.patch.object(RELAY.controller, "swift_apps_screen_open", return_value=True), \
+             mock.patch.object(RELAY.controller, "_restore_data_filter_active", return_value=True), \
+             mock.patch.object(RELAY.controller, "_count_filtered_apps", return_value=3), \
+             mock.patch.object(RELAY.controller, "_is_all_selected", return_value=True), \
+             mock.patch.object(RELAY.controller, "_is_backup_running", return_value=False), \
+             mock.patch.object(RELAY.controller, "_wait_for", side_effect=lambda fn, stage, **kw: None), \
+             mock.patch.object(RELAY.controller, "_tap_xy", side_effect=fake_tap), \
+             mock.patch.object(RELAY.controller, "dump_ui_xml", side_effect=rotator):
+
+            RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
+
+        final_taps = [t for t in taps if t == (90.0, 90.0)]
+        self.assertEqual(1, len(final_taps))
+
+        self.assertEqual("FAILED", self.sent[-1]["status"])
+        self.assertTrue(self.sent[-1]["executed"])
+        self.assertEqual("final_tap_delivery_uncertain", self.sent[-1]["reason"])
+        self.assertEqual(3, self.sent[-1].get("app_count"))
+        self.assertEqual(3, self.sent[-1].get("selected_count"))
+
+        self.sent.clear()
+        RELAY.controller.backup_restore_data = mock.Mock()
+        RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
+        self.assertEqual("FAILED", self.sent[-1]["status"])
+        self.assertEqual("final_tap_delivery_uncertain", self.sent[-1]["reason"])
+        self.assertEqual(3, self.sent[-1].get("app_count"))
+        self.assertEqual(3, self.sent[-1].get("selected_count"))
+        RELAY.controller.backup_restore_data.assert_not_called()
+
     def test_failure_sends_failed_status(self):
         error_cases = [
             "restore_data_no_matching_apps",
