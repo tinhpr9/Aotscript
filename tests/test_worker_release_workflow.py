@@ -232,7 +232,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
     def test_workflow_is_fail_closed_and_never_uses_admin_endpoint(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('test "$RELEASE_VERSION" = "2026.08.11.12"', text)
-        self.assertIn("--hostname uploads.github.com", text)
+        self.assertIn("https://uploads.github.com/repos/${GITHUB_REPOSITORY}", text)
         self.assertNotIn("/immutable-releases", text)
         self.assertNotIn("len(data[\"assets\"])", text)
         self.assertNotIn("gh release delete", text)
@@ -245,16 +245,16 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn('releases/tags/${TAG} > draft', text)
         self.assertNotIn('git/ref/tags/${TAG} > release-ref', text)
         self.assertGreaterEqual(text.count("scripts/verify_worker_release.py verify"), 3)
-        self.assertLess(text.index("--input \"$asset\""), text.index("-F draft=false"))
+        self.assertLess(text.index('upload_asset "$asset"'), text.index("-F draft=false"))
 
-    def test_resume_mode_never_uploads_assets(self) -> None:
+    def test_resume_mode_only_uploads_an_empty_draft(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         create_block = text[text.index('if [[ "$RELEASE_MODE" == create ]]'):]
         resume_start = create_block.index('          else\n            RELEASE_ID="$RESUME_RELEASE_ID"')
         resume_end = create_block.index('          fi\n          gh api', resume_start)
         resume_branch = create_block[resume_start:resume_end]
-        self.assertNotIn('--input "$asset"', resume_branch)
-        self.assertNotIn('/assets?name=', resume_branch)
+        self.assertIn('[[ "$asset_count" == 0 ]]', resume_branch)
+        self.assertIn('upload_asset "$asset"', resume_branch)
 
 
 if __name__ == "__main__":
