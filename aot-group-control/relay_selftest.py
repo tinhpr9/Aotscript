@@ -112,4 +112,18 @@ res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1",
 assert res == "fp2"
 assert "preview_sha256" in sent_status[-1]
 
+# Preview decision and payload must reuse one snapshot. A second read could
+# otherwise pair an fp2 payload with the preview decision made for fp1.
+snapshot_calls = []
+def sequential_snapshot(*_a, **_kw):
+    snapshot_calls.append(True)
+    return {"fingerprint": "fp1" if len(snapshot_calls) == 1 else "fp2"}
+module.controller.snapshot = sequential_snapshot
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint="old", force_preview=False)
+assert len(snapshot_calls) == 1
+assert res == "fp1"
+assert sent_status[-1]["fingerprint"] == "fp1"
+assert "preview_sha256" in sent_status[-1]
+
 print("AOT_RELAY_SELFTEST=OK")

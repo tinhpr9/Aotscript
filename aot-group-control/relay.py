@@ -994,23 +994,23 @@ def _live_status_payload(
     *,
     device_id: str,
     include_preview: bool,
+    snapshot: dict[str, Any],
     role: str | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    snap = controller.snapshot(include_nodes=False)
     payload: dict[str, Any] = {
         "type": "aot_status",
         "protocol": HUB_PROTOCOL_VERSION,
         "device_id": device_id,
         "worker_version": WORKER_VERSION,
         "capabilities": list(WORKER_CAPABILITIES),
-        "package": snap.get("package"),
-        "fingerprint": snap.get("fingerprint"),
-        "layout_signature": snap.get("layout_signature"),
-        "coordinate_ready": snap.get("coordinate_ready") is True,
-        "ime_visible": snap.get("ime_visible"),
-        "width": snap.get("width"),
-        "height": snap.get("height"),
+        "package": snapshot.get("package"),
+        "fingerprint": snapshot.get("fingerprint"),
+        "layout_signature": snapshot.get("layout_signature"),
+        "coordinate_ready": snapshot.get("coordinate_ready") is True,
+        "ime_visible": snapshot.get("ime_visible"),
+        "width": snapshot.get("width"),
+        "height": snapshot.get("height"),
         "updated_at": int(time.time() * 1000),
     }
     if include_preview:
@@ -1048,6 +1048,7 @@ def _send_live_status(
     payload = _live_status_payload(
         device_id=device_id,
         include_preview=include_preview,
+        snapshot=snap,
     )
     _ws_send_json(sock, payload)
     return current_fingerprint
