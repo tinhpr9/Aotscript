@@ -24,7 +24,7 @@ if (!dashboard.includes("Math.random()") || !dashboard.includes("Math.pow(2,retr
 if (!source.includes('const AOT_HUB_PROTOCOL_VERSION = "fleet-batch-v1"')) {
   throw new Error("fleet protocol version missing");
 }
-if (!source.includes('["OPEN_SWIFT_BACKUP", "OPEN_SWIFT_APPS", "UPDATE_WORKER"]')) {
+if (!source.includes('["OPEN_SWIFT_BACKUP", "OPEN_SWIFT_APPS", "BACKUP_RESTORE_DATA", "UPDATE_WORKER"]')) {
   throw new Error("batch ACK actions incomplete");
 }
 console.log("AOT_HUB_FLEET_SELFTEST=OK");
