@@ -270,9 +270,6 @@ export class FleetState
     ) {
       record = {};
     }
-    const oldLastSeen = record.last_seen || 0;
-    const oldRecordJson = JSON.stringify(record);
-
     record.device_id =
       deviceId;
     record.device_group =
@@ -280,6 +277,7 @@ export class FleetState
         body.device_group ||
         ""
       ).toUpperCase();
+    record.last_seen = now;
     record.last_report_status =
       body.status;
     if (
@@ -417,18 +415,10 @@ export class FleetState
       record.storage_free_bytes =
         Math.floor(storage);
     }
-    record.last_seen = oldLastSeen;
-    const materialChange = JSON.stringify(record) !== oldRecordJson;
-    record.last_seen = now;
-    const timeToFlush = now - oldLastSeen >= 3 * 60 * 1000;
-    this.lastSeenMap = this.lastSeenMap || new Map();
-    this.lastSeenMap.set(deviceId, now);
-    if (materialChange || timeToFlush) {
-      await this.ctx.storage.put(
-        key,
-        record
-      );
-    }
+    await this.ctx.storage.put(
+      key,
+      record
+    );
     return json({
       ok: true,
       device_id: deviceId,
@@ -468,10 +458,6 @@ export class FleetState
         404
       );
     }
-    this.lastSeenMap = this.lastSeenMap || new Map();
-    if (this.lastSeenMap.has(deviceId)) {
-      record.last_seen = Math.max(record.last_seen || 0, this.lastSeenMap.get(deviceId));
-    }
     return json({
       ok: true,
       record,
@@ -484,7 +470,6 @@ export class FleetState
         prefix: "device:",
       });
     const records = [];
-    this.lastSeenMap = this.lastSeenMap || new Map();
     for (
       const record
       of entries.values()
@@ -494,9 +479,6 @@ export class FleetState
         typeof record ===
           "object"
       ) {
-        if (record.device_id && this.lastSeenMap.has(record.device_id)) {
-          record.last_seen = Math.max(record.last_seen || 0, this.lastSeenMap.get(record.device_id));
-        }
         records.push(record);
       }
     }
