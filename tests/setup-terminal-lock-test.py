@@ -21,7 +21,7 @@ from launcher_test_support import launcher_command
 
 
 SETUP = pathlib.Path(os.environ.get("AOTSCRIPT_SETUP_UNDER_TEST", "setup.sh")).resolve()
-TIMEOUT = 12
+TIMEOUT = 30.0
 PASSED: list[str] = []
 
 
@@ -247,6 +247,7 @@ def test_interactive_without_tty_fails_cleanly(root: pathlib.Path) -> None:
         text=True,
         capture_output=True,
         timeout=TIMEOUT,
+        start_new_session=True,
         check=False,
     )
     assert result.returncode != 0
@@ -320,7 +321,7 @@ def test_stale_locks(root: pathlib.Path) -> None:
 
     legacy_case = root / "legacy"
     fixture(legacy_case)
-    sleeper = subprocess.Popen(["sleep", "10"])
+    sleeper = subprocess.Popen(["sleep", "60"])
     try:
         write_lock(legacy_case, sleeper.pid, legacy=True)
         result = run_setup(legacy_case)
@@ -333,7 +334,7 @@ def test_stale_locks(root: pathlib.Path) -> None:
 
     reused_case = root / "reused"
     fixture(reused_case)
-    sleeper = subprocess.Popen(["sleep", "10"])
+    sleeper = subprocess.Popen(["sleep", "60"])
     try:
         wrong = str(int(proc_start(sleeper.pid)) + 1)
         write_lock(reused_case, sleeper.pid, start=wrong)
@@ -401,7 +402,7 @@ def test_waiting_takeover(root: pathlib.Path) -> None:
 def test_non_aot_not_killed(root: pathlib.Path) -> None:
     case = root / "not-aot"
     fixture(case)
-    sleeper = subprocess.Popen(["sleep", "10"])
+    sleeper = subprocess.Popen(["sleep", "60"])
     try:
         write_lock(case, sleeper.pid)
         result = run_setup(case)

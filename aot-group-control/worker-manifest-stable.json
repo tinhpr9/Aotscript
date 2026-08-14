@@ -14,7 +14,7 @@
     {
       "path": "relay.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.04/relay.py",
-      "sha256": "38a244e570a73571adb4b937dfd35063af47f95502ca2765e60f534364ba9c47"
+      "sha256": "fc5b1e38388fb53ccfb29819e2ec9be69dd8c18dfec3587413432c53d67ceac0"
     },
     {
       "path": "runtime.py",
@@ -24,7 +24,7 @@
     {
       "path": "controller.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.04/controller.py",
-      "sha256": "add7742b020b86ea3a5885129e1c408dbca5dcae3fa37e7db95a499df8be3922"
+      "sha256": "f5a9abc3148f240d4669aa33ab5cf3eb9d86c41158a6936c01edb830c69eff95"
     },
     {
       "path": "updater.py",
@@ -39,7 +39,7 @@
     {
       "path": "worker_smoke_test.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.04/worker_smoke_test.py",
-      "sha256": "bf7fbcf6ad00ef435b8745a9c0d97bc0aa47caba290b493b3b27fc9ebff4842a"
+      "sha256": "f4e9a56160026c6ce35d22c22df6d6517c84a09070242de4c6179bdd7780d307"
     },
     {
       "path": "worker-release-schema.json",

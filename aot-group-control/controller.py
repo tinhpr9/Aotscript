@@ -1365,7 +1365,7 @@ def backup_restore_data(
                 raise AotControllerError("no_apps_found_for_restore_data")
             if sel < tot:
                 unknown = 0
-                b = _smart_find("Select All", nodes) or _smart_find("Select all", nodes) or count_bounds
+                b = _smart_find("Select All", nodes) or _smart_find("Select all", nodes)
                 if not b:
                     raise AotControllerError("select_all_not_found")
                 _tap_wait(b, deadline)
