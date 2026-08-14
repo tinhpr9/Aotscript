@@ -83,7 +83,7 @@ await infoAck("RESTORE_STARTED", { app_count: 5, selected_count: 3, reason: "sta
 const batchViewAfterStarted = fleet.aotBatchView((await fleet.readFleet()).last_batch);
 const dStarted = batchViewAfterStarted.devices.find(d => d.device_id === ids[2]);
 if (dStarted.app_count !== 5 || dStarted.selected_count !== 3 || dStarted.reason !== "started_ok") throw new Error("count/reason propagation failed");
-await infoAck("FAILED", { reason: "test_reason" }); // ignored because BACKUP_STARTED is terminal
+await infoAck("FAILED", { reason: "test_reason" }); // ignored because RESTORE_STARTED is terminal
 const batchViewAfterInfoFailed = fleet.aotBatchView((await fleet.readFleet()).last_batch);
 const dFailedInfo = batchViewAfterInfoFailed.devices.find(d => d.device_id === ids[2]);
 if (dFailedInfo.status !== "RESTORE_STARTED" || dFailedInfo.reason !== "started_ok") throw new Error("reason overwritten by late ack");

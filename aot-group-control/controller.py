@@ -1576,9 +1576,12 @@ def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
         if not c.clickable:
             continue
         if c.bounds.left <= tb.left and c.bounds.top <= tb.top and c.bounds.right >= tb.right and c.bounds.bottom >= tb.bottom:
-            candidates.append((c.bounds.area, c.bounds))
+            candidates.append((c.bounds.area, c))
     if candidates:
-        return min(candidates, key=lambda x: x[0])[1]
+        best_c = min(candidates, key=lambda x: x[0])[1]
+        if not best_c.enabled:
+            raise AotControllerError(f"disabled_target:{text}")
+        return best_c.bounds
     return tb
 
 def _tap_wait(bounds: Bounds, deadline: float | None):
@@ -1648,10 +1651,11 @@ def _raw_screencap():
         if fmt != 1:
             raise AotControllerError(f"screencap_unsupported_format:{fmt}")
         pixel_bytes = w * h * 4
-        header = len(raw) - pixel_bytes
-        if header < 12 or header > 64:
-            raise AotControllerError(f"screencap_invalid_format:header={header}")
-        return w, h, raw[header:]
+        if len(raw) != 12 + pixel_bytes:
+            # We don't support row stride/padding because we don't have the stride value.
+            # Reject fail-closed to prevent reading misaligned pixels.
+            raise AotControllerError(f"screencap_invalid_format:stride_or_header_mismatch")
+        return w, h, raw[12:]
     except AotControllerError:
         raise
     except Exception as e:
