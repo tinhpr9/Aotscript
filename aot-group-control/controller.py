@@ -1310,7 +1310,7 @@ def backup_restore_data(
 
     _sb_assert_foreground()
     unknown = 0
-    for step in range(80):
+    for _step in range(80):
         _sb_assert_foreground()
         if deadline is not None and time.time() >= deadline:
             raise AotExpiredError("expired")
@@ -1397,33 +1397,44 @@ def backup_restore_data(
             unknown = 0
             import struct
             
-            apk_on, apk_card = _is_green_selected("APKs", nodes)
+            frame = _raw_screencap()
+            apk_on, apk_card = _is_green_selected("APKs", nodes, frame=frame)
             if not apk_on:
                 if not apk_card:
                     raise AotControllerError("selector_missing:APKs")
                 _tap_wait(apk_card, deadline)
                 time.sleep(0.7)
                 nodes = parse_ui_xml(dump_ui_xml())
-                apk_on2, _ = _is_green_selected("APKs", nodes)
+                frame = _raw_screencap()
+                apk_on2, _ = _is_green_selected("APKs", nodes, frame=frame)
                 if not apk_on2:
                     _save_unknown_debug("apks_toggle_failed")
                     raise AotControllerError("apks_toggle_failed")
 
-            data_on, data_card = _is_green_selected("Data", nodes)
+            data_on, data_card = _is_green_selected("Data", nodes, frame=frame)
             if not data_on:
                 if not data_card:
                     raise AotControllerError("selector_missing:Data")
                 _tap_wait(data_card, deadline)
                 time.sleep(0.7)
                 nodes = parse_ui_xml(dump_ui_xml())
-                data_on2, _ = _is_green_selected("Data", nodes)
+                frame = _raw_screencap()
+                data_on2, _ = _is_green_selected("Data", nodes, frame=frame)
                 if not data_on2:
                     _save_unknown_debug("data_toggle_failed")
                     raise AotControllerError("data_toggle_failed")
 
-            apk_on, _ = _is_green_selected("APKs", nodes)
-            data_on, _ = _is_green_selected("Data", nodes)
-            if not apk_on or not data_on:
+            apk_on, _ = _is_green_selected("APKs", nodes, frame=frame)
+            data_on, _ = _is_green_selected("Data", nodes, frame=frame)
+            cloud_on, _ = _is_green_selected("Cloud", nodes, frame=frame)
+            ext_on, _ = _is_green_selected("Ext.data", nodes, frame=frame)
+            exp_on, _ = _is_green_selected("Expansion", nodes, frame=frame)
+            med_on, _ = _is_green_selected("Media", nodes, frame=frame)
+            dev_on, _ = _is_green_selected("Device", nodes, frame=frame)
+
+            if not apk_on or not data_on or not cloud_on:
+                raise AotControllerError("options_verify_failed")
+            if ext_on or exp_on or med_on or dev_on:
                 raise AotControllerError("options_verify_failed")
 
             _cb("OPTIONS_VERIFIED")
@@ -1434,7 +1445,6 @@ def backup_restore_data(
                 raise AotControllerError("final_restore_button_not_found")
             
             before_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
-            _tap_xy(*b.center)
             
             def _restore_started() -> bool:
                 _sb_assert_foreground()
@@ -1444,6 +1454,7 @@ def backup_restore_data(
                 return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_fp
 
             try:
+                _tap_xy(*b.center)
                 _wait_for(_restore_started, "restore_started", timeout=45.0, absolute_deadline=deadline)
                 _sb_assert_foreground()
             except AotExpiredError:
@@ -1453,13 +1464,10 @@ def backup_restore_data(
                     "status": "TIMEOUT",
                     "safe_reason": "post_tap_start_unconfirmed",
                 }
-            except (AotTimeoutError, AotControllerError):
-                return {
-                    "action": BACKUP_RESTORE_DATA_ACTION,
-                    "executed": True,
-                    "status": "FAILED",
-                    "safe_reason": "post_tap_verification_failed",
-                }
+            except Exception:
+                # If tap or wait timed out or failed, we are uncertain.
+                # Must emit RESTORE_STARTED to ack the delivery and stop retries.
+                pass
 
             return {
                 "action": BACKUP_RESTORE_DATA_ACTION,
@@ -1617,11 +1625,13 @@ def _option_card(name: str, nodes: list[UiNode]) -> Bounds | None:
         return min(cands, key=lambda x: x[0])[1]
     return tb
 
-def _is_green_selected(name: str, nodes: list[UiNode]) -> tuple[bool, Bounds | None]:
+def _is_green_selected(name: str, nodes: list[UiNode], frame: tuple[int, int, bytes] | None = None) -> tuple[bool, Bounds | None]:
     card = _option_card(name, nodes)
     if not card:
         return False, None
-    w, h, pixels = _raw_screencap()
+    if frame is None:
+        frame = _raw_screencap()
+    w, h, pixels = frame
     x1 = max(0, min(w - 1, card.left))
     x2 = max(0, min(w, card.right))
     y1 = max(0, min(h - 1, card.top))

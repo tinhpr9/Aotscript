@@ -80,6 +80,25 @@ OPEN_SWIFT_APPS_ACTION = "OPEN_SWIFT_APPS"
 # 11-step bounded semantic state machine, and does not accept arbitrary labels,
 # packages, or tap instructions from the browser.  See PR #34 policy note.
 BACKUP_RESTORE_DATA_ACTION = "BACKUP_RESTORE_DATA"
+
+ALLOWED_SAFE_REASONS = {
+    "post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain",
+    "restore_data_no_matching_apps", "swift_backup_not_installed",
+    "swift_apps_selector_not_found", "swift_apps_selector_ambiguous",
+    "swift_apps_precondition_changed", "swift_apps_postcondition_failed",
+    "apps_open_postcondition_failed", "swift_backup_not_foreground",
+    "filter_trigger_not_found", "restore_data_label_not_activated",
+    "filter_apply_not_found", "restore_data_filter_not_active_after_apply",
+    "select_all_not_found", "selection_incomplete",
+    "batch_actions_not_found", "batch_actions_selector_ambiguous",
+    "backup_menu_item_not_found", "backup_menu_item_ambiguous",
+    "final_backup_button_not_found", "final_backup_button_ambiguous",
+    "backup_already_running", "no_apps_found_for_restore_data",
+    "restore_data_label_not_found", "ambiguous_selector", "selector_missing",
+    "apks_toggle_failed", "data_toggle_failed", "options_verify_failed",
+    "unknown_ui_state", "state_machine_timeout", "screencap_failed",
+    "final_restore_button_not_found",
+}
 SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
@@ -478,20 +497,7 @@ def mark_action_processed(
         if status not in {"RESTORE_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
             status = "FAILED"
         reason = result.get("safe_reason")
-        if reason not in {
-            "post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain",
-            "restore_data_no_matching_apps", "swift_backup_not_installed",
-            "swift_apps_selector_not_found", "swift_apps_selector_ambiguous",
-            "swift_apps_precondition_changed", "swift_apps_postcondition_failed",
-            "apps_open_postcondition_failed", "swift_backup_not_foreground",
-            "filter_trigger_not_found", "restore_data_label_not_activated",
-            "filter_apply_not_found", "restore_data_filter_not_active_after_apply",
-            "select_all_not_found", "selection_incomplete",
-            "batch_actions_not_found", "batch_actions_selector_ambiguous",
-            "backup_menu_item_not_found", "backup_menu_item_ambiguous",
-            "final_backup_button_not_found", "final_backup_button_ambiguous",
-            "backup_already_running",
-        }:
+        if reason not in ALLOWED_SAFE_REASONS:
             reason = None
         results[action_id] = {
             "status": status,
@@ -601,20 +607,7 @@ def _send_batch_ack(
     if action == BACKUP_RESTORE_DATA_ACTION and is_terminal:
         if status not in {"RESTORE_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
             status = "FAILED"
-        if reason not in {
-            "post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain",
-            "restore_data_no_matching_apps", "swift_backup_not_installed",
-            "swift_apps_selector_not_found", "swift_apps_selector_ambiguous",
-            "swift_apps_precondition_changed", "swift_apps_postcondition_failed",
-            "apps_open_postcondition_failed", "swift_backup_not_foreground",
-            "filter_trigger_not_found", "restore_data_label_not_activated",
-            "filter_apply_not_found", "restore_data_filter_not_active_after_apply",
-            "select_all_not_found", "selection_incomplete",
-            "batch_actions_not_found", "batch_actions_selector_ambiguous",
-            "backup_menu_item_not_found", "backup_menu_item_ambiguous",
-            "final_backup_button_not_found", "final_backup_button_ambiguous",
-            "backup_already_running",
-        }:
+        if reason not in ALLOWED_SAFE_REASONS:
             reason = None
 
     payload = {

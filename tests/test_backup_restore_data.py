@@ -197,18 +197,28 @@ class _Rotator:
 
 class TestRestoreData(unittest.TestCase):
     def setUp(self):
+        self._old_controller = getattr(RELAY, "controller", None)
         RELAY.controller = CONTROLLER
         self.mock_open_sb = mock.patch.object(RELAY, "_open_swift_backup").start()
         self.mock_open_sb.return_value = True
         self.mock_fg_relay = mock.patch.object(RELAY.controller, "_sb_assert_foreground").start()
         self.mock_dump = mock.patch.object(CONTROLLER, "dump_ui_xml").start()
         
-        def mock_is_green(opt, nodes):
-            card = getattr(CONTROLLER, "_smart_find")(opt, nodes)
+        self._apks_on = True
+        self._data_on = True
+
+        def mock_is_green(opt, nodes, frame=None):
+            card = CONTROLLER._smart_find(opt, nodes)
             if not card:
                 return False, None
-            if opt in ["APKs", "Data", "Cloud"]:
+            if opt == "Cloud":
                 return True, card
+            if opt in ["Ext.data", "Expansion", "Media", "Device"]:
+                return False, card
+            if opt == "APKs":
+                return self._apks_on, card
+            if opt == "Data":
+                return self._data_on, card
             return False, card
         self.mock_green = mock.patch.object(CONTROLLER, "_is_green_selected", side_effect=mock_is_green).start()
 
@@ -235,6 +245,7 @@ class TestRestoreData(unittest.TestCase):
 
     def tearDown(self):
         mock.patch.stopall()
+        RELAY.controller = self._old_controller
 
     def run_ctrl(self, ui_states, expected_stages, deadline=None, expected_error=None):
         self.mock_dump.side_effect = _Rotator(ui_states)
@@ -282,28 +293,13 @@ class TestRestoreData(unittest.TestCase):
             APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(), RESTORING_SCREEN
         ], ["SELECTED", "OPTIONS_VERIFIED"])
 
-    def set_screencap_color(self, apks_on, data_on):
-        w, h = 100, 200
-        pixels = bytearray(w * h * 4)
-        for y in range(h):
-            for x in range(w):
-                i = (y * w + x) * 4
-                pixels[i+3] = 255
-                if (apks_on and y < 60) or (data_on and y >= 60):
-                    pixels[i], pixels[i+1], pixels[i+2] = 10, 200, 10
-                else:
-                    pixels[i], pixels[i+1], pixels[i+2] = 100, 100, 100
-        import struct
-        header = struct.pack("<III", w, h, 1)
-        self.mock_screencap.return_value = (w, h, header + pixels)
-
     # 6. APKs ON / Data OFF.
     def test_apks_on_data_off(self):
-        self.set_screencap_color(True, False)
+        self._apks_on, self._data_on = True, False
         def side_effect():
             yield _user_app_parts()
+            self._data_on = True
             yield _user_app_parts()
-            self.set_screencap_color(True, True)
             while True:
                 yield RESTORING_SCREEN
         self.mock_dump.side_effect = side_effect()
@@ -312,11 +308,11 @@ class TestRestoreData(unittest.TestCase):
 
     # 7. APKs OFF / Data ON.
     def test_apks_off_data_on(self):
-        self.set_screencap_color(False, True)
+        self._apks_on, self._data_on = False, True
         def side_effect():
             yield _user_app_parts()
+            self._apks_on = True
             yield _user_app_parts()
-            self.set_screencap_color(True, True)
             while True:
                 yield RESTORING_SCREEN
         self.mock_dump.side_effect = side_effect()
@@ -325,7 +321,7 @@ class TestRestoreData(unittest.TestCase):
 
     # 8. cả hai OFF.
     def test_both_off(self):
-        self.set_screencap_color(False, False)
+        self._apks_on, self._data_on = False, False
         def smart_dump():
             state = {"step": 0}
             while True:
@@ -333,11 +329,11 @@ class TestRestoreData(unittest.TestCase):
                     yield _user_app_parts()
                     state["step"] = 1
                 elif state["step"] == 1:
-                    self.set_screencap_color(True, False)
+                    self._apks_on, self._data_on = True, False
                     yield _user_app_parts()
                     state["step"] = 2
                 elif state["step"] == 2:
-                    self.set_screencap_color(True, True)
+                    self._apks_on, self._data_on = True, True
                     yield _user_app_parts()
                     state["step"] = 3
                 else:
@@ -348,7 +344,7 @@ class TestRestoreData(unittest.TestCase):
 
     # 9. cả hai ON.
     def test_both_on(self):
-        self.set_screencap_color(True, True)
+        self._apks_on, self._data_on = True, True
         self.mock_dump.side_effect = _Rotator([_user_app_parts(), RESTORING_SCREEN])
         res = CONTROLLER.backup_restore_data("test_id")
         self.assertEqual("RESTORE_STARTED", res["status"])
@@ -403,6 +399,7 @@ class TestRestoreData(unittest.TestCase):
 
 class TestLegacyActionsUnchanged(unittest.TestCase):
     def setUp(self):
+        self._old_controller = getattr(RELAY, "controller", None)
         RELAY.controller = CONTROLLER
         self.mock_open_sb = mock.patch.object(RELAY, "_open_swift_backup").start()
         self.mock_open_sb.return_value = True
@@ -420,6 +417,8 @@ class TestLegacyActionsUnchanged(unittest.TestCase):
         RELAY._send_ack = self._old_ack
         RELAY._open_swift_backup = self._old_open
         RELAY.controller.open_swift_apps = self._old_apps
+        RELAY.controller = self._old_controller
+        mock.patch.stopall()
         self.td.cleanup()
 
     def _msg(self, action: str, action_id: str = "legacy-1"):

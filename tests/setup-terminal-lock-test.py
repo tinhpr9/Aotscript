@@ -311,7 +311,7 @@ def test_echo_and_ctrl_c(root: pathlib.Path) -> None:
 def test_stale_locks(root: pathlib.Path) -> None:
     dead_case = root / "dead"
     fixture(dead_case)
-    sleeper = subprocess.Popen(["sleep", "0.01"])
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.01)"])
     dead_pid = sleeper.pid
     sleeper.wait()
     write_lock(dead_case, dead_pid, legacy=True)
@@ -321,7 +321,7 @@ def test_stale_locks(root: pathlib.Path) -> None:
 
     legacy_case = root / "legacy"
     fixture(legacy_case)
-    sleeper = subprocess.Popen(["sleep", "60"])
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
         write_lock(legacy_case, sleeper.pid, legacy=True)
         result = run_setup(legacy_case)
@@ -334,7 +334,7 @@ def test_stale_locks(root: pathlib.Path) -> None:
 
     reused_case = root / "reused"
     fixture(reused_case)
-    sleeper = subprocess.Popen(["sleep", "60"])
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
         wrong = str(int(proc_start(sleeper.pid)) + 1)
         write_lock(reused_case, sleeper.pid, start=wrong)
@@ -402,7 +402,7 @@ def test_waiting_takeover(root: pathlib.Path) -> None:
 def test_non_aot_not_killed(root: pathlib.Path) -> None:
     case = root / "not-aot"
     fixture(case)
-    sleeper = subprocess.Popen(["sleep", "60"])
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
         write_lock(case, sleeper.pid)
         result = run_setup(case)
