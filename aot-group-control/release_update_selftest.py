@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix="aot-release-download-") as folder:
     target = root / "asset"
     content = b"complete release asset"
     module.urllib.request.urlopen = lambda request, timeout=0: Reply(content)
-    module._download("https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.13/asset", target, len(content))
+    module._download("https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.03/asset", target, len(content))
     assert target.read_bytes() == content  # urllib follows the browser_download_url 302.
     for error in (
         urllib.error.HTTPError("https://github.com", 404, "missing", {}, None),
@@ -37,14 +37,14 @@ with tempfile.TemporaryDirectory(prefix="aot-release-download-") as folder:
     ):
         module.urllib.request.urlopen = lambda request, timeout=0, error=error: (_ for _ in ()).throw(error)
         try:
-            module._download("https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.13/asset", target)
+            module._download("https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.03/asset", target)
         except module.BootstrapError as exc:
             assert str(exc) == "download_failed"
         else:
             raise AssertionError("failed HTTP request accepted")
     module.urllib.request.urlopen = lambda request, timeout=0: Reply(content[:-1])
     try:
-        module._download("https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.13/asset", target, len(content))
+        module._download("https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.03/asset", target, len(content))
     except module.BootstrapError as exc:
         assert str(exc) == "download_size_mismatch"
     else:
@@ -55,13 +55,13 @@ with tempfile.TemporaryDirectory(prefix="aot-release-download-") as folder:
         body = (name + " fixture").encode()
         release_files.append({
             "path": name,
-            "url": f"https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.13/{name}",
+            "url": f"https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.03/{name}",
             "size": len(body), "sha256": hashlib.sha256(body).hexdigest(),
             "github_digest": "sha256:" + hashlib.sha256(body).hexdigest(),
         })
     manifest = {
-        "schema_version": 3, "worker_version": "aot-worker-2026.08.11.13",
-        "tag": "worker-v2026.08.11.13", "commit_sha": "a" * 40,
+        "schema_version": 3, "worker_version": "aot-worker-2026.08.14.03",
+        "tag": "worker-v2026.08.14.03", "commit_sha": "a" * 40,
         "minimum_protocol": "github-release-v1", "minimum_bootstrap_version": 2,
         "files": release_files,
     }
@@ -69,18 +69,18 @@ with tempfile.TemporaryDirectory(prefix="aot-release-download-") as folder:
     manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
     module.urllib.request.urlopen = lambda request, timeout=0: Reply(manifest_bytes)
     metadata = {
-        "version": "aot-worker-2026.08.11.13", "tag": "worker-v2026.08.11.13",
+        "version": "aot-worker-2026.08.14.03", "tag": "worker-v2026.08.14.03",
         "commit_sha": "a" * 40,
         "manifest": {
             "name": "worker-manifest.json",
-            "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.11.13/worker-manifest.json",
+            "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.03/worker-manifest.json",
             "size": len(manifest_bytes), "sha256": manifest_sha,
             "github_digest": "sha256:" + manifest_sha,
         },
     }
     encoded = base64.urlsafe_b64encode(json.dumps(metadata).encode()).decode().rstrip("=")
     loaded = module.load_pinned_release(encoded, "canary")
-    assert loaded["version"] == "aot-worker-2026.08.11.13" and loaded["channel"] == "canary"
+    assert loaded["version"] == "aot-worker-2026.08.14.03" and loaded["channel"] == "canary"
     broken = json.loads(json.dumps(metadata))
     broken["manifest"]["github_digest"] = "sha256:" + "0" * 64
     encoded = base64.urlsafe_b64encode(json.dumps(broken).encode()).decode().rstrip("=")
