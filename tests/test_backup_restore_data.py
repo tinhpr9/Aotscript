@@ -160,8 +160,8 @@ def _wrap(*children: str) -> str:
     return f"<hierarchy><node class='Root' bounds='{_B}'>{inner}</node></hierarchy>"
 
 HOME_SCREEN = _wrap(_node(text="Apps"))
-APPS_RESTORE_ACTIVE = _wrap(_node(text="Labels: RESTORE_DATA", clickable=False), _node(text="Batch actions"))
-APPS_RESTORE_INACTIVE = _wrap(_node(text="Batch actions"))
+APPS_RESTORE_ACTIVE = _wrap(_node(text="Labels: RESTORE_DATA", clickable=False), _node(text="Batch actions"), _node(text="5 / 5"))
+APPS_RESTORE_INACTIVE = _wrap(_node(text="Batch actions"), _node(text="0 / 5"))
 FILTER_SCREEN_EMPTY = _wrap(_node(text="Select labels to filter"))
 FILTER_SCREEN_SELECT_LABELS = _wrap(_node(text="Select labels", clickable=False), _node(text="RESTORE_DATA"))
 FILTER_SCREEN_SELECT_LABELS_CHECKED = _wrap(_node(text="Select labels", clickable=False), _node(text="RESTORE_DATA"), _node(text="1 / 3"), _node(text="Apply"))
@@ -175,6 +175,11 @@ def _user_app_parts(apks_card="[10,10][90,50]", data_card="[10,60][90,100]", res
         nodes.append(_node(text="APKs", bounds=apks_card))
     if data_card:
         nodes.append(_node(text="Data", bounds=data_card))
+    nodes.append(_node(text="Cloud"))
+    nodes.append(_node(text="Ext.data"))
+    nodes.append(_node(text="Expansion"))
+    nodes.append(_node(text="Media"))
+    nodes.append(_node(text="Device"))
     if restore_btn:
         nodes.append(_node(text="RESTORE", bounds=restore_btn))
     return _wrap(*nodes)
@@ -197,6 +202,16 @@ class TestRestoreData(unittest.TestCase):
         self.mock_open_sb.return_value = True
         self.mock_fg_relay = mock.patch.object(RELAY.controller, "_sb_assert_foreground").start()
         self.mock_dump = mock.patch.object(CONTROLLER, "dump_ui_xml").start()
+        
+        def mock_is_green(opt, nodes):
+            card = getattr(CONTROLLER, "_smart_find")(opt, nodes)
+            if not card:
+                return False, None
+            if opt in ["APKs", "Data", "Cloud"]:
+                return True, card
+            return False, card
+        self.mock_green = mock.patch.object(CONTROLLER, "_is_green_selected", side_effect=mock_is_green).start()
+
         self.mock_root = mock.patch.object(CONTROLLER, "_root_run").start()
         self.mock_root.return_value = "1080x2400"
         self.mock_sleep = mock.patch.object(time, "sleep").start()
@@ -467,7 +482,7 @@ class TestArchitectureConstraints(unittest.TestCase):
         self.assertIn("backup_restore_data_semantic", RELAY.WORKER_CAPABILITIES)
 
     def test_worker_version_bumped_to_12(self):
-        self.assertEqual("aot-worker-2026.08.14.03", RELAY.WORKER_VERSION)
+        self.assertEqual("aot-worker-2026.08.14.04", RELAY.WORKER_VERSION)
 
     def test_fleet_hub_html_has_backup_restore_data_button(self):
         src = (ROOT / "cloudflare-worker/worker.js").read_text()
@@ -498,8 +513,8 @@ class TestArchitectureConstraints(unittest.TestCase):
 
     def test_fleet_state_version_bumped(self):
         src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
-        self.assertIn("aot-worker-2026.08.14.03", src)
-        self.assertIn("worker-v2026.08.14.03", src)
+        self.assertIn("aot-worker-2026.08.14.04", src)
+        self.assertIn("worker-v2026.08.14.04", src)
 
     def test_fleet_state_has_backup_restore_data_action(self):
         src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
@@ -523,12 +538,12 @@ class TestArchitectureConstraints(unittest.TestCase):
 
     def test_smoke_test_checks_new_version(self):
         src = (ROOT / "aot-group-control/worker_smoke_test.py").read_text()
-        self.assertIn("aot-worker-2026.08.14.03", src)
+        self.assertIn("aot-worker-2026.08.14.04", src)
         self.assertIn("backup_restore_data_semantic", src)
         self.assertIn("BACKUP_RESTORE_DATA_ACTION", src)
 
     def test_relay_selftest_checks_new_version(self):
         src = (ROOT / "aot-group-control/relay_selftest.py").read_text()
-        self.assertIn("aot-worker-2026.08.14.03", src)
+        self.assertIn("aot-worker-2026.08.14.04", src)
         self.assertIn("BACKUP_RESTORE_DATA", src)
 

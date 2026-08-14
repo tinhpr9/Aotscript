@@ -1311,6 +1311,7 @@ def backup_restore_data(
     _sb_assert_foreground()
     unknown = 0
     for step in range(80):
+        _sb_assert_foreground()
         if deadline is not None and time.time() >= deadline:
             raise AotExpiredError("expired")
 
@@ -1359,6 +1360,17 @@ def backup_restore_data(
             continue
 
         if _find_text("Labels: RESTORE_DATA", nodes):
+            sel, tot, count_bounds = _selected_stats(nodes)
+            if tot == 0:
+                raise AotControllerError("no_apps_found_for_restore_data")
+            if sel < tot:
+                unknown = 0
+                b = _smart_find("Select All", nodes) or _smart_find("Select all", nodes) or count_bounds
+                if not b:
+                    raise AotControllerError("select_all_not_found")
+                _tap_wait(b, deadline)
+                continue
+
             b = _smart_find("Batch actions", nodes)
             if b:
                 unknown = 0
@@ -1492,21 +1504,24 @@ def _find_text(text: str, nodes: list[UiNode]) -> Bounds | None:
 
 def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
     target = _clean(text)
-    tb = None
+    matches = []
     for n in nodes:
         if _clean(n.text) == target or _clean(n.content_description) == target:
-            if n.clickable:
-                return n.bounds
-            tb = n.bounds
-            break
-    if not tb:
+            matches.append(n)
+    if not matches:
         return None
+    if len(matches) > 1:
+        raise AotControllerError(f"ambiguous_selector:{text}")
+    n = matches[0]
+    tb = n.bounds
+    if n.clickable:
+        return tb
     candidates = []
-    for n in nodes:
-        if not n.clickable:
+    for c in nodes:
+        if not c.clickable:
             continue
-        if n.bounds.left <= tb.left and n.bounds.top <= tb.top and n.bounds.right >= tb.right and n.bounds.bottom >= tb.bottom:
-            candidates.append((n.bounds.area, n.bounds))
+        if c.bounds.left <= tb.left and c.bounds.top <= tb.top and c.bounds.right >= tb.right and c.bounds.bottom >= tb.bottom:
+            candidates.append((c.bounds.area, c.bounds))
     if candidates:
         return min(candidates, key=lambda x: x[0])[1]
     return tb
@@ -1525,13 +1540,17 @@ def _tap_wait(bounds: Bounds, deadline: float | None):
         if after_fp != before_fp:
             return
 
-def _selected_count(nodes: list[UiNode]) -> int:
+def _selected_stats(nodes: list[UiNode]) -> tuple[int, int, Bounds | None]:
     for n in nodes:
         for val in (n.text, n.content_description):
             m = re.fullmatch(r'\s*(\d+)\s*/\s*(\d+)\s*', val)
             if m:
-                return int(m.group(1))
-    return 0
+                return int(m.group(1)), int(m.group(2)), n.bounds
+    return 0, 0, None
+
+def _selected_count(nodes: list[UiNode]) -> int:
+    s, _, _ = _selected_stats(nodes)
+    return s
 
 def _press_filter(nodes: list[UiNode], deadline: float | None) -> bool:
     try:
