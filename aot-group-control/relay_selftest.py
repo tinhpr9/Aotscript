@@ -57,8 +57,25 @@ with tempfile.TemporaryDirectory() as folder:
         brd2 = dict(message, action_id="action-brd-2", action="BACKUP_RESTORE_DATA")
         sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd2)
         assert sent[-1]["status"] == "FAILED"
+        assert sent[-1]["executed"] is False
         assert "restore_data_no_matching_apps" in sent[-1].get("reason", "")
 
+        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd2)
+        assert sent[-1]["status"] == "FAILED", f"Expected FAILED on redelivery, got {sent[-1]['status']}"
+        assert sent[-1]["executed"] is False
+
+        # BACKUP_RESTORE_DATA failure path (not installed)
+        def _fail_backup_not_installed(*_a, **_kw):
+            raise module.controller.AotControllerError("swift_backup_not_installed")
+        module.controller.backup_restore_data = _fail_backup_not_installed
+        brd3 = dict(message, action_id="action-brd-3", action="BACKUP_RESTORE_DATA")
+        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd3)
+        assert sent[-1]["status"] == "FAILED_NOT_INSTALLED"
+        assert sent[-1]["executed"] is False
+
+        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd3)
+        assert sent[-1]["status"] == "FAILED_NOT_INSTALLED", f"Expected FAILED_NOT_INSTALLED on redelivery, got {sent[-1]['status']}"
+        assert sent[-1]["executed"] is False
         # BACKUP_RESTORE_DATA expired TTL
         brd_exp = dict(message, action_id="action-brd-exp", action="BACKUP_RESTORE_DATA", expires_at=int(time.time()*1000)-1)
         sent.clear(); module._handle_backup_restore_data({}, state, local_id="m301", message=brd_exp)

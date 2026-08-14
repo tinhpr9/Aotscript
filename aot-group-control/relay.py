@@ -469,20 +469,20 @@ def mark_action_processed(
     ]
     values.append(action_id)
     state["processed_action_ids"] = values[-PROCESSED_ACTIONS_MAX:]
-    if result is not None and result.get("executed") is True:
+    if result is not None:
         results = state.get("action_results")
         if not isinstance(results, dict):
             results = {}
         # Sanitize to fixed schema and allowlisted status/reason
         status = result.get("status")
-        if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED"}:
+        if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
             status = "FAILED"
         reason = result.get("safe_reason")
-        if reason not in {"post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain"}:
+        if reason not in {"post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain", "restore_data_no_matching_apps", "swift_backup_not_installed"}:
             reason = None
         results[action_id] = {
             "status": status,
-            "executed": True,
+            "executed": bool(result.get("executed")),
             "safe_reason": reason,
             "app_count": result.get("app_count") if isinstance(result.get("app_count"), int) else None,
             "selected_count": result.get("selected_count") if isinstance(result.get("selected_count"), int) else None,
@@ -796,14 +796,14 @@ def _handle_backup_restore_data(
     if action_already_processed(state, action_id):
         action_results = state.get("action_results")
         cached_result = action_results.get(action_id) if isinstance(action_results, dict) else None
-        if isinstance(cached_result, dict) and cached_result.get("executed") is True:
+        if isinstance(cached_result, dict):
             _send_batch_ack(
                 cfg,
                 device_id=local_id,
                 action_id=action_id,
                 action=BACKUP_RESTORE_DATA_ACTION,
                 status=cached_result.get("status", "BACKUP_STARTED"),
-                executed=True,
+                executed=bool(cached_result.get("executed")),
                 reason=cached_result.get("safe_reason"),
                 app_count=cached_result.get("app_count"),
                 selected_count=cached_result.get("selected_count"),
@@ -861,6 +861,11 @@ def _handle_backup_restore_data(
                 if reason in ("swift_backup_not_installed",)
                 else "FAILED"
             )
+        mark_action_processed(state, action_id, {
+            "status": status,
+            "executed": False,
+            "safe_reason": reason,
+        })
         _send_batch_ack(
             cfg,
             device_id=local_id,
