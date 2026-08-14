@@ -8,20 +8,35 @@ on:
       - 'cloudflare-worker/**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-worker
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    environment: production
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Run worker architecture tests
+        run: python3 -m unittest discover -s tests -v
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Install dependencies
         working-directory: cloudflare-worker
-        run: npm install
+        run: npm ci
       - name: Deploy Hub to Cloudflare
+        # wrangler-action v3.7.0 = 9acf94ace14e7dc412b076f2c5c20b8ce93c79cd
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare-worker
