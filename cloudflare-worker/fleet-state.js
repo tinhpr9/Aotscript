@@ -25,8 +25,8 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.14.01";
-const AOT_WORKER_TAG = "worker-v2026.08.14.01";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.14.02";
+const AOT_WORKER_TAG = "worker-v2026.08.14.02";
 const AOT_RELEASE_PROTOCOL = "github-release-v1";
 const AOT_RELEASE_REPOSITORY = "tinhpr9/Aotscript";
 const AOT_RELEASE_CACHE_MS = 5 * 60 * 1000;
@@ -2758,27 +2758,29 @@ export class FleetState
     const entries = await this.ctx.storage.list({ prefix: "aot_session:" });
     for (const [key, record] of entries) {
       const update = record?.last_update;
-      if (!update?.active_group || Number(update.group_deadline || 0) > Date.now()) continue;
+      if ((!update?.active_group && (!update?.groups || update.groups.length === 0)) || Number(update.group_deadline || 0) > Date.now()) continue;
       let retried = false;
       if (Number(update.final_deadline || 0) > Date.now()) {
-        for (const member of update.active_group) {
-          const device = update.devices?.[member.device_id];
-          if (!device || device.status !== "QUEUED") continue;
-          const current = device.protocol_attempts?.[device.protocol_attempt_index || 0];
-          const nextIndex = Number(device.protocol_attempt_index || 0) + 1;
-          if (!device.protocol_attempts?.[nextIndex]) continue;
-          device.rejected_protocols = Array.isArray(device.rejected_protocols)
-            ? device.rejected_protocols
-            : [];
-          device.rejected_protocols.push({
-            protocol: "phase4-1", action: current?.action || AOT_UPDATE_ACTION,
-            channel: current?.channel || "", reason: "no_authenticated_ack",
-          });
-          device.protocol_attempt_index = nextIndex;
-          if (this.sendUpdateAttempt(String(key).slice("aot_session:".length), update, member, device) > 0) {
-            retried = true;
+        if (update.active_group) {
+          for (const member of update.active_group) {
+            const device = update.devices?.[member.device_id];
+            if (!device || device.status !== "QUEUED") continue;
+            const current = device.protocol_attempts?.[device.protocol_attempt_index || 0];
+            const nextIndex = Number(device.protocol_attempt_index || 0) + 1;
+            if (!device.protocol_attempts?.[nextIndex]) continue;
+            device.rejected_protocols = Array.isArray(device.rejected_protocols)
+              ? device.rejected_protocols
+              : [];
+            device.rejected_protocols.push({
+              protocol: "phase4-1", action: current?.action || AOT_UPDATE_ACTION,
+              channel: current?.channel || "", reason: "no_authenticated_ack",
+            });
+            device.protocol_attempt_index = nextIndex;
+            if (this.sendUpdateAttempt(String(key).slice("aot_session:".length), update, member, device) > 0) {
+              retried = true;
+            }
+            device.updated_at = Date.now();
           }
-          device.updated_at = Date.now();
         }
       }
       if (Number(update.final_deadline || 0) > Date.now()) {
@@ -2789,26 +2791,28 @@ export class FleetState
         if (retried) await this.broadcastAotHubState(sessionId);
         continue;
       }
-      for (const member of update.active_group) {
-        const device = update.devices?.[member.device_id];
-        if (device && !AOT_UPDATE_TERMINAL.has(device.status)) {
-          device.status = "FAILED";
-          if (!Array.isArray(device.history)) device.history = [];
-          if (!device.history.includes("FAILED")) device.history.push("FAILED");
-          const attempts = (device.rejected_protocols || []).concat(
-            (device.protocol_attempts || []).slice(device.protocol_attempt_index || 0, (device.protocol_attempt_index || 0) + 1)
-              .map((attempt) => ({
-                protocol: "phase4-1", action: attempt.action,
-                channel: attempt.channel, reason: "no_authenticated_ack",
-              }))
-          );
-          device.reason = attempts.length
-            ? `protocol_rejected:${attempts.map((item) =>
-                `${item.protocol}/${item.action}/${item.channel}:${item.reason}`
-              ).join(",")}`.slice(0, 160)
-            : "worker_ack_timeout";
-          device.updated_at = Date.now();
-          this.rememberUpdateStatus(record, device);
+      if (update.active_group) {
+        for (const member of update.active_group) {
+          const device = update.devices?.[member.device_id];
+          if (device && !AOT_UPDATE_TERMINAL.has(device.status)) {
+            device.status = "FAILED";
+            if (!Array.isArray(device.history)) device.history = [];
+            if (!device.history.includes("FAILED")) device.history.push("FAILED");
+            const attempts = (device.rejected_protocols || []).concat(
+              (device.protocol_attempts || []).slice(device.protocol_attempt_index || 0, (device.protocol_attempt_index || 0) + 1)
+                .map((attempt) => ({
+                  protocol: "phase4-1", action: attempt.action,
+                  channel: attempt.channel, reason: "no_authenticated_ack",
+                }))
+            );
+            device.reason = attempts.length
+              ? `protocol_rejected:${attempts.map((item) =>
+                  `${item.protocol}/${item.action}/${item.channel}:${item.reason}`
+                ).join(",")}`.slice(0, 160)
+              : "worker_ack_timeout";
+            device.updated_at = Date.now();
+            this.rememberUpdateStatus(record, device);
+          }
         }
       }
       update.active_group = null;
