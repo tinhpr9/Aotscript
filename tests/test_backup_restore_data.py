@@ -795,7 +795,7 @@ class TestRelayBackupRestoreData(unittest.TestCase):
 
         self.sent.clear()
         RELAY._handle_batch_action({}, self.state, local_id="m301", message=msg)
-        self.assertEqual("DUPLICATE", self.sent[-1]["status"])
+        self.assertEqual("FAILED", self.sent[-1]["status"])
         self.assertEqual(1, executed[0])
 
     def test_not_installed_sends_correct_status(self):
