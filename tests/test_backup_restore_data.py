@@ -152,8 +152,8 @@ class _Rotator:
 
 _B = "[0,0][100,100]"
 
-def _node(text="", desc="", clickable=True, bounds=_B, cls="android.widget.Button"):
-    return f"<node class='{cls}' text='{text}' content-desc='{desc}' clickable='{'true' if clickable else 'false'}' bounds='{bounds}'/>"
+def _node(text="", desc="", clickable=True, bounds=_B, cls="android.widget.Button", enabled=True):
+    return f"<node class='{cls}' text='{text}' content-desc='{desc}' clickable='{'true' if clickable else 'false'}' enabled='{'true' if enabled else 'false'}' bounds='{bounds}'/>"
 
 def _wrap(*children: str) -> str:
     inner = "".join(children)
@@ -166,8 +166,8 @@ FILTER_SCREEN_EMPTY = _wrap(_node(text="Select labels to filter"))
 FILTER_SCREEN_SELECT_LABELS = _wrap(_node(text="Select labels", clickable=False), _node(text="RESTORE_DATA"))
 FILTER_SCREEN_SELECT_LABELS_CHECKED = _wrap(_node(text="Select labels", clickable=False), _node(text="RESTORE_DATA"), _node(text="1 / 3"), _node(text="Apply"))
 FILTER_SCREEN_ACTIVE = _wrap(_node(text="APPLY OPTIONS", clickable=False), _node(text="Labels: RESTORE_DATA", clickable=False))
-BATCH_MENU = _wrap(_node(text="Restore from cloud"))
-OPTIONS_MENU = _wrap(_node(text="Restore options"))
+BATCH_MENU = _wrap(_node(text="Backup"))
+OPTIONS_MENU = _wrap(_node(text="Backup options"))
 
 def _user_app_parts(apks_card="[10,10][90,50]", data_card="[10,60][90,100]", restore_btn="[10,110][90,150]"):
     nodes = [_node(text="User app parts", clickable=False)]
@@ -181,10 +181,10 @@ def _user_app_parts(apks_card="[10,10][90,50]", data_card="[10,60][90,100]", res
     nodes.append(_node(text="Media"))
     nodes.append(_node(text="Device"))
     if restore_btn:
-        nodes.append(_node(text="RESTORE", bounds=restore_btn))
+        nodes.append(_node(text="BACKUP", bounds=restore_btn))
     return _wrap(*nodes)
 
-RESTORING_SCREEN = _wrap(_node(text="Restoring..."))
+RESTORING_SCREEN = _wrap(_node(text="Backing up..."))
 
 class _Rotator:
     def __init__(self, items):

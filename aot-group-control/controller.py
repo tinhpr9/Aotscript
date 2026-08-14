@@ -1317,13 +1317,132 @@ def backup_restore_data(
 
         nodes = parse_ui_xml(dump_ui_xml())
 
-        b = _smart_find("Restore options", nodes)
+        if _find_text("User app parts", nodes):
+            unknown = 0
+            import struct
+            
+            frame = _raw_screencap()
+            apk_on, apk_card = _is_green_selected("APKs", nodes, frame=frame)
+            if not apk_on:
+                if not apk_card:
+                    raise AotControllerError("selector_missing:APKs")
+                _tap_wait(apk_card, deadline)
+                time.sleep(0.7)
+                nodes = parse_ui_xml(dump_ui_xml())
+                frame = _raw_screencap()
+                apk_on2, _ = _is_green_selected("APKs", nodes, frame=frame)
+                if not apk_on2:
+                    _save_unknown_debug("apks_toggle_failed")
+                    raise AotControllerError("apks_toggle_failed")
+
+            data_on, data_card = _is_green_selected("Data", nodes, frame=frame)
+            if not data_on:
+                if not data_card:
+                    raise AotControllerError("selector_missing:Data")
+                _tap_wait(data_card, deadline)
+                time.sleep(0.7)
+                nodes = parse_ui_xml(dump_ui_xml())
+                frame = _raw_screencap()
+                data_on2, _ = _is_green_selected("Data", nodes, frame=frame)
+                if not data_on2:
+                    _save_unknown_debug("data_toggle_failed")
+                    raise AotControllerError("data_toggle_failed")
+
+            apk_on, _ = _is_green_selected("APKs", nodes, frame=frame)
+            data_on, _ = _is_green_selected("Data", nodes, frame=frame)
+            cloud_on, _ = _is_green_selected("Cloud", nodes, frame=frame)
+            ext_on, _ = _is_green_selected("Ext.data", nodes, frame=frame)
+            exp_on, _ = _is_green_selected("Expansion", nodes, frame=frame)
+            med_on, _ = _is_green_selected("Media", nodes, frame=frame)
+            dev_on, _ = _is_green_selected("Device", nodes, frame=frame)
+
+            if not apk_on or not data_on or not cloud_on:
+                raise AotControllerError("options_verify_failed")
+            if ext_on or exp_on or med_on or dev_on:
+                raise AotControllerError("options_verify_failed")
+
+            _cb("OPTIONS_VERIFIED")
+
+            n = _find_unique_by_resource_ids(nodes, _RID_FINAL_BACKUP, _RID_FINAL_BACKUP_ALT)
+            b = n.bounds if n else _smart_find("BACKUP", nodes) or _smart_find("+ BACKUP", nodes)
+            if not b:
+                _save_unknown_debug("final_restore_button_not_found")
+                raise AotControllerError("final_restore_button_not_found")
+            
+            before_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
+            
+            def _restore_started() -> bool:
+                _sb_assert_foreground()
+                n = parse_ui_xml(dump_ui_xml())
+                if _find_unique_by_resource_ids(n, _RID_BACKUP_PROGRESS, _RID_BACKUP_RUNNING):
+                    return True
+                if _find_text("Backing up...", n) or _find_text("Backup progress", n):
+                    return True
+                return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_fp
+
+            if deadline is not None and time.time() >= deadline:
+                raise AotExpiredError("expired_before_tap")
+
+            tap_delivered = False
+            try:
+                _tap_xy(*b.center)
+                tap_delivered = True
+            except AotControllerError as e:
+                err_msg = str(e)
+                if err_msg.startswith("root command failed: ") and "TimeoutExpired" not in err_msg:
+                    raise AotControllerError("subprocess_spawn_failed")
+                return {
+                    "action": BACKUP_RESTORE_DATA_ACTION,
+                    "executed": True,
+                    "status": "FAILED",
+                    "safe_reason": "final_tap_delivery_uncertain",
+                }
+            except Exception:
+                return {
+                    "action": BACKUP_RESTORE_DATA_ACTION,
+                    "executed": True,
+                    "status": "FAILED",
+                    "safe_reason": "final_tap_delivery_uncertain",
+                }
+
+            try:
+                _wait_for(_restore_started, "restore_started", timeout=45.0, absolute_deadline=deadline)
+                _sb_assert_foreground()
+            except (AotTimeoutError, AotExpiredError):
+                return {
+                    "action": BACKUP_RESTORE_DATA_ACTION,
+                    "executed": True,
+                    "status": "TIMEOUT",
+                    "safe_reason": "post_tap_start_unconfirmed",
+                }
+            except Exception:
+                return {
+                    "action": BACKUP_RESTORE_DATA_ACTION,
+                    "executed": True,
+                    "status": "FAILED",
+                    "safe_reason": "post_tap_verification_failed",
+                }
+
+            return {
+                "action": BACKUP_RESTORE_DATA_ACTION,
+                "executed": True,
+                "status": "RESTORE_STARTED",
+                "safe_reason": "",
+            }
+
+
+        b = _smart_find("Backup options", nodes)
         if b:
             unknown = 0
             _tap_wait(b, deadline)
             continue
 
-        b = _smart_find("Restore from cloud", nodes)
+        n = _find_unique_by_resource_ids(nodes, _RID_BACKUP_MENU_ITEM)
+        if n:
+            unknown = 0
+            _tap_wait(n.bounds, deadline)
+            continue
+        b = _smart_find("Backup", nodes) or _smart_find("Backup to cloud", nodes)
         if b:
             unknown = 0
             _tap_wait(b, deadline)
@@ -1381,9 +1500,16 @@ def backup_restore_data(
         if _find_text("Batch actions", nodes):
             unknown = 0
             _cb("APPS_OPENED")
-            if not _press_filter(nodes, deadline):
-                _save_unknown_debug("filter_trigger_not_found")
-                raise AotControllerError("filter_trigger_not_found")
+            
+            n = _find_unique_by_resource_ids(nodes, _RID_FILTER_TRIGGER, _RID_FILTER_TRIGGER_ALT)
+            if n:
+                if not n.enabled:
+                    raise AotControllerError("filter_trigger_disabled")
+                _tap_wait(n.bounds, deadline)
+            else:
+                if not _press_filter(nodes, deadline):
+                    _save_unknown_debug("filter_trigger_not_found")
+                    raise AotControllerError("filter_trigger_not_found")
             continue
 
         b = _smart_find("Apps", nodes)
@@ -1393,88 +1519,7 @@ def backup_restore_data(
             _tap_wait(b, deadline)
             continue
 
-        if _find_text("User app parts", nodes):
-            unknown = 0
-            import struct
-            
-            frame = _raw_screencap()
-            apk_on, apk_card = _is_green_selected("APKs", nodes, frame=frame)
-            if not apk_on:
-                if not apk_card:
-                    raise AotControllerError("selector_missing:APKs")
-                _tap_wait(apk_card, deadline)
-                time.sleep(0.7)
-                nodes = parse_ui_xml(dump_ui_xml())
-                frame = _raw_screencap()
-                apk_on2, _ = _is_green_selected("APKs", nodes, frame=frame)
-                if not apk_on2:
-                    _save_unknown_debug("apks_toggle_failed")
-                    raise AotControllerError("apks_toggle_failed")
-
-            data_on, data_card = _is_green_selected("Data", nodes, frame=frame)
-            if not data_on:
-                if not data_card:
-                    raise AotControllerError("selector_missing:Data")
-                _tap_wait(data_card, deadline)
-                time.sleep(0.7)
-                nodes = parse_ui_xml(dump_ui_xml())
-                frame = _raw_screencap()
-                data_on2, _ = _is_green_selected("Data", nodes, frame=frame)
-                if not data_on2:
-                    _save_unknown_debug("data_toggle_failed")
-                    raise AotControllerError("data_toggle_failed")
-
-            apk_on, _ = _is_green_selected("APKs", nodes, frame=frame)
-            data_on, _ = _is_green_selected("Data", nodes, frame=frame)
-            cloud_on, _ = _is_green_selected("Cloud", nodes, frame=frame)
-            ext_on, _ = _is_green_selected("Ext.data", nodes, frame=frame)
-            exp_on, _ = _is_green_selected("Expansion", nodes, frame=frame)
-            med_on, _ = _is_green_selected("Media", nodes, frame=frame)
-            dev_on, _ = _is_green_selected("Device", nodes, frame=frame)
-
-            if not apk_on or not data_on or not cloud_on:
-                raise AotControllerError("options_verify_failed")
-            if ext_on or exp_on or med_on or dev_on:
-                raise AotControllerError("options_verify_failed")
-
-            _cb("OPTIONS_VERIFIED")
-
-            b = _smart_find("RESTORE", nodes)
-            if not b:
-                _save_unknown_debug("final_restore_button_not_found")
-                raise AotControllerError("final_restore_button_not_found")
-            
-            before_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
-            
-            def _restore_started() -> bool:
-                _sb_assert_foreground()
-                n = parse_ui_xml(dump_ui_xml())
-                if _find_text("Restoring...", n):
-                    return True
-                return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_fp
-
-            try:
-                _tap_xy(*b.center)
-                _wait_for(_restore_started, "restore_started", timeout=45.0, absolute_deadline=deadline)
-                _sb_assert_foreground()
-            except AotExpiredError:
-                return {
-                    "action": BACKUP_RESTORE_DATA_ACTION,
-                    "executed": True,
-                    "status": "TIMEOUT",
-                    "safe_reason": "post_tap_start_unconfirmed",
-                }
-            except Exception:
-                # If tap or wait timed out or failed, we are uncertain.
-                # Must emit RESTORE_STARTED to ack the delivery and stop retries.
-                pass
-
-            return {
-                "action": BACKUP_RESTORE_DATA_ACTION,
-                "executed": True,
-                "status": "RESTORE_STARTED",
-            }
-
+        print(f'UNKNOWN UI: {nodes}', file=sys.stderr)
         unknown += 1
         if unknown < 4:
             time.sleep(1)
@@ -1521,6 +1566,8 @@ def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
     if len(matches) > 1:
         raise AotControllerError(f"ambiguous_selector:{text}")
     n = matches[0]
+    if not n.enabled:
+        raise AotControllerError(f"disabled_target:{text}")
     tb = n.bounds
     if n.clickable:
         return tb
@@ -1535,16 +1582,18 @@ def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
     return tb
 
 def _tap_wait(bounds: Bounds, deadline: float | None):
-    p = pathlib.Path("/sdcard/window.xml")
-    before_fp = hashlib.md5(p.read_bytes()).hexdigest() if p.exists() else ""
+    xml_before = dump_ui_xml()
+    before_nodes = parse_ui_xml(xml_before)
+    before_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, before_nodes)
     _tap_xy(*bounds.center)
     end = time.time() + 4.0
     while time.time() < end:
         if deadline and time.time() >= deadline:
             break
         time.sleep(0.5)
-        dump_ui_xml()
-        after_fp = hashlib.md5(p.read_bytes()).hexdigest() if p.exists() else ""
+        xml_after = dump_ui_xml()
+        after_nodes = parse_ui_xml(xml_after)
+        after_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, after_nodes)
         if after_fp != before_fp:
             return
 
@@ -1596,11 +1645,15 @@ def _raw_screencap():
         if len(raw) < 12:
             raise AotControllerError("screencap_failed")
         w, h, fmt = struct.unpack("<III", raw[:12])
+        if fmt != 1:
+            raise AotControllerError(f"screencap_unsupported_format:{fmt}")
         pixel_bytes = w * h * 4
         header = len(raw) - pixel_bytes
         if header < 12 or header > 64:
-            raise AotControllerError("screencap_invalid_format")
+            raise AotControllerError(f"screencap_invalid_format:header={header}")
         return w, h, raw[header:]
+    except AotControllerError:
+        raise
     except Exception as e:
         raise AotControllerError("screencap_failed")
 
