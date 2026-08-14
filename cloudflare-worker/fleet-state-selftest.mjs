@@ -92,4 +92,65 @@ const file = source;
 if (!file.includes("AOT_UPDATE_GROUP_SIZE = 5") || !file.includes("ROLLED_BACK")) throw new Error("update rollout/rollback lost");
 const fleetProtocol = file.slice(file.indexOf("async readFleet()"));
 for (const bad of [/\bm[1-9][0-9]{0,5}\b/i, /x_norm/, /y_norm/]) if (bad.test(fleetProtocol)) throw new Error(`hard-coded identity/coordinate: ${bad}`);
+
+// Auto-heal rollout tests
+const sRecord = {
+  reference_device_id: ids[0],
+  followers: { [ids[1]]: true },
+  last_update: {
+    active_group: null,
+    groups: [ [{ device_id: ids[1] }] ],
+    final_deadline: Date.now() - 10000,
+    created_at: Date.now() - 80000,
+    devices: { [ids[1]]: { status: "QUEUED" } }
+  }
+};
+await store.set("aot_session:test_session", sRecord);
+
+let updateResp = await fleet.startWorkerUpdate("test_session", sRecord, "stable");
+let updateBody = await updateResp.json();
+if (updateBody.error === "worker_update_in_progress") throw new Error("Stale rollout blocked new update");
+let state = await store.get("aot_session:test_session");
+if (state.last_update.active_group !== null || state.last_update.groups.length > 0 || state.last_update.failed !== true) throw new Error("Stale rollout not properly cleaned up");
+
+sRecord.last_update = {
+  active_group: [{ device_id: ids[1] }],
+  groups: [],
+  final_deadline: Date.now() + 10000,
+  created_at: Date.now() - 10000,
+  devices: { [ids[1]]: { status: "QUEUED" } }
+};
+await store.set("aot_session:test_session_active", sRecord);
+updateResp = await fleet.startWorkerUpdate("test_session_active", sRecord, "stable");
+updateBody = await updateResp.json();
+if (updateBody.error !== "worker_update_in_progress") throw new Error("Active rollout did not block new update");
+
+sRecord.last_update = {
+  active_group: [{ device_id: ids[1] }],
+  groups: [],
+  final_deadline: Date.now() - 10000, // Timeout
+  created_at: Date.now() - 100000,
+  devices: { [ids[1]]: { status: "QUEUED" } }
+};
+await store.set("aot_session:test_session_timeout", sRecord);
+updateResp = await fleet.startWorkerUpdate("test_session_timeout", sRecord, "stable");
+updateBody = await updateResp.json();
+if (updateBody.error === "worker_update_in_progress") throw new Error("Timeout rollout blocked new update");
+state = await store.get("aot_session:test_session_timeout");
+if (state.last_update.devices[ids[1]].status !== "FAILED" || state.last_update.devices[ids[1]].reason !== "worker_ack_timeout") throw new Error("Timeout active group not transitioned to FAILED");
+if (state.last_update.active_group !== null || state.last_update.groups.length > 0 || state.last_update.failed !== true) throw new Error("Timeout rollout not properly cleaned up");
+
+sRecord.last_update = {
+  active_group: [{ device_id: ids[1] }],
+  groups: [ [{ device_id: ids[2] }] ],
+  final_deadline: Date.now() + 10000,
+  created_at: Date.now() - 10000,
+  devices: { [ids[1]]: { status: "HEALTHY" }, [ids[2]]: { status: "QUEUED" } }
+};
+await store.set("aot_session:test_session_healthy_pending", sRecord);
+updateResp = await fleet.startWorkerUpdate("test_session_healthy_pending", sRecord, "stable");
+updateBody = await updateResp.json();
+if (updateBody.error !== "worker_update_in_progress") throw new Error("Active HEALTHY rollout with pending groups incorrectly aborted");
+
+console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");

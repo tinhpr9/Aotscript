@@ -1736,8 +1736,46 @@ export class FleetState
     if (!new Set(["canary", "stable"]).has(channel)) {
       return json({ ok: false, error: "invalid_update_channel" }, 400);
     }
-    if (record.last_update?.active_group || (record.last_update?.groups || []).length) {
-      return json({ ok: false, error: "worker_update_in_progress" }, 409);
+    const prev = record.last_update;
+    if (prev && (prev.active_group || (prev.groups || []).length)) {
+      const activeIds = (prev.active_group || []).map((item) => item.device_id);
+      const isTerminal = activeIds.length > 0 && activeIds.every((id) => AOT_UPDATE_TERMINAL.has(prev.devices?.[id]?.status));
+      const hasFailed = activeIds.some((id) => ["FAILED", "ROLLED_BACK", "SKIPPED_OFFLINE"].includes(prev.devices?.[id]?.status));
+      const groupFinishedFailed = isTerminal && hasFailed;
+
+      const created = Number(prev.created_at || 0);
+      const isOrphaned = !prev.active_group && (prev.groups || []).length > 0 && Number(prev.final_deadline || 0) < Date.now() && (created === 0 || Date.now() > created + 15000);
+      const isTimeout = Number(prev.final_deadline || 0) > 0 && Date.now() > Number(prev.final_deadline) + 5000;
+
+      if (groupFinishedFailed || isOrphaned || isTimeout) {
+        if (prev.active_group) {
+          for (const member of prev.active_group) {
+            const device = prev.devices?.[member.device_id];
+            if (device && !AOT_UPDATE_TERMINAL.has(device.status)) {
+              device.status = "FAILED";
+              if (!Array.isArray(device.history)) device.history = [];
+              if (!device.history.includes("FAILED")) device.history.push("FAILED");
+              const attempts = (device.rejected_protocols || []).concat(
+                (device.protocol_attempts || []).slice(device.protocol_attempt_index || 0, (device.protocol_attempt_index || 0) + 1)
+                  .map((attempt) => ({
+                    protocol: "phase4-1", action: attempt.action,
+                    channel: attempt.channel, reason: "no_authenticated_ack",
+                  }))
+              );
+              device.reason = attempts.length
+                ? `protocol_rejected:${attempts.map((item) =>
+                    `${item.protocol}/${item.action}/${item.channel}:${item.reason}`
+                  ).join(",")}`.slice(0, 160)
+                : "worker_ack_timeout";
+              device.updated_at = Date.now();
+              this.rememberUpdateStatus(record, device);
+            }
+          }
+        }
+        await this.abortUpdateRollout(sessionId, record);
+      } else {
+        return json({ ok: false, error: "worker_update_in_progress" }, 409);
+      }
     }
     let release;
     try {
