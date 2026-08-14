@@ -2,3 +2,8 @@
 # telegram_expires_at=1786773683239
 # telegram_command_id=1786687283239-ef43dc17
 UPDATE_SOLVER_SECURE
+
+# telegram_target_ids=m74,m88,m116,m117,m118,m153,m154
+# telegram_expires_at=1786774067363
+# telegram_command_id=1786687667363-402371f7
+UPDATE_SOLVER_SECURE
