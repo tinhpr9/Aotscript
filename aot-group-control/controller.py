@@ -988,16 +988,40 @@ SWIFT_APPS_RESOURCE_IDS = (
 
 def _apps_semantic_matches(nodes: list[UiNode]) -> list[UiNode]:
     matches: dict[int, UiNode] = {}
+    
+    # 1. Primary: Explicit resource ID match
     for node in nodes:
-        semantic = (
-            node.resource_id in SWIFT_APPS_RESOURCE_IDS
-            or node.text == "Apps"
-            or node.content_description == "Apps"
-        )
-        if not semantic:
-            continue
-        target = _clickable_target(nodes, node)
-        matches[target.index] = target
+        if node.resource_id in SWIFT_APPS_RESOURCE_IDS:
+            target = _clickable_target(nodes, node)
+            matches[target.index] = target
+            
+    # 2. Secondary: Structural fallback (Bottom Navigation)
+    if not matches:
+        bottom_navs = [
+            n for n in nodes
+            if "bottomnavigation" in n.class_name.lower() or n.resource_id.endswith(":id/bottom_navigation")
+        ]
+        if bottom_navs:
+            bnav = bottom_navs[-1]
+            # Find item views
+            items = [
+                n for n in nodes
+                if "bottomnavigationitemview" in n.class_name.lower() and n.bounds.top >= bnav.bounds.top
+            ]
+            if not items:
+                items = [n for n in nodes if n.parent == bnav.index]
+                if len(items) == 1:
+                    items = [n for n in nodes if n.parent == items[0].index]
+            
+            items.sort(key=lambda n: n.bounds.left)
+            if len(items) >= 2:
+                # Tab 1 is Home, Tab 2 is Apps
+                try:
+                    target = _clickable_target(nodes, items[1])
+                    matches[target.index] = target
+                except AotControllerError:
+                    pass
+                    
     return list(matches.values())
 
 
@@ -1006,15 +1030,34 @@ def swift_apps_screen_open(nodes: list[UiNode]) -> bool:
         node for node in nodes
         if node.selected and (
             node.resource_id in SWIFT_APPS_RESOURCE_IDS
-            or node.text == "Apps"
-            or node.content_description == "Apps"
         )
     ]
     markers = [
         node for node in nodes
         if node.resource_id.endswith(("apps_list", "apps_recycler", "apps_screen"))
     ]
-    return len(selected) == 1 or len(markers) == 1
+    
+    structural_selected = False
+    if not selected and not markers:
+        bottom_navs = [
+            n for n in nodes
+            if "bottomnavigation" in n.class_name.lower() or n.resource_id.endswith(":id/bottom_navigation")
+        ]
+        if bottom_navs:
+            bnav = bottom_navs[-1]
+            items = [
+                n for n in nodes
+                if "bottomnavigationitemview" in n.class_name.lower() and n.bounds.top >= bnav.bounds.top
+            ]
+            if not items:
+                items = [n for n in nodes if n.parent == bnav.index]
+                if len(items) == 1:
+                    items = [n for n in nodes if n.parent == items[0].index]
+            items.sort(key=lambda n: n.bounds.left)
+            if len(items) >= 2 and items[1].selected:
+                structural_selected = True
+
+    return len(selected) == 1 or len(markers) == 1 or structural_selected
 
 
 def open_swift_apps() -> dict[str, Any]:
@@ -1349,13 +1392,7 @@ def backup_restore_data(
         apply_node = _find_unique_by_resource_ids(
             nodes, _RID_FILTER_APPLY, _RID_FILTER_APPLY_ALT
         )
-        if apply_node is None:
-            # Fallback: look for text "Apply" or "OK"
-            for text in ("Apply", "OK", "Done"):
-                candidates = _find_by_text_exact(nodes, text)
-                if len(candidates) == 1:
-                    apply_node = candidates[0]
-                    break
+
         if apply_node is None:
             raise AotControllerError("filter_apply_not_found")
         before_fp2 = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
@@ -1387,10 +1424,7 @@ def backup_restore_data(
         select_all_node = _find_unique_by_resource_ids(
             nodes, _RID_SELECT_ALL, _RID_SELECT_ALL_ALT
         )
-        if select_all_node is None:
-            candidates = _find_by_text_exact(nodes, "Select all")
-            if len(candidates) == 1:
-                select_all_node = candidates[0]
+
         if select_all_node is not None:
             _tap_xy(*select_all_node.bounds.center)
             def _all_selected() -> bool:
@@ -1413,16 +1447,7 @@ def backup_restore_data(
         nodes, _RID_BATCH_ACTIONS, _RID_BATCH_ACTIONS_ALT
     )
     if batch_node is None:
-        # Fallback text match
-        candidates = _find_by_text_exact(nodes, "Batch actions")
-        if not candidates:
-            candidates = _find_by_text_exact(nodes, "Batch")
-        if len(candidates) == 1:
-            batch_node = candidates[0]
-        elif len(candidates) > 1:
-            raise AotControllerError("batch_actions_selector_ambiguous")
-        else:
-            raise AotControllerError("batch_actions_not_found")
+        raise AotControllerError("batch_actions_not_found")
     before_batch_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
     _tap_xy(*batch_node.bounds.center)
     def _batch_menu_open() -> bool:
@@ -1436,12 +1461,7 @@ def backup_restore_data(
     nodes = parse_ui_xml(dump_ui_xml())
     backup_item = _find_unique_by_resource_ids(nodes, _RID_BACKUP_MENU_ITEM)
     if backup_item is None:
-        candidates = _find_by_text_exact(nodes, "Backup")
-        if len(candidates) == 0:
-            raise AotControllerError("backup_menu_item_not_found")
-        if len(candidates) > 1:
-            raise AotControllerError("backup_menu_item_ambiguous")
-        backup_item = candidates[0]
+        raise AotControllerError("backup_menu_item_not_found")
     before_backup_menu_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
     _tap_xy(*backup_item.bounds.center)
     def _backup_options_open() -> bool:
@@ -1504,14 +1524,7 @@ def backup_restore_data(
         nodes, _RID_FINAL_BACKUP, _RID_FINAL_BACKUP_ALT
     )
     if final_btn is None:
-        candidates = _find_by_text_exact(nodes, "+ BACKUP")
-        if not candidates:
-            candidates = _find_by_text_exact(nodes, "BACKUP")
-        if len(candidates) == 0:
-            raise AotControllerError("final_backup_button_not_found")
-        if len(candidates) > 1:
-            raise AotControllerError("final_backup_button_ambiguous")
-        final_btn = candidates[0]
+        raise AotControllerError("final_backup_button_not_found")
     before_final_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
 
     if deadline is not None and time.time() >= deadline:
@@ -1604,10 +1617,7 @@ def _is_all_selected(nodes: list[UiNode]) -> bool:
     select_all_node = _find_unique_by_resource_ids(
         nodes, _RID_SELECT_ALL, _RID_SELECT_ALL_ALT
     )
-    if select_all_node is None:
-        candidates = _find_by_text_exact(nodes, "Select all")
-        if len(candidates) == 1:
-            select_all_node = candidates[0]
+
     if select_all_node is not None:
         return select_all_node.checked or select_all_node.selected
     return False

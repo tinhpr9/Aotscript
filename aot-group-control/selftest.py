@@ -671,12 +671,38 @@ for bad_xml, reason in (
 ):
     try:
         module.foreground_package = lambda: module.SWIFT_BACKUP_PACKAGE
-        module.dump_ui_xml = lambda value=bad_xml: value
+        module.dump_ui_xml = lambda: bad_xml
         module.open_swift_apps()
     except module.AotControllerError as exc:
         assert str(exc) == reason
     else:
         raise AssertionError(reason + " accepted")
+
+# Structural semantic fallback test for open_swift_apps (regression for m74 without literal 'Apps')
+apps_structural_xml = """<hierarchy><node class='Root' resource-id='root' bounds='[0,0][100,200]'>
+    <node class='com.google.android.material.bottomnavigation.BottomNavigationView' resource-id='org.swiftapps.swiftbackup:id/bottom_navigation' bounds='[0,150][100,200]'>
+        <node class='com.google.android.material.bottomnavigation.BottomNavigationItemView' resource-id='unknown_id_1' text='Trang chủ' clickable='true' enabled='true' bounds='[0,150][25,200]'/>
+        <node class='com.google.android.material.bottomnavigation.BottomNavigationItemView' resource-id='unknown_id_2' text='Ứng dụng' clickable='true' enabled='true' bounds='[25,150][50,200]'/>
+        <node class='com.google.android.material.bottomnavigation.BottomNavigationItemView' resource-id='unknown_id_3' text='Lịch trình' clickable='true' enabled='true' bounds='[50,150][75,200]'/>
+        <node class='com.google.android.material.bottomnavigation.BottomNavigationItemView' resource-id='unknown_id_4' text='Tài khoản' clickable='true' enabled='true' bounds='[75,150][100,200]'/>
+    </node>
+</node></hierarchy>"""
+apps_structural_selected_xml = apps_structural_xml.replace("text='Ứng dụng' clickable='true' enabled='true'", "text='Ứng dụng' clickable='true' enabled='true' selected='true'")
+apps_taps.clear()
+try:
+    module.foreground_package = lambda: module.SWIFT_BACKUP_PACKAGE
+    dumps = iter((apps_structural_xml, apps_structural_xml, apps_structural_selected_xml))
+    module.dump_ui_xml = lambda: next(dumps)
+    module._tap_xy = lambda x, y: apps_taps.append((x, y))
+    module.time.sleep = lambda _seconds: None
+    result = module.open_swift_apps()
+finally:
+    module.foreground_package = old_foreground
+    module.dump_ui_xml = old_dump
+    module._tap_xy = old_tap
+    module.time.sleep = old_sleep
+assert result["executed"] is True and apps_taps == [(37, 175)]
+
 module.foreground_package = old_foreground
 module.dump_ui_xml = old_dump
 

@@ -84,7 +84,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.11.12"
+WORKER_VERSION = "aot-worker-2026.08.11.13"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic")
 
 
@@ -478,7 +478,20 @@ def mark_action_processed(
         if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
             status = "FAILED"
         reason = result.get("safe_reason")
-        if reason not in {"post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain", "restore_data_no_matching_apps", "swift_backup_not_installed"}:
+        if reason not in {
+            "post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain",
+            "restore_data_no_matching_apps", "swift_backup_not_installed",
+            "swift_apps_selector_not_found", "swift_apps_selector_ambiguous",
+            "swift_apps_precondition_changed", "swift_apps_postcondition_failed",
+            "apps_open_postcondition_failed", "swift_backup_not_foreground",
+            "filter_trigger_not_found", "restore_data_label_not_activated",
+            "filter_apply_not_found", "restore_data_filter_not_active_after_apply",
+            "select_all_not_found", "selection_incomplete",
+            "batch_actions_not_found", "batch_actions_selector_ambiguous",
+            "backup_menu_item_not_found", "backup_menu_item_ambiguous",
+            "final_backup_button_not_found", "final_backup_button_ambiguous",
+            "backup_already_running",
+        }:
             reason = None
         results[action_id] = {
             "status": status,
@@ -588,7 +601,20 @@ def _send_batch_ack(
     if action == BACKUP_RESTORE_DATA_ACTION and is_terminal:
         if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
             status = "FAILED"
-        if reason not in {"post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain", "restore_data_no_matching_apps", "swift_backup_not_installed"}:
+        if reason not in {
+            "post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain",
+            "restore_data_no_matching_apps", "swift_backup_not_installed",
+            "swift_apps_selector_not_found", "swift_apps_selector_ambiguous",
+            "swift_apps_precondition_changed", "swift_apps_postcondition_failed",
+            "apps_open_postcondition_failed", "swift_backup_not_foreground",
+            "filter_trigger_not_found", "restore_data_label_not_activated",
+            "filter_apply_not_found", "restore_data_filter_not_active_after_apply",
+            "select_all_not_found", "selection_incomplete",
+            "batch_actions_not_found", "batch_actions_selector_ambiguous",
+            "backup_menu_item_not_found", "backup_menu_item_ambiguous",
+            "final_backup_button_not_found", "final_backup_button_ambiguous",
+            "backup_already_running",
+        }:
             reason = None
 
     payload = {
