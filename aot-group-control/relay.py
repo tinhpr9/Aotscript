@@ -584,6 +584,13 @@ def _send_batch_ack(
     reason: str | None = None,
     **extra,
 ) -> None:
+    is_terminal = executed or status in {"TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}
+    if action == BACKUP_RESTORE_DATA_ACTION and is_terminal:
+        if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
+            status = "FAILED"
+        if reason not in {"post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain", "restore_data_no_matching_apps", "swift_backup_not_installed"}:
+            reason = None
+
     payload = {
         "protocol": HUB_PROTOCOL_VERSION,
         "device_id": device_id,
@@ -766,8 +773,10 @@ def _handle_backup_restore_data(
     """Handle BACKUP_RESTORE_DATA with monotonic per-stage ACKs.
 
     Exactly-once guarantee: action_id is marked processed immediately after
-    ACCEPTED ACK.  If the process restarts, the next delivery returns DUPLICATE
-    and the hub knows the final tap may have occurred (safe, idempotent).
+    ACCEPTED ACK. If the process restarts, cached results (including terminal
+    failures) are replayed. The next delivery returns DUPLICATE as a fallback
+    only when no cached result exists, and the hub knows the final tap may have
+    occurred (safe, idempotent).
     Only BACKUP_STARTED is emitted after the irreversible tap.
     """
     if (
@@ -778,20 +787,6 @@ def _handle_backup_restore_data(
         return True
     action_id = normalize_action_id(message.get("action_id"))
     if not action_id:
-        return True
-    try:
-        expires_at = int(message.get("expires_at") or 0)
-    except (TypeError, ValueError):
-        return True
-    if expires_at <= int(time.time() * 1000):
-        _send_batch_ack(
-            cfg,
-            device_id=local_id,
-            action_id=action_id,
-            action=BACKUP_RESTORE_DATA_ACTION,
-            status="TIMEOUT",
-            executed=False,
-        )
         return True
     if action_already_processed(state, action_id):
         action_results = state.get("action_results")
@@ -818,8 +813,23 @@ def _handle_backup_restore_data(
                 executed=False,
             )
         return True
-    # Mark processed immediately so a restart returns DUPLICATE instead of
-    # re-executing the full chain (including the irreversible final tap).
+    try:
+        expires_at = int(message.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return True
+    if expires_at <= int(time.time() * 1000):
+        _send_batch_ack(
+            cfg,
+            device_id=local_id,
+            action_id=action_id,
+            action=BACKUP_RESTORE_DATA_ACTION,
+            status="TIMEOUT",
+            executed=False,
+        )
+        return True
+    # Mark processed immediately so a restart falls back to DUPLICATE if no
+    # cached result exists, instead of re-executing the full chain (including
+    # the irreversible final tap).
     mark_action_processed(state, action_id)
     _send_batch_ack(
         cfg,

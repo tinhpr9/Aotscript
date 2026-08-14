@@ -18,11 +18,13 @@ with tempfile.TemporaryDirectory() as folder:
         assert module._handle_batch_action({}, state, local_id="m301", message=message)
         assert [item["status"] for item in sent] == ["ACCEPTED", "OPENED"]
         assert all(item["device_id"] == "m301" and "session_id" not in item for item in sent)
-        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=message)
+        sent.clear()
+        module._handle_batch_action({}, state, local_id="m301", message=message)
         assert sent[-1]["status"] == "DUPLICATE" and sent[-1]["executed"] is False
         apps = dict(message, action_id="action-2", action="OPEN_SWIFT_APPS")
         module.controller.open_swift_apps = lambda: {"executed": True}
-        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=apps)
+        sent.clear()
+        module._handle_batch_action({}, state, local_id="m301", message=apps)
         assert [item["status"] for item in sent] == ["ACCEPTED", "APPS_OPENED"]
 
         # BACKUP_RESTORE_DATA: complete stage sequence
@@ -34,7 +36,8 @@ with tempfile.TemporaryDirectory() as folder:
         module.controller.backup_restore_data = _fake_backup_restore_data
         module._open_swift_backup = lambda: True
         brd = dict(message, action_id="action-brd-1", action="BACKUP_RESTORE_DATA")
-        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd)
+        sent.clear()
+        module._handle_batch_action({}, state, local_id="m301", message=brd)
         statuses = [item["status"] for item in sent]
         assert statuses[0] == "ACCEPTED", statuses
         assert "SWIFT_OPENED" in statuses, statuses
@@ -46,39 +49,71 @@ with tempfile.TemporaryDirectory() as folder:
         assert sent[-1]["executed"] is True
 
         # BACKUP_RESTORE_DATA duplicate protection
-        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd)
+        sent.clear()
+        module._handle_batch_action({}, state, local_id="m301", message=brd)
         assert sent[-1]["status"] == "BACKUP_STARTED"
         assert sent[-1]["executed"] is True
 
         # BACKUP_RESTORE_DATA failure path
+        fail_calls = [0]
         def _fail_backup(*_a, **_kw):
+            fail_calls[0] += 1
             raise module.controller.AotControllerError("restore_data_no_matching_apps")
         module.controller.backup_restore_data = _fail_backup
         brd2 = dict(message, action_id="action-brd-2", action="BACKUP_RESTORE_DATA")
-        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd2)
-        assert sent[-1]["status"] == "FAILED"
-        assert sent[-1]["executed"] is False
-        assert "restore_data_no_matching_apps" in sent[-1].get("reason", "")
 
-        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd2)
-        assert sent[-1]["status"] == "FAILED", f"Expected FAILED on redelivery, got {sent[-1]['status']}"
-        assert sent[-1]["executed"] is False
+        sent.clear()
+        module._handle_batch_action({}, state, local_id="m301", message=brd2)
+        initial_ack = sent[-1].copy()
+        assert initial_ack["status"] == "FAILED"
+        assert initial_ack["executed"] is False
+        assert "restore_data_no_matching_apps" in initial_ack.get("reason", "")
+
+        module._save_state(state)
+        state2 = module._load_state()
+        sent.clear()
+
+        # Test redelivery when expired
+        brd2_expired = dict(brd2, expires_at=int(time.time()*1000)-1)
+        module._handle_batch_action({}, state2, local_id="m301", message=brd2_expired)
+        redelivered_ack = sent[-1]
+        assert redelivered_ack["status"] == "FAILED", f"Expected FAILED on redelivery, got {redelivered_ack['status']}"
+        assert redelivered_ack["executed"] is False
+        for field in ("status", "executed", "reason", "app_count", "selected_count"):
+            assert redelivered_ack.get(field) == initial_ack.get(field)
+        assert fail_calls[0] == 1
 
         # BACKUP_RESTORE_DATA failure path (not installed)
+        not_installed_calls = [0]
         def _fail_backup_not_installed(*_a, **_kw):
+            not_installed_calls[0] += 1
             raise module.controller.AotControllerError("swift_backup_not_installed")
         module.controller.backup_restore_data = _fail_backup_not_installed
         brd3 = dict(message, action_id="action-brd-3", action="BACKUP_RESTORE_DATA")
-        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd3)
-        assert sent[-1]["status"] == "FAILED_NOT_INSTALLED"
-        assert sent[-1]["executed"] is False
 
-        sent.clear(); module._handle_batch_action({}, state, local_id="m301", message=brd3)
-        assert sent[-1]["status"] == "FAILED_NOT_INSTALLED", f"Expected FAILED_NOT_INSTALLED on redelivery, got {sent[-1]['status']}"
-        assert sent[-1]["executed"] is False
+        sent.clear()
+        module._handle_batch_action({}, state, local_id="m301", message=brd3)
+        initial_ack3 = sent[-1].copy()
+        assert initial_ack3["status"] == "FAILED_NOT_INSTALLED"
+        assert initial_ack3["executed"] is False
+
+        module._save_state(state)
+        state3 = module._load_state()
+        sent.clear()
+
+        brd3_expired = dict(brd3, expires_at=int(time.time()*1000)-1)
+        module._handle_batch_action({}, state3, local_id="m301", message=brd3_expired)
+        redelivered_ack3 = sent[-1]
+        assert redelivered_ack3["status"] == "FAILED_NOT_INSTALLED", f"Expected FAILED_NOT_INSTALLED on redelivery, got {redelivered_ack3['status']}"
+        assert redelivered_ack3["executed"] is False
+        for field in ("status", "executed", "reason", "app_count", "selected_count"):
+            assert redelivered_ack3.get(field) == initial_ack3.get(field)
+        assert not_installed_calls[0] == 1
+
         # BACKUP_RESTORE_DATA expired TTL
         brd_exp = dict(message, action_id="action-brd-exp", action="BACKUP_RESTORE_DATA", expires_at=int(time.time()*1000)-1)
-        sent.clear(); module._handle_backup_restore_data({}, state, local_id="m301", message=brd_exp)
+        sent.clear()
+        module._handle_backup_restore_data({}, state, local_id="m301", message=brd_exp)
         assert sent[-1]["status"] == "TIMEOUT"
     finally:
         module._send_ack, module._open_swift_backup, module.controller.open_swift_apps = old_ack, old_open, old_apps
