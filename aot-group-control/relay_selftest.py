@@ -3,7 +3,7 @@ import importlib.util, pathlib, sys, tempfile, time
 root = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("relay", root / "relay.py")
 module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
-assert module.WORKER_VERSION == "aot-worker-2026.08.14.01"
+assert module.WORKER_VERSION == "aot-worker-2026.08.11.13"
 assert module.websocket_url("https://example.test/report", device_id="m301") == "wss://example.test/aot/control/ws?device_id=m301"
 assert module.build_parser().parse_args(["fleet"]).command == "fleet"
 assert "backup_restore_data_semantic" in module.WORKER_CAPABILITIES
@@ -109,6 +109,19 @@ with tempfile.TemporaryDirectory() as folder:
         for field in ("status", "executed", "reason", "app_count", "selected_count"):
             assert redelivered_ack3.get(field) == initial_ack3.get(field)
         assert not_installed_calls[0] == 1
+
+        # BACKUP_RESTORE_DATA exact root cause regression test
+        def _fail_backup_selector(*_a, **_kw):
+            raise module.controller.AotControllerError("swift_apps_selector_not_found")
+        module.controller.backup_restore_data = _fail_backup_selector
+        brd_selector = dict(message, action_id="action-brd-selector", action="BACKUP_RESTORE_DATA")
+        
+        sent.clear()
+        module._handle_batch_action({}, state, local_id="m301", message=brd_selector)
+        selector_ack = sent[-1]
+        assert selector_ack["status"] == "FAILED"
+        assert selector_ack["executed"] is False
+        assert selector_ack.get("reason") == "swift_apps_selector_not_found", f"Expected exact safe reason, got {selector_ack.get('reason')}"
 
         # BACKUP_RESTORE_DATA expired TTL
         brd_exp = dict(message, action_id="action-brd-exp", action="BACKUP_RESTORE_DATA", expires_at=int(time.time()*1000)-1)
