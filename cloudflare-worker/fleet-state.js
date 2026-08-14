@@ -3056,13 +3056,13 @@ export class FleetState
       return response;
     }
     const batch = record.last_batch, device = batch?.devices?.[id];
-    const allowed = new Set(["ACCEPTED", "OPENED", "APPS_OPENED", "SWIFT_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED", "BACKUP_STARTED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "DUPLICATE"]);
+    const allowed = new Set(["ACCEPTED", "OPENED", "APPS_OPENED", "SWIFT_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED", "RESTORE_STARTED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "DUPLICATE"]);
     if (!batch || batch.action_id !== actionId || batch.action !== action || !device || !allowed.has(body.status)) return json({ ok: false, error: "invalid_batch_ack" }, 400);
     const terminal = new Set(["FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE"]);
     if (action === AOT_BATCH_ACTION) terminal.add("OPENED");
     if (action === AOT_APPS_ACTION) terminal.add("APPS_OPENED");
-    if (action === AOT_BACKUP_RESTORE_DATA_ACTION) terminal.add("BACKUP_STARTED");
-    const ranks = { "SENT": 0, "ACCEPTED": 1, "OPENED": 2, "SWIFT_OPENED": 2, "APPS_OPENED": 3, "FILTERED": 4, "SELECTED": 5, "OPTIONS_VERIFIED": 6, "BACKUP_STARTED": 7, "FAILED_NOT_INSTALLED": 8, "FAILED": 8, "TIMEOUT": 8, "SKIPPED_OFFLINE": 8 };
+    if (action === AOT_BACKUP_RESTORE_DATA_ACTION) terminal.add("RESTORE_STARTED");
+    const ranks = { "SENT": 0, "ACCEPTED": 1, "OPENED": 2, "SWIFT_OPENED": 2, "APPS_OPENED": 3, "FILTERED": 4, "SELECTED": 5, "OPTIONS_VERIFIED": 6, "RESTORE_STARTED": 7, "FAILED_NOT_INSTALLED": 8, "FAILED": 8, "TIMEOUT": 8, "SKIPPED_OFFLINE": 8 };
     if (!terminal.has(device.status) && body.status !== "DUPLICATE") {
       const next = Date.now() >= batch.expires_at ? "TIMEOUT" : body.status;
       if ((ranks[next] || 0) > (ranks[device.status] || 0)) {

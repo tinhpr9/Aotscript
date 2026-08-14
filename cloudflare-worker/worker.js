@@ -881,7 +881,7 @@ async function handleAotControlAck(
               "FILTERED",
               "SELECTED",
               "OPTIONS_VERIFIED",
-              "BACKUP_STARTED",
+              "RESTORE_STARTED",
               "FAILED_NOT_INSTALLED",
               "FAILED",
               "TIMEOUT",

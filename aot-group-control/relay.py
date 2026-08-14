@@ -475,7 +475,7 @@ def mark_action_processed(
             results = {}
         # Sanitize to fixed schema and allowlisted status/reason
         status = result.get("status")
-        if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
+        if status not in {"RESTORE_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
             status = "FAILED"
         reason = result.get("safe_reason")
         if reason not in {
@@ -599,7 +599,7 @@ def _send_batch_ack(
 ) -> None:
     is_terminal = executed or status in {"TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}
     if action == BACKUP_RESTORE_DATA_ACTION and is_terminal:
-        if status not in {"BACKUP_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
+        if status not in {"RESTORE_STARTED", "TIMEOUT", "FAILED", "FAILED_NOT_INSTALLED"}:
             status = "FAILED"
         if reason not in {
             "post_tap_start_unconfirmed", "post_tap_verification_failed", "final_tap_delivery_uncertain",
@@ -803,7 +803,7 @@ def _handle_backup_restore_data(
     failures) are replayed. The next delivery returns DUPLICATE as a fallback
     only when no cached result exists, and the hub knows the final tap may have
     occurred (safe, idempotent).
-    Only BACKUP_STARTED is emitted after the irreversible tap.
+    Only RESTORE_STARTED is emitted after the irreversible tap.
     """
     if (
         message.get("protocol") not in {HUB_PROTOCOL_VERSION, "phase4-1"}
@@ -823,7 +823,7 @@ def _handle_backup_restore_data(
                 device_id=local_id,
                 action_id=action_id,
                 action=BACKUP_RESTORE_DATA_ACTION,
-                status=cached_result.get("status", "BACKUP_STARTED"),
+                status=cached_result.get("status", "RESTORE_STARTED"),
                 executed=bool(cached_result.get("executed")),
                 reason=cached_result.get("safe_reason"),
                 app_count=cached_result.get("app_count"),
@@ -913,7 +913,7 @@ def _handle_backup_restore_data(
         )
         return True
 
-    if result.get("status") != "BACKUP_STARTED":
+    if result.get("status") != "RESTORE_STARTED":
         mark_action_processed(state, action_id, result)
         _send_batch_ack(
             cfg,
@@ -934,7 +934,7 @@ def _handle_backup_restore_data(
         device_id=local_id,
         action_id=action_id,
         action=BACKUP_RESTORE_DATA_ACTION,
-        status="BACKUP_STARTED",
+        status="RESTORE_STARTED",
         executed=True,
         app_count=result.get("app_count"),
         selected_count=result.get("selected_count"),

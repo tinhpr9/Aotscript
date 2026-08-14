@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory() as folder:
             for s in ("APPS_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED"):
                 if stage_cb:
                     stage_cb(s)
-            return {"action": "BACKUP_RESTORE_DATA", "executed": True, "status": "BACKUP_STARTED", "app_count": 3, "selected_count": 3}
+            return {"action": "BACKUP_RESTORE_DATA", "executed": True, "status": "RESTORE_STARTED", "app_count": 3, "selected_count": 3}
         module.controller.backup_restore_data = _fake_backup_restore_data
         module._open_swift_backup = lambda: True
         brd = dict(message, action_id="action-brd-1", action="BACKUP_RESTORE_DATA")
@@ -45,13 +45,13 @@ with tempfile.TemporaryDirectory() as folder:
         assert "FILTERED" in statuses, statuses
         assert "SELECTED" in statuses, statuses
         assert "OPTIONS_VERIFIED" in statuses, statuses
-        assert statuses[-1] == "BACKUP_STARTED", statuses
+        assert statuses[-1] == "RESTORE_STARTED", statuses
         assert sent[-1]["executed"] is True
 
         # BACKUP_RESTORE_DATA duplicate protection
         sent.clear()
         module._handle_batch_action({}, state, local_id="m301", message=brd)
-        assert sent[-1]["status"] == "BACKUP_STARTED"
+        assert sent[-1]["status"] == "RESTORE_STARTED"
         assert sent[-1]["executed"] is True
 
         # BACKUP_RESTORE_DATA failure path
