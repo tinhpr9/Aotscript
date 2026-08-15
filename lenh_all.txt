@@ -7,3 +7,8 @@ UPDATE_SOLVER_SECURE
 # telegram_expires_at=1786815101124
 # telegram_command_id=1786814801124-d181a01e
 UPDATE_SOLVER_SECURE
+
+# telegram_target_ids=m74,m88,m116,m117,m118,m153,m154
+# telegram_expires_at=1786901270797
+# telegram_command_id=1786814870797-5679ae95
+UPDATE_SOLVER_SECURE
