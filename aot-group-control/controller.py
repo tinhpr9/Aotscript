@@ -1376,6 +1376,11 @@ def backup_restore_data(
                 _save_unknown_debug("final_restore_button_not_found")
                 raise AotControllerError("final_restore_button_not_found")
             
+            if _find_unique_by_resource_ids(nodes, _RID_BACKUP_PROGRESS, _RID_BACKUP_RUNNING):
+                raise AotControllerError("active_backup_found")
+            if _find_text("Backing up...", nodes) or _find_text("Backup progress", nodes) or _find_text("Cancel", nodes):
+                raise AotControllerError("active_backup_found")
+
             before_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, nodes)
             
             def _restore_started() -> bool:
@@ -1469,14 +1474,18 @@ def backup_restore_data(
                     or _clean(n.content_description) == "restore_data"
                 )
             ]
-            other_checked = [
-                n for n in nodes
-                if n.checked and (
-                    # The node's primary label identity must not be RESTORE_DATA.
-                    # Use the first non-empty of text/description as the label.
-                    _clean(n.text or n.content_description) not in ("restore_data", "")
-                )
-            ]
+            other_checked = []
+            has_unnamed = False
+            for n in nodes:
+                if n.checked:
+                    lbl = _clean(n.text or n.content_description)
+                    if lbl == "":
+                        has_unnamed = True
+                    elif lbl != "restore_data":
+                        other_checked.append(n)
+            if has_unnamed:
+                _save_unknown_debug("unnamed_checked_label")
+                raise AotControllerError("unnamed_checked_label")
             if other_checked:
                 # A stale/unrelated label is checked → fail-closed.
                 _save_unknown_debug("stale_label_checked")
@@ -1530,6 +1539,8 @@ def backup_restore_data(
 
             b = _smart_find("Batch actions", nodes)
             if b:
+                if sel != tot:
+                    raise AotControllerError("selected_count_mismatch")
                 unknown = 0
                 _cb("SELECTED")
                 _verified_selection = True

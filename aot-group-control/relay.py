@@ -99,7 +99,8 @@ ALLOWED_SAFE_REASONS = {
     "unknown_ui_state", "state_machine_timeout", "screencap_failed",
     "final_restore_button_not_found", "screencap_resolution_mismatch",
     "ui_bounds_exceed_screencap", "screencap_unsupported_format",
-    "screencap_invalid_format",
+    "screencap_invalid_format", "active_backup_found", "unnamed_checked_label",
+    "selected_count_mismatch",
 }
 SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
