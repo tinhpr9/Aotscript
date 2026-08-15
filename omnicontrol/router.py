@@ -170,10 +170,18 @@ class CommandRouter:
         elif cmd_def.name == "update":
             if group:
                 # Update stable for group
-                return self.client.control("update_stable")
+                state = self.client.get_state().get("state", {})
+                devices = state.get("devices", [])
+                target_ids = [
+                    d["device_id"] for d in devices
+                    if d.get("device_group") == group and d.get("online")
+                ]
+                if not target_ids:
+                    return {"message": f"No online devices found in group {group}."}
+                return self.client.control("update_stable", target_device_ids=target_ids)
             else:
-                # Update canary for device (if possible, hub currently updates 2 random devices for canary)
-                return self.client.control("update_canary")
+                # Update canary for device
+                return self.client.control("update_canary", target_device_ids=[device])
                 
         elif cmd_def.name == "logs":
             raise RouterError("Logs endpoint not implemented in Hub API.")

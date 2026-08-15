@@ -46,40 +46,29 @@ def check_auth(caller: CallerIdentity, config: OmniConfig) -> AuthResult:
 
     Checks are performed in order; the first failure is returned.
     """
-    # Gateway enabled?
-    if caller.gateway == "discord" and not config.discord_gateway_enabled:
-        return AuthResult.GATEWAY_DISABLED
-    if caller.gateway == "telegram" and not config.telegram_gateway_enabled:
+    if caller.gateway not in ("discord", "telegram"):
         return AuthResult.GATEWAY_DISABLED
 
-    # Guild allow-list (Discord only)
     if caller.gateway == "discord":
-        if (
-            config.discord_allowed_guild_ids
-            and caller.guild_id not in config.discord_allowed_guild_ids
-        ):
+        if not config.discord_gateway_enabled:
+            return AuthResult.GATEWAY_DISABLED
+        if not config.discord_allowed_guild_ids:
             return AuthResult.UNAUTHORIZED_GUILD
-
-        if (
-            config.discord_allowed_channel_ids
-            and caller.channel_id not in config.discord_allowed_channel_ids
-        ):
+        if caller.guild_id not in config.discord_allowed_guild_ids:
+            return AuthResult.UNAUTHORIZED_GUILD
+        if config.discord_allowed_channel_ids and caller.channel_id not in config.discord_allowed_channel_ids:
             return AuthResult.UNAUTHORIZED_CHANNEL
-
-    # Telegram: check admin user ID
-    if caller.gateway == "telegram":
-        if (
-            config.telegram_admin_user_id
-            and str(caller.user_id) != str(config.telegram_admin_user_id)
-        ):
+        if not config.discord_allowed_user_ids:
+            return AuthResult.UNAUTHORIZED_USER
+        if caller.user_id not in config.discord_allowed_user_ids:
             return AuthResult.UNAUTHORIZED_USER
 
-    # User allow-list (Discord)
-    if caller.gateway == "discord":
-        if (
-            config.discord_allowed_user_ids
-            and caller.user_id not in config.discord_allowed_user_ids
-        ):
+    elif caller.gateway == "telegram":
+        if not config.telegram_gateway_enabled:
+            return AuthResult.GATEWAY_DISABLED
+        if not config.telegram_admin_user_id:
+            return AuthResult.UNAUTHORIZED_USER
+        if str(caller.user_id) != str(config.telegram_admin_user_id):
             return AuthResult.UNAUTHORIZED_USER
 
     return AuthResult.OK

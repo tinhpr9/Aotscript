@@ -424,6 +424,12 @@ export class FleetState
       key,
       record
     );
+    const fleet = await this.readFleet();
+    if (fleet.devices[deviceId] && fleet.devices[deviceId].device_group !== record.device_group) {
+      fleet.devices[deviceId].device_group = record.device_group;
+      await this.writeFleet(fleet);
+      await this.broadcastFleetState();
+    }
     return json({
       ok: true,
       device_id: deviceId,
@@ -2926,6 +2932,7 @@ export class FleetState
   fleetMembers(record) {
     return Object.keys(record.devices || {}).map((device_id) => ({
       device_id, role: "device",
+      device_group: record.devices[device_id]?.device_group || "",
       worker_version: record.devices[device_id]?.worker_version || "",
       capabilities: record.devices[device_id]?.capabilities || [],
     }));
@@ -3095,7 +3102,7 @@ export class FleetState
         try { socket.close(4002, "identity_changed"); } catch (error) {}
       }
     }
-    record.devices[deviceId] = { ...(record.devices[deviceId] || {}), device_id: deviceId, joined_at: record.devices[deviceId]?.joined_at || Date.now() };
+    record.devices[deviceId] = { ...(record.devices[deviceId] || {}), device_id: deviceId, device_group: String(body?.device_group || record.devices[deviceId]?.device_group || "").toUpperCase(), joined_at: record.devices[deviceId]?.joined_at || Date.now() };
     await this.writeFleet(record);
     if (operation === "verify") {
       const online = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", deviceId)).length > 0;

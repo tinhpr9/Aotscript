@@ -152,5 +152,14 @@ updateResp = await fleet.startWorkerUpdate("test_session_healthy_pending", sReco
 updateBody = await updateResp.json();
 if (updateBody.error !== "worker_update_in_progress") throw new Error("Active HEALTHY rollout with pending groups incorrectly aborted");
 
+// Test device_group propagation to getFleetHubState
+const groupRecord = await fleet.readFleet();
+groupRecord.devices["MARMOT-01"] = { device_id: "MARMOT-01", device_group: "MARMOT" };
+await fleet.writeFleet(groupRecord);
+const stateResp = await fleet.getFleetHubState();
+const stateBody = await stateResp.json();
+const marmotDevice = stateBody.state.devices.find(d => d.device_id === "MARMOT-01");
+if (!marmotDevice || marmotDevice.device_group !== "MARMOT") throw new Error("device_group not exposed in getFleetHubState");
+
 console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");

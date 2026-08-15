@@ -45,6 +45,22 @@ class DiscordGateway:
         )
 
         try:
+            from omnicontrol.commands import COMMAND_REGISTRY
+            cmd_def = COMMAND_REGISTRY.get(command_name)
+            if not cmd_def:
+                return self._format_error("Unknown command")
+                
+            if cmd_def.destructive:
+                return {
+                    "content": f"⚠️ **Confirmation Required**\nAre you sure you want to execute `{command_name} {' '.join(args)}`?",
+                    "components": [
+                        {"type": 1, "components": [
+                            {"type": 2, "style": 3, "label": "Approve", "custom_id": f"approve"},
+                            {"type": 2, "style": 4, "label": "Cancel", "custom_id": "cancel"}
+                        ]}
+                    ]
+                }
+
             # Let the router do the validation and routing
             result = self.router.dispatch(req)
             return self._format_success(result)
@@ -65,10 +81,20 @@ class DiscordGateway:
         if action == "cancel":
             return {"content": "❌ Action cancelled."}
         elif action == "approve":
-            # Reconstruct the original request and dispatch it,
-            # bypassing the confirmation step (since it's now confirmed).
-            # Implementation details depend on the Discord library used.
-            return {"content": "✅ Action approved and dispatched."}
+            try:
+                caller = self._extract_identity(interaction)
+                req = RouteRequest(
+                    caller=caller,
+                    command_name=state.get("command_name", ""),
+                    args=state.get("args", [])
+                )
+                result = self.router.dispatch(req)
+                return self._format_success(result)
+            except RouterError as e:
+                return self._format_error(str(e))
+            except Exception as e:
+                logger.exception("Unexpected error in Discord gateway approve")
+                return self._format_error("Internal server error")
         
         return self._format_error(f"Unknown button action: {action}")
 

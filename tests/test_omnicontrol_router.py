@@ -129,5 +129,27 @@ class TestOmniControlRouter(unittest.TestCase):
         self.mock_client.control.assert_called_once_with("open_swift_backup", target_device_ids=["m1"])
 
 
+    def test_update_canary_device(self):
+        self.mock_client.control.return_value = {"ok": True}
+        req = RouteRequest(caller=self.valid_caller, command_name="update", args=["m123"])
+        res = self.router.dispatch(req)
+        self.assertTrue(res.get("ok"))
+        self.mock_client.control.assert_called_once_with("update_canary", target_device_ids=["m123"])
+
+    def test_update_stable_group(self):
+        self.mock_client.get_state.return_value = {
+            "state": {
+                "devices": [
+                    {"device_id": "m1", "device_group": "MARMOT", "online": True},
+                    {"device_id": "m2", "device_group": "NOVA", "online": True},
+                ]
+            }
+        }
+        self.mock_client.control.return_value = {"ok": True}
+        req = RouteRequest(caller=self.valid_caller, command_name="update", args=["MARMOT"])
+        res = self.router.dispatch(req)
+        self.assertTrue(res.get("ok"))
+        self.mock_client.control.assert_called_once_with("update_stable", target_device_ids=["m1"])
+
 if __name__ == "__main__":
     unittest.main()

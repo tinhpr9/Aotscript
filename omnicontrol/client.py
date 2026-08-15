@@ -57,12 +57,12 @@ class HubClient:
             raise HubApiError(f"Connection failed: {e.reason}")
 
     def get_state(self) -> Dict[str, Any]:
-        """Fetch the current fleet state (/aot/hub/api/state)."""
-        return self._request("/aot/hub/api/state")
+        """Fetch the current fleet state (/aot/hub/state)."""
+        return self._request("/aot/hub/state")
 
     def control(self, kind: str, target_device_ids: List[str] | None = None) -> Dict[str, Any]:
-        """Send a control command to the hub (/aot/hub/api/control)."""
-        payload = {"kind": kind}
+        """Send a control command to the hub (/aot/hub/control)."""
+        payload = {"kind": kind, "protocol": "fleet-batch-v1"}
         if target_device_ids is not None:
             payload["target_device_ids"] = target_device_ids
-        return self._request("/aot/hub/api/control", method="POST", payload=payload)
+        return self._request("/aot/hub/control", method="POST", payload=payload)
