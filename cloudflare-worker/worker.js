@@ -2052,6 +2052,15 @@ function normalizeAotHubControl(body) {
         return null;
       }
       control.target_device_ids = body.target_device_ids.map(String);
+    } else if (["update_canary", "update_stable"].includes(kind)) {
+      if (Array.isArray(body.target_device_ids)) {
+        if (body.target_device_ids.length > AOT_MAX_TARGETS) {
+          return null;
+        }
+        if (body.target_device_ids.length > 0) {
+          control.target_device_ids = body.target_device_ids.map(String);
+        }
+      }
     }
     return control;
   }

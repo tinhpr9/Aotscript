@@ -172,5 +172,46 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
   throw new Error("device_group was overwritten by a heartbeat without device_group");
 }
 
+// Test explicit targets
+sRecord.last_update = null;
+fleet.resolveWorkerRelease = async () => ({ version: "2026.08.13.1", hash: "mock" });
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.14.03", device_ids: [ids[0], ids[1]] };
+sRecord.devices = sRecord.devices || {};
+sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
+sRecord.followers = sRecord.followers || {};
+sRecord.followers[ids[2]] = true;
+await store.set("aot_session:test_explicit_targets", sRecord);
+
+// Canary with explicit targets (keeps exactly the target)
+let explicitCanaryResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "canary", [ids[0]]);
+let explicitCanaryBody = await explicitCanaryResp.json();
+if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_ids.length !== 1 || explicitCanaryBody.update.selected_device_ids[0] !== ids[0]) {
+  throw new Error("Explicit canary update did not select exactly the targeted device");
+}
+await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.14.03", device_ids: [ids[0], ids[1]] };
+await store.set("aot_session:test_explicit_targets", sRecord);
+
+// Stable with explicit targets (keeps exactly the targets)
+let explicitStableResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "stable", [ids[1], ids[2]]);
+let explicitStableBody = await explicitStableResp.json();
+if (explicitStableBody.ok !== true || explicitStableBody.update.devices.length !== 2) {
+  console.log("STABLE BODY:", JSON.stringify(explicitStableBody, null, 2));
+  throw new Error("Explicit stable update did not select exactly the targeted devices");
+}
+const selectedIds = explicitStableBody.update.devices.map(d => d.device_id).sort();
+const expectedIds = [ids[1], ids[2]].sort();
+if (selectedIds.join(",") !== expectedIds.join(",")) {
+  throw new Error("Explicit stable update selected wrong devices: " + selectedIds.join(","));
+}
+await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
+
+// Invalid/missing targets fail closed
+let invalidTargetResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "canary", ["INVALID-DEVICE"]);
+let invalidTargetBody = await invalidTargetResp.json();
+if (invalidTargetBody.ok === true || invalidTargetBody.error !== "invalid_explicit_targets") {
+  throw new Error("Invalid explicit target did not fail closed");
+}
+
 console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");

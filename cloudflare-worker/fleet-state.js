@@ -1736,7 +1736,7 @@ export class FleetState
     await this.broadcastAotHubState(sessionId);
   }
 
-  async startWorkerUpdate(sessionId, record, channel) {
+  async startWorkerUpdate(sessionId, record, channel, explicitTargets = null) {
     if (!new Set(["canary", "stable"]).has(channel)) {
       return json({ ok: false, error: "invalid_update_channel" }, 400);
     }
@@ -1787,7 +1787,15 @@ export class FleetState
     } catch (error) {
       return json({ ok: false, error: "release_resolution_failed", message: String(error.message || error).slice(0, 160) }, 503);
     }
-    const all = this.aotMembers(record);
+    let all = this.aotMembers(record);
+    const hasExplicitTargets = Array.isArray(explicitTargets) && explicitTargets.length > 0;
+    if (hasExplicitTargets) {
+      const targetSet = new Set(explicitTargets);
+      all = all.filter((m) => targetSet.has(m.device_id));
+      if (all.length === 0) {
+        return json({ ok: false, error: "invalid_explicit_targets", message: "Các thiết bị chỉ định không tồn tại." }, 400);
+      }
+    }
     const connected = (member) => this.ctx.getWebSockets(
       this.aotSocketTag(member.role, sessionId, member.device_id)
     ).length > 0;
@@ -1795,50 +1803,61 @@ export class FleetState
     let selected;
     let alreadyHealthy = new Set();
     if (channel === "canary") {
-      if (onlineMembers.length < 2) {
-        return json({
-          ok: false,
-          error: "canary_requires_two_online",
-          message: "Cần ít nhất 2 máy ONLINE để cập nhật 2 máy thử.",
-          online_count: onlineMembers.length,
-        }, 409);
-      }
-      const previousDevices = {
-        ...(record.update_device_status || {}),
-        ...(record.last_update?.devices || {}),
-      };
-      const previousTrialIds = new Set(
-        record.canary_release?.version === AOT_WORKER_VERSION
-          && Array.isArray(record.canary_release?.device_ids)
-          ? record.canary_release.device_ids.map(String)
-          : []
-      );
-      const ranked = onlineMembers.map((member) => ({
-        ...member,
-        failed: previousDevices[member.device_id]?.status === "FAILED",
-        healthy: previousDevices[member.device_id]?.status === "HEALTHY"
-          && previousDevices[member.device_id]?.worker_version === AOT_WORKER_VERSION,
-        previous_trial: previousTrialIds.has(member.device_id),
-        previous_updated_at: Number(previousDevices[member.device_id]?.updated_at || 0),
-        tie_breaker: crypto.randomUUID(),
-      }));
-      const retainedHealthy = ranked.filter((item) => item.healthy && item.previous_trial)
-        .sort((left, right) => right.previous_updated_at - left.previous_updated_at)
-        .slice(0, 2);
-      const retainedIds = new Set(retainedHealthy.map((item) => item.device_id));
-      const candidates = ranked.filter((item) => !retainedIds.has(item.device_id) && !item.healthy)
-        .sort((left, right) =>
-        Number(right.failed) - Number(left.failed)
-        || right.previous_updated_at - left.previous_updated_at
-        || left.tie_breaker.localeCompare(right.tie_breaker)
-      );
-      selected = [...retainedHealthy, ...candidates].slice(0, 2)
-        .map(({ failed, healthy, previous_trial, previous_updated_at, tie_breaker, ...member }) => member);
-      if (selected.length < 2) {
-        return json({
-          ok: false, error: "canary_requires_two_eligible",
-          message: "Cần đủ 2 máy ONLINE chưa lỗi điều kiện cập nhật.",
-        }, 409);
+      if (hasExplicitTargets) {
+        selected = onlineMembers;
+        if (selected.length === 0) {
+          return json({
+            ok: false,
+            error: "canary_explicit_targets_offline",
+            message: "Các máy chỉ định không online.",
+          }, 409);
+        }
+      } else {
+        if (onlineMembers.length < 2) {
+          return json({
+            ok: false,
+            error: "canary_requires_two_online",
+            message: "Cần ít nhất 2 máy ONLINE để cập nhật 2 máy thử.",
+            online_count: onlineMembers.length,
+          }, 409);
+        }
+        const previousDevices = {
+          ...(record.update_device_status || {}),
+          ...(record.last_update?.devices || {}),
+        };
+        const previousTrialIds = new Set(
+          record.canary_release?.version === AOT_WORKER_VERSION
+            && Array.isArray(record.canary_release?.device_ids)
+            ? record.canary_release.device_ids.map(String)
+            : []
+        );
+        const ranked = onlineMembers.map((member) => ({
+          ...member,
+          failed: previousDevices[member.device_id]?.status === "FAILED",
+          healthy: previousDevices[member.device_id]?.status === "HEALTHY"
+            && previousDevices[member.device_id]?.worker_version === AOT_WORKER_VERSION,
+          previous_trial: previousTrialIds.has(member.device_id),
+          previous_updated_at: Number(previousDevices[member.device_id]?.updated_at || 0),
+          tie_breaker: crypto.randomUUID(),
+        }));
+        const retainedHealthy = ranked.filter((item) => item.healthy && item.previous_trial)
+          .sort((left, right) => right.previous_updated_at - left.previous_updated_at)
+          .slice(0, 2);
+        const retainedIds = new Set(retainedHealthy.map((item) => item.device_id));
+        const candidates = ranked.filter((item) => !retainedIds.has(item.device_id) && !item.healthy)
+          .sort((left, right) =>
+          Number(right.failed) - Number(left.failed)
+          || right.previous_updated_at - left.previous_updated_at
+          || left.tie_breaker.localeCompare(right.tie_breaker)
+        );
+        selected = [...retainedHealthy, ...candidates].slice(0, 2)
+          .map(({ failed, healthy, previous_trial, previous_updated_at, tie_breaker, ...member }) => member);
+        if (selected.length < 2) {
+          return json({
+            ok: false, error: "canary_requires_two_eligible",
+            message: "Cần đủ 2 máy ONLINE chưa lỗi điều kiện cập nhật.",
+          }, 409);
+        }
       }
     } else {
       const gate = record.canary_release;
@@ -3041,7 +3060,8 @@ export class FleetState
     if (body.kind === "update_canary" || body.kind === "update_stable") {
       record.followers = Object.fromEntries(this.fleetMembers(record).map((m) => [m.device_id, m]));
       record.reference_device_id = this.fleetMembers(record)[0]?.device_id || null;
-      const response = await this.startWorkerUpdate("fleet", record, body.kind === "update_canary" ? "canary" : "stable");
+      const explicitTargets = Array.isArray(body.target_device_ids) ? body.target_device_ids : null;
+      const response = await this.startWorkerUpdate("fleet", record, body.kind === "update_canary" ? "canary" : "stable", explicitTargets);
       await this.writeFleet(record);
       return response;
     }
