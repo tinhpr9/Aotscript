@@ -26,6 +26,12 @@ assert module.normalize_channel("other") is None
 assert module.DEFAULT_STARTUP_CHANNEL == "stable"
 
 for channel in ("canary", "stable"):
+    transition_manifest = json.loads((HERE / f"worker-manifest-{channel}.json").read_text(encoding="utf-8"))
+    transition_actual = module.validate_manifest(transition_manifest, channel)
+    assert transition_actual["version"] == "aot-worker-2026.08.14.05"
+    assert transition_actual["schema_version"] == 2
+
+for channel in ("canary", "stable"):
     mock_files = []
     for p in ("relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py", "worker_smoke_test.py", "worker-release-schema.json", "msetup_registration.py", "legacy_relay_bridge.py"):
         mock_files.append({"path": p, "sha256": digest(HERE / p), "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/" + p})

@@ -38,9 +38,15 @@ jobs:
           grep -Fq 'WORKER_VERSION = "aot-worker-'"$RELEASE_VERSION"'"' aot-group-control/relay.py
           python3 - "$RELEASE_VERSION" <<'PY'
           import json, pathlib, sys
-          expected = "aot-worker-" + sys.argv[1]
+          release_version = sys.argv[1]
+          expected_transition = "aot-worker-2026.08.14.05"
           for channel in ("canary", "stable"):
-              pass
+              data = json.loads(pathlib.Path(f"aot-group-control/worker-manifest-{channel}.json").read_text())
+              assert data["schema_version"] == 2
+              assert data["version"] == expected_transition
+              assert data["version"] != "aot-worker-" + release_version
+              assert data["channel"] == channel
+              assert data["minimum_bootstrap_version"] == 2
           PY
           python3 -m py_compile aot-group-control/*.py scripts/build-worker-release.py scripts/verify_worker_release.py
           for test in aot-group-control/*selftest.py; do timeout 180 python3 "$test"; done
@@ -123,6 +129,15 @@ jobs:
             python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \
               --commit "$TARGET_COMMIT" --output dist
           fi
+          python3 - "$RELEASE_VERSION" "$TARGET_COMMIT" <<'PY'
+          import json, sys
+          release_version, target_commit = sys.argv[1:3]
+          manifest = json.load(open("dist/worker-manifest.json"))
+          assert manifest["schema_version"] == 3
+          assert manifest["worker_version"] == "aot-worker-" + release_version
+          assert manifest["commit_sha"] == target_commit
+          assert "channel" not in manifest
+          PY
 
       - name: Create or verify draft by ID, then publish by ID
         env:
