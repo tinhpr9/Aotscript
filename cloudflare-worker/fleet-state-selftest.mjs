@@ -175,7 +175,7 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
 // Test explicit targets
 sRecord.last_update = null;
 fleet.resolveWorkerRelease = async () => ({ version: "2026.08.13.1", hash: "mock" });
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.14.03", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.15.01", device_ids: [ids[0], ids[1]] };
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};

@@ -1,0 +1,303 @@
+deploy	Set up job	﻿2026-08-15T18:52:11.0205213Z Current runner version: '2.336.0'
+deploy	Set up job	2026-08-15T18:52:11.0224438Z ##[group]Runner Image Provisioner
+deploy	Set up job	2026-08-15T18:52:11.0225264Z Hosted Compute Agent
+deploy	Set up job	2026-08-15T18:52:11.0225872Z Version: 20260729.566
+deploy	Set up job	2026-08-15T18:52:11.0226428Z Commit: cf7153fe6e25b664e8693c24944bf2b00355d109
+deploy	Set up job	2026-08-15T18:52:11.0227082Z Build Date: 2026-07-29T19:17:02Z
+deploy	Set up job	2026-08-15T18:52:11.0227680Z Worker ID: {0db96fb7-093f-4166-aa65-306f7e027ed4}
+deploy	Set up job	2026-08-15T18:52:11.0228302Z Azure Region: westus3
+deploy	Set up job	2026-08-15T18:52:11.0228830Z ##[endgroup]
+deploy	Set up job	2026-08-15T18:52:11.0230280Z ##[group]Operating System
+deploy	Set up job	2026-08-15T18:52:11.0230840Z Ubuntu
+deploy	Set up job	2026-08-15T18:52:11.0231310Z 24.04.4
+deploy	Set up job	2026-08-15T18:52:11.0231767Z LTS
+deploy	Set up job	2026-08-15T18:52:11.0232262Z ##[endgroup]
+deploy	Set up job	2026-08-15T18:52:11.0232725Z ##[group]Runner Image
+deploy	Set up job	2026-08-15T18:52:11.0233218Z Image: ubuntu-24.04
+deploy	Set up job	2026-08-15T18:52:11.0233748Z Version: 20260810.271.1
+deploy	Set up job	2026-08-15T18:52:11.0234662Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260810.271/images/ubuntu/Ubuntu2404-Readme.md
+deploy	Set up job	2026-08-15T18:52:11.0236086Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260810.271
+deploy	Set up job	2026-08-15T18:52:11.0236972Z ##[endgroup]
+deploy	Set up job	2026-08-15T18:52:11.0237926Z ##[group]GITHUB_TOKEN Permissions
+deploy	Set up job	2026-08-15T18:52:11.0240200Z Contents: read
+deploy	Set up job	2026-08-15T18:52:11.0240747Z Metadata: read
+deploy	Set up job	2026-08-15T18:52:11.0241233Z ##[endgroup]
+deploy	Set up job	2026-08-15T18:52:11.0242976Z Secret source: Actions
+deploy	Set up job	2026-08-15T18:52:11.0243990Z Prepare workflow directory
+deploy	Set up job	2026-08-15T18:52:11.0512879Z Prepare all required actions
+deploy	Set up job	2026-08-15T18:52:11.0571761Z Getting action download info
+deploy	Set up job	2026-08-15T18:52:11.3316355Z Download action repository 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683' (SHA:11bd71901bbe5b1630ceea73d27597364c9af683)
+deploy	Set up job	2026-08-15T18:52:11.5083928Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+deploy	Set up job	2026-08-15T18:52:11.6410356Z Download action repository 'cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd' (SHA:9acf94ace14e7dc412b076f2c5c20b8ce93c79cd)
+deploy	Set up job	2026-08-15T18:52:12.2075242Z Complete job name: deploy
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	﻿2026-08-15T18:52:12.2712963Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2721871Z ##[group]Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2722838Z with:
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2723401Z   persist-credentials: false
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2724045Z   repository: tinhpr9/Aotscript
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2727875Z   token: ***
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2728421Z   ssh-strict: true
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2728933Z   ssh-user: git
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2729435Z   clean: true
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2730180Z   sparse-checkout-cone-mode: true
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2730771Z   fetch-depth: 1
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2731310Z   fetch-tags: false
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2731852Z   show-progress: true
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2732371Z   lfs: false
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2733007Z   submodules: false
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2733522Z   set-safe-directory: true
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.2734235Z ##[endgroup]
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3718570Z Syncing repository: tinhpr9/Aotscript
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3721484Z ##[group]Getting Git version info
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3722738Z Working directory is '/home/runner/work/Aotscript/Aotscript'
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3724373Z [command]/usr/bin/git version
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3755251Z git version 2.54.0
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3770987Z ##[endgroup]
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3781915Z Temporarily overriding HOME='/home/runner/work/_temp/c70bf276-f2ed-407b-99b5-80d38b21308d' before making global git config changes
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3783872Z Adding repository directory to the temporary git global config as a safe directory
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3785950Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Aotscript/Aotscript
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3813810Z Deleting the contents of '/home/runner/work/Aotscript/Aotscript'
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3817085Z ##[group]Initializing the repository
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3822837Z [command]/usr/bin/git init /home/runner/work/Aotscript/Aotscript
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3890807Z hint: Using 'master' as the name for the initial branch. This default branch name
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3901313Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3903049Z hint: to use in all of your new repositories, which will suppress this warning,
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3904289Z hint: call:
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3905422Z hint:
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3906389Z hint: 	git config --global init.defaultBranch <name>
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3907160Z hint:
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3908141Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3909729Z hint: 'development'. The just-created branch can be renamed via this command:
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3910997Z hint:
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3911858Z hint: 	git branch -m <name>
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3912739Z hint:
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3913770Z hint: Disable this message with "git config set advice.defaultBranchName false"
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3915430Z Initialized empty Git repository in /home/runner/work/Aotscript/Aotscript/.git/
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3918644Z [command]/usr/bin/git remote add origin https://github.com/tinhpr9/Aotscript
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3928994Z ##[endgroup]
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3931490Z ##[group]Disabling automatic garbage collection
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3932929Z [command]/usr/bin/git config --local gc.auto 0
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3954815Z ##[endgroup]
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3955779Z ##[group]Setting up auth
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3961038Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.3985877Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.4221411Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.4246513Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.4433556Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.4462737Z ##[endgroup]
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.4463813Z ##[group]Fetching the repository
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:12.4473421Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +0515abbabc1940635f5c290d5ac4a4caecba429a:refs/remotes/origin/main
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7218459Z From https://github.com/tinhpr9/Aotscript
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7221362Z  * [new ref]         0515abbabc1940635f5c290d5ac4a4caecba429a -> origin/main
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7240105Z ##[endgroup]
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7242100Z ##[group]Determining the checkout info
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7243860Z ##[endgroup]
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7246720Z [command]/usr/bin/git sparse-checkout disable
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7279407Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7301438Z ##[group]Checking out the ref
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7304599Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7439869Z Switched to a new branch 'main'
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7441365Z branch 'main' set up to track 'origin/main'.
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7446319Z ##[endgroup]
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7475034Z [command]/usr/bin/git log -1 --format=%H
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7493961Z 0515abbabc1940635f5c290d5ac4a4caecba429a
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7501439Z ##[group]Removing auth
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7505256Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7539260Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7700919Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7718545Z http.https://github.com/.extraheader
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7724754Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7750947Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+deploy	Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:13.7903874Z ##[endgroup]
+deploy	Run worker architecture tests	﻿2026-08-15T18:52:13.8095457Z ##[group]Run python3 -m unittest discover -s tests -v
+deploy	Run worker architecture tests	2026-08-15T18:52:13.8096957Z ^[[36;1mpython3 -m unittest discover -s tests -v^[[0m
+deploy	Run worker architecture tests	2026-08-15T18:52:13.8123970Z shell: /usr/bin/bash -e {0}
+deploy	Run worker architecture tests	2026-08-15T18:52:13.8125100Z ##[endgroup]
+deploy	Run worker architecture tests	2026-08-15T18:52:14.0584169Z test_group_change_resets_hash (test_agent.TestAgentGroupLogic.test_group_change_resets_hash) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.0598987Z test_hash_unchanged_skips_processing (test_agent.TestAgentGroupLogic.test_hash_unchanged_skips_processing) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.0617111Z test_install_group_script_rejects_wrong_group (test_agent.TestAgentGroupLogic.test_install_group_script_rejects_wrong_group) ... /home/runner/work/Aotscript/Aotscript/agent:82: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+deploy	Run worker architecture tests	2026-08-15T18:52:14.0618488Z   err_time = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+deploy	Run worker architecture tests	2026-08-15T18:52:14.0631158Z ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.0665753Z test_invalid_group_does_not_fetch (test_agent.TestAgentGroupLogic.test_invalid_group_does_not_fetch) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.0695656Z test_marmot_uses_common_and_marmot (test_agent.TestAgentGroupLogic.test_marmot_uses_common_and_marmot) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.0729777Z test_nova_uses_common_and_nova (test_agent.TestAgentGroupLogic.test_nova_uses_common_and_nova) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.1689123Z test_bad_remote_manifest_fails_closed (test_aot_launcher.AotLauncherTests.test_bad_remote_manifest_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.2865848Z test_checker_error_is_not_reported_as_repo_error (test_aot_launcher.AotLauncherTests.test_checker_error_is_not_reported_as_repo_error) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.4502579Z test_corrupt_existing_cache_fails_closed (test_aot_launcher.AotLauncherTests.test_corrupt_existing_cache_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.6580485Z test_existing_cache_with_task (test_aot_launcher.AotLauncherTests.test_existing_cache_with_task) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.7780665Z test_invalid_codex_interface_fails_closed (test_aot_launcher.AotLauncherTests.test_invalid_codex_interface_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.8211827Z test_missing_context_branch_fails_closed (test_aot_launcher.AotLauncherTests.test_missing_context_branch_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:14.9722983Z test_network_fetch_failure_does_not_use_cache (test_aot_launcher.AotLauncherTests.test_network_fetch_failure_does_not_use_cache) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.1104596Z test_new_cache_no_task_launches_in_verified_repo (test_aot_launcher.AotLauncherTests.test_new_cache_no_task_launches_in_verified_repo) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.1700307Z test_wrong_repo_fails_closed (test_aot_launcher.AotLauncherTests.test_wrong_repo_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.2497688Z test_atomic_replace_failure_preserves_target_and_backup (test_aot_msetup_integration.AotMsetupIntegrationTests.test_atomic_replace_failure_preserves_target_and_backup) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.3872959Z test_checker_crash_is_classified_as_checker_error (test_aot_msetup_integration.AotMsetupIntegrationTests.test_checker_crash_is_classified_as_checker_error) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.4185090Z test_empty_download_fails_closed_without_damaging_good_launcher (test_aot_msetup_integration.AotMsetupIntegrationTests.test_empty_download_fails_closed_without_damaging_good_launcher) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.6062667Z test_existing_correct_launcher_is_not_replaced (test_aot_msetup_integration.AotMsetupIntegrationTests.test_existing_correct_launcher_is_not_replaced) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.7260093Z test_first_install_preserves_pinned_ref_and_resolves_command (test_aot_msetup_integration.AotMsetupIntegrationTests.test_first_install_preserves_pinned_ref_and_resolves_command) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.7575157Z test_network_failure_preserves_existing_launcher (test_aot_msetup_integration.AotMsetupIntegrationTests.test_network_failure_preserves_existing_launcher) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.7577117Z test_normal_setup_control_flow_installs_after_path_setup (test_aot_msetup_integration.AotMsetupIntegrationTests.test_normal_setup_control_flow_installs_after_path_setup) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.9294043Z test_reinstall_is_idempotent_and_does_not_create_backup (test_aot_msetup_integration.AotMsetupIntegrationTests.test_reinstall_is_idempotent_and_does_not_create_backup) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.9325079Z test_setup_and_launcher_sources_have_valid_syntax (test_aot_msetup_integration.AotMsetupIntegrationTests.test_setup_and_launcher_sources_have_valid_syntax) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:15.9962140Z test_structure_invalid_download_fails_closed (test_aot_msetup_integration.AotMsetupIntegrationTests.test_structure_invalid_download_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.0541749Z test_symlink_conflict_fails_closed (test_aot_msetup_integration.AotMsetupIntegrationTests.test_symlink_conflict_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1050148Z test_syntax_invalid_download_fails_closed (test_aot_msetup_integration.AotMsetupIntegrationTests.test_syntax_invalid_download_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1051696Z test_agents_md_policy_reconciled (test_backup_restore_data.TestArchitectureConstraints.test_agents_md_policy_reconciled) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1053084Z test_backup_restore_data_action_in_relay (test_backup_restore_data.TestArchitectureConstraints.test_backup_restore_data_action_in_relay) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1066144Z test_existing_hub_buttons_preserved (test_backup_restore_data.TestArchitectureConstraints.test_existing_hub_buttons_preserved) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1067830Z test_filter_restore_data_absent_from_relay (test_backup_restore_data.TestArchitectureConstraints.test_filter_restore_data_absent_from_relay)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1068946Z The banned identifier must not appear in relay.py. ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1076441Z test_fleet_hub_html_has_backup_restore_data_button (test_backup_restore_data.TestArchitectureConstraints.test_fleet_hub_html_has_backup_restore_data_button) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1080174Z test_fleet_state_ack_includes_stage_statuses (test_backup_restore_data.TestArchitectureConstraints.test_fleet_state_ack_includes_stage_statuses) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1081744Z test_fleet_state_has_backup_restore_data_action (test_backup_restore_data.TestArchitectureConstraints.test_fleet_state_has_backup_restore_data_action) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1091302Z test_fleet_state_version_bumped (test_backup_restore_data.TestArchitectureConstraints.test_fleet_state_version_bumped) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1121826Z test_new_capability_advertised (test_backup_restore_data.TestArchitectureConstraints.test_new_capability_advertised) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1131915Z test_no_absolute_coordinates_in_backup_restore_data (test_backup_restore_data.TestArchitectureConstraints.test_no_absolute_coordinates_in_backup_restore_data) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1133749Z test_no_hardcoded_app_count_7 (test_backup_restore_data.TestArchitectureConstraints.test_no_hardcoded_app_count_7) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1135975Z test_no_session_id_or_coordinates_in_hub (test_backup_restore_data.TestArchitectureConstraints.test_no_session_id_or_coordinates_in_hub) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1137678Z test_relay_selftest_checks_new_version (test_backup_restore_data.TestArchitectureConstraints.test_relay_selftest_checks_new_version) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1139452Z test_smoke_test_checks_new_version (test_backup_restore_data.TestArchitectureConstraints.test_smoke_test_checks_new_version) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1141180Z test_worker_js_accepts_backup_restore_data (test_backup_restore_data.TestArchitectureConstraints.test_worker_js_accepts_backup_restore_data) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1142661Z test_worker_version_bumped_to_12 (test_backup_restore_data.TestArchitectureConstraints.test_worker_version_bumped_to_12) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1150623Z test_backup_already_running_raises (test_backup_restore_data.TestBackupRestoreDataIntegration.test_backup_already_running_raises) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1152248Z test_dynamic_count_not_hardcoded (test_backup_restore_data.TestBackupRestoreDataIntegration.test_dynamic_count_not_hardcoded)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1270613Z Count comes from the UI, not a constant. ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1271770Z test_filter_already_active_skips_filter_dialog (test_backup_restore_data.TestBackupRestoreDataIntegration.test_filter_already_active_skips_filter_dialog)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1292716Z If filter is already active, filter dialog is skipped. ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1293821Z test_final_backup_button_tapped_exactly_once (test_backup_restore_data.TestBackupRestoreDataIntegration.test_final_backup_button_tapped_exactly_once)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1313033Z The final + BACKUP button must be tapped exactly once. ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1338941Z test_stage_callback_called_for_key_stages (test_backup_restore_data.TestBackupRestoreDataIntegration.test_stage_callback_called_for_key_stages) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1340606Z test_successful_chain_returns_executed (test_backup_restore_data.TestBackupRestoreDataIntegration.test_successful_chain_returns_executed)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1367390Z Successful full chain returns executed=True with correct app_count. ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1370138Z test_wrong_package_raises_immediately (test_backup_restore_data.TestBackupRestoreDataIntegration.test_wrong_package_raises_immediately) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1378641Z test_zero_apps_raises_before_batch_actions (test_backup_restore_data.TestBackupRestoreDataIntegration.test_zero_apps_raises_before_batch_actions) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1399850Z test_deadline_expires_after_tap (test_backup_restore_data.TestBoundaryTaps.test_deadline_expires_after_tap) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1420647Z test_deadline_expires_before_tap (test_backup_restore_data.TestBoundaryTaps.test_deadline_expires_before_tap) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1443595Z test_post_tap_verification_failure (test_backup_restore_data.TestBoundaryTaps.test_post_tap_verification_failure) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1463687Z test_successful_verification (test_backup_restore_data.TestBoundaryTaps.test_successful_verification) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1466891Z test_five (test_backup_restore_data.TestCountFilteredApps.test_five) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1467862Z test_ignores_selected (test_backup_restore_data.TestCountFilteredApps.test_ignores_selected) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1470190Z test_three (test_backup_restore_data.TestCountFilteredApps.test_three) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1470947Z test_zero (test_backup_restore_data.TestCountFilteredApps.test_zero) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1471741Z test_no_match (test_backup_restore_data.TestFindUniqueByResourceIds.test_no_match) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1472686Z test_single_match (test_backup_restore_data.TestFindUniqueByResourceIds.test_single_match) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1474689Z test_all_selected (test_backup_restore_data.TestIsAllSelected.test_all_selected) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1476359Z test_none_selected (test_backup_restore_data.TestIsAllSelected.test_none_selected) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1477998Z test_not_running (test_backup_restore_data.TestIsBackupRunning.test_not_running) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1478862Z test_running_detected (test_backup_restore_data.TestIsBackupRunning.test_running_detected) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1484350Z test_open_swift_apps (test_backup_restore_data.TestLegacyActionsUnchanged.test_open_swift_apps) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1487298Z test_open_swift_backup (test_backup_restore_data.TestLegacyActionsUnchanged.test_open_swift_backup) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1548037Z test_complete_chain_statuses (test_backup_restore_data.TestRelayBackupRestoreData.test_complete_chain_statuses) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1549176Z test_crash_prevents_re_execution (test_backup_restore_data.TestRelayBackupRestoreData.test_crash_prevents_re_execution)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1592027Z Action marked processed at ACCEPTED, restart returns DUPLICATE. ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1593939Z test_device_not_in_target_ids_ignored (test_backup_restore_data.TestRelayBackupRestoreData.test_device_not_in_target_ids_ignored) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1622348Z test_duplicate_action_not_re_executed (test_backup_restore_data.TestRelayBackupRestoreData.test_duplicate_action_not_re_executed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1782623Z test_duplicate_terminal_delivery (test_backup_restore_data.TestRelayBackupRestoreData.test_duplicate_terminal_delivery) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.1783956Z test_expired_ttl_returns_timeout (test_backup_restore_data.TestRelayBackupRestoreData.test_expired_ttl_returns_timeout) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2114000Z test_failure_sends_failed_status (test_backup_restore_data.TestRelayBackupRestoreData.test_failure_sends_failed_status) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2115515Z test_final_tap_delivery_uncertain (test_backup_restore_data.TestRelayBackupRestoreData.test_final_tap_delivery_uncertain)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2302740Z Simulate _tap_xy raising specifically at the final button, assert exact behavior. ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2333285Z test_not_installed_sends_correct_status (test_backup_restore_data.TestRelayBackupRestoreData.test_not_installed_sends_correct_status) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2395677Z test_terminal_failed_metrics (test_backup_restore_data.TestRelayBackupRestoreData.test_terminal_failed_metrics) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2397352Z test_wrong_package_ignored (test_backup_restore_data.TestRelayBackupRestoreData.test_wrong_package_ignored) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2398965Z test_no_chip_not_active (test_backup_restore_data.TestRestoreDataFilterActive.test_no_chip_not_active) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2400518Z test_selected_chip_active (test_backup_restore_data.TestRestoreDataFilterActive.test_selected_chip_active) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2401897Z test_unselected_chip_not_active (test_backup_restore_data.TestRestoreDataFilterActive.test_unselected_chip_not_active) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2404662Z test_already_correct_no_tap (test_backup_restore_data.TestSetSwitchTo.test_already_correct_no_tap) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2406243Z test_not_found_raises (test_backup_restore_data.TestSetSwitchTo.test_not_found_raises) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2413484Z test_wrong_state_taps (test_backup_restore_data.TestSetSwitchTo.test_wrong_state_taps) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2428695Z test_deployed_point_eight_has_one_way_update_adapter (test_fleet_batch_architecture.FleetArchitectureTests.test_deployed_point_eight_has_one_way_update_adapter) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2442801Z test_new_protocol_is_device_only_and_legacy_control_is_gone (test_fleet_batch_architecture.FleetArchitectureTests.test_new_protocol_is_device_only_and_legacy_control_is_gone) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2451978Z test_bad_postcondition_never_reports_success (test_fleet_batch_architecture.SwiftAppsSemanticTests.test_bad_postcondition_never_reports_success) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2457876Z test_changed_fingerprint_does_not_click (test_fleet_batch_architecture.SwiftAppsSemanticTests.test_changed_fingerprint_does_not_click) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2465709Z test_semantic_success (test_fleet_batch_architecture.SwiftAppsSemanticTests.test_semantic_success) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2468881Z test_wrong_package_does_not_click (test_fleet_batch_architecture.SwiftAppsSemanticTests.test_wrong_package_does_not_click) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2476294Z test_missing_interpreter_outside_ubuntu_ci_fails_closed (test_launcher_test_support.LauncherCommandTests.test_missing_interpreter_outside_ubuntu_ci_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2486422Z test_python_tests_do_not_execute_launcher_path_directly (test_launcher_test_support.LauncherCommandTests.test_python_tests_do_not_execute_launcher_path_directly) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2497428Z test_termux_interpreter_uses_direct_execution (test_launcher_test_support.LauncherCommandTests.test_termux_interpreter_uses_direct_execution) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2514974Z test_ubuntu_ci_runs_termux_shebang_through_bash (test_launcher_test_support.LauncherCommandTests.test_ubuntu_ci_runs_termux_shebang_through_bash) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2518890Z test_device_only_assignment_and_idempotent_atomic_config (test_msetup_aot_registration.MsetupFleetRegistrationTests.test_device_only_assignment_and_idempotent_atomic_config) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.2520170Z test_wrong_server_identity_fails_closed (test_msetup_aot_registration.MsetupFleetRegistrationTests.test_wrong_server_identity_fails_closed) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3201619Z test_accounts_after_false_headers_remain_in_previous_section (test_multi_m.TestMultiM.test_accounts_after_false_headers_remain_in_previous_section) ... <string>:483: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/runner/work/Aotscript/Aotscript/test_shouko_temp/Data_Tong_Cookies.txt' mode='r' encoding='utf-8'>
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3203830Z ResourceWarning: Enable tracemalloc to get the object allocation traceback
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3205087Z <string>:523: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/runner/work/Aotscript/Aotscript/test_shouko_temp/acc.txt' mode='r' encoding='utf-8'>
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3206327Z ResourceWarning: Enable tracemalloc to get the object allocation traceback
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3207574Z <string>:590: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/runner/work/Aotscript/Aotscript/test_shouko_temp/Ket_Qua_Tim_Duoc.txt' mode='w' encoding='utf-8'>
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3208823Z ResourceWarning: Enable tracemalloc to get the object allocation traceback
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3210399Z <string>:591: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/runner/work/Aotscript/Aotscript/test_shouko_temp/Cookies.txt' mode='w' encoding='utf-8'>
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3211599Z ResourceWarning: Enable tracemalloc to get the object allocation traceback
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3212262Z ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3213826Z test_adjacent_sections (test_multi_m.TestMultiM.test_adjacent_sections) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3218373Z test_empty_section (test_multi_m.TestMultiM.test_empty_section) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3225126Z test_historical_pipe_behavior (test_multi_m.TestMultiM.test_historical_pipe_behavior) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3229729Z test_m_digits_user_pass (test_multi_m.TestMultiM.test_m_digits_user_pass) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3234028Z test_malformed_decorated_non_header (test_multi_m.TestMultiM.test_malformed_decorated_non_header) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3238606Z test_manual_mode (test_multi_m.TestMultiM.test_manual_mode) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3243064Z test_mode9_preset (test_multi_m.TestMultiM.test_mode9_preset) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3247839Z test_multi_m_comma_separated (test_multi_m.TestMultiM.test_multi_m_comma_separated) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3252642Z test_multi_m_duplicate_input (test_multi_m.TestMultiM.test_multi_m_duplicate_input) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3257972Z test_multi_m_mixed_case (test_multi_m.TestMultiM.test_multi_m_mixed_case) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3263685Z test_multi_m_numeric_only (test_multi_m.TestMultiM.test_multi_m_numeric_only) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3268254Z test_multi_m_whitespace_separated (test_multi_m.TestMultiM.test_multi_m_whitespace_separated) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3272993Z test_one_and_multiple_spaces_after_colon (test_multi_m.TestMultiM.test_one_and_multiple_spaces_after_colon) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3277234Z test_one_valid_one_nonexistent (test_multi_m.TestMultiM.test_one_valid_one_nonexistent) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3283793Z test_production_m153 (test_multi_m.TestMultiM.test_production_m153) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3289057Z test_regression_m88_m999 (test_multi_m.TestMultiM.test_regression_m88_m999) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3294259Z test_single_m (test_multi_m.TestMultiM.test_single_m) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3299017Z test_absence_check_accepts_only_404 (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_absence_check_accepts_only_404) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3302964Z test_create_mode_rejects_any_existing_release_with_tag (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_create_mode_rejects_any_existing_release_with_tag) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3307332Z test_draft_asset_verification_does_not_require_git_ref (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_draft_asset_verification_does_not_require_git_ref) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3311858Z test_draft_resume_requires_exact_identity_tag_state_and_unique_target (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_draft_resume_requires_exact_identity_tag_state_and_unique_target) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.3922745Z test_exact_release_verification_rejects_every_mismatch (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_exact_release_verification_rejects_every_mismatch) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4046054Z test_published_release_requires_exact_ref_identity_and_immutability (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_published_release_requires_exact_ref_identity_and_immutability) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4049512Z test_resume_mode_only_uploads_an_empty_draft (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_resume_mode_only_uploads_an_empty_draft) ... ok
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4411766Z test_resume_rebuild_reproduces_all_release_assets_from_source (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_resume_rebuild_reproduces_all_release_assets_from_source) ... ERROR
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4415907Z test_workflow_is_fail_closed_and_never_uses_admin_endpoint (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_workflow_is_fail_closed_and_never_uses_admin_endpoint) ... FAIL
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4416764Z 
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4416978Z ======================================================================
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4418265Z ERROR: test_resume_rebuild_reproduces_all_release_assets_from_source (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_resume_rebuild_reproduces_all_release_assets_from_source)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4419437Z ----------------------------------------------------------------------
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4420080Z Traceback (most recent call last):
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4421180Z   File "/home/runner/work/Aotscript/Aotscript/tests/test_worker_release_workflow.py", line 209, in test_resume_rebuild_reproduces_all_release_assets_from_source
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4422335Z     subprocess.run(command + ["--output", str(first)], check=True, capture_output=True)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4423103Z   File "/usr/lib/python3.12/subprocess.py", line 571, in run
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4423737Z     raise CalledProcessError(retcode, process.args,
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4425077Z subprocess.CalledProcessError: Command '['/usr/bin/python3', '/home/runner/work/Aotscript/Aotscript/scripts/build-worker-release.py', '--version', '2026.08.15.01', '--commit', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--source-root', '/home/runner/work/Aotscript/Aotscript', '--output', '/tmp/worker-release-guard-02iu_o12/first-build']' returned non-zero exit status 1.
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4426282Z 
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4426444Z ======================================================================
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4427143Z FAIL: test_workflow_is_fail_closed_and_never_uses_admin_endpoint (test_worker_release_workflow.WorkerReleaseWorkflowTests.test_workflow_is_fail_closed_and_never_uses_admin_endpoint)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4427921Z ----------------------------------------------------------------------
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4428291Z Traceback (most recent call last):
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4429102Z   File "/home/runner/work/Aotscript/Aotscript/tests/test_worker_release_workflow.py", line 234, in test_workflow_is_fail_closed_and_never_uses_admin_endpoint
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4430076Z     self.assertIn('test "$RELEASE_VERSION" = "2026.08.15.01"', text)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4456524Z AssertionError: 'test "$RELEASE_VERSION" = "2026.08.15.01"' not found in 'name: Release AOT Worker\n\non:\n  workflow_dispatch:\n    inputs:\n      version:\n        description: Exact worker version without prefixes\n        required: true\n        type: string\n      resume_release_id:\n        description: Existing draft release ID to verify and publish without uploading again\n        required: false\n        type: string\n\npermissions:\n  contents: write\n\nconcurrency:\n  group: worker-release-${{ inputs.version }}\n  cancel-in-progress: false\n\njobs:\n  release:\n    runs-on: ubuntu-latest\n    if: github.ref == \'refs/heads/main\'\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Validate version and run self-tests\n        env:\n          RELEASE_VERSION: ${{ inputs.version }}\n        run: |\n          set -euo pipefail\n          test "$RELEASE_VERSION" = "2026.08.14.03"\n          grep -Fq \'WORKER_VERSION = "aot-worker-\'"$RELEASE_VERSION"\'"\' aot-group-control/relay.py\n          python3 - "$RELEASE_VERSION" <<\'PY\'\n          import json, pathlib, sys\n          expected = "aot-worker-" + sys.argv[1]\n          for channel in ("canary", "stable"):\n              data = json.loads(pathlib.Path(f"aot-group-control/worker-manifest-{channel}.json").read_text())\n              assert data["version"] == expected and data["channel"] == channel\n          PY\n          python3 -m py_compile aot-group-control/*.py scripts/build-worker-release.py scripts/verify_worker_release.py\n          for test in aot-group-control/*selftest.py; do timeout 180 python3 "$test"; done\n          node --experimental-vm-modules cloudflare-worker/fleet-state-selftest.mjs\n          node --experimental-vm-modules cloudflare-worker/aot-hub-session-selftest.mjs\n          node --experimental-vm-modules cloudflare-worker/telegram-targets-selftest.mjs\n          python3 -m unittest discover -s tests -v\n          timeout 300 bash tests/setup-self-test.sh\n\n      - name: Resolve create or resume state fail-closed\n        id: prepare\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TAG: worker-v${{ inputs.version }}\n          RESUME_RELEASE_ID: ${{ inputs.resume_release_id }}\n        run: |\n          set -euo pipefail\n          check_absent() {\n            local label="$1" endpoint="$2" status\n            if ! status="$(curl --silent --show-error --output /dev/null --write-out \'%{http_code}\' \\\n              --header "Accept: application/vnd.github+json" \\\n              --header "Authorization: ***" \\\n              --header "X-GitHub-Api-Version: 2022-11-28" \\\n              "https://api.github.com/${endpoint}")"; then\n              echo "GitHub API transport failed for ${label}" >&2\n              return 70\n            fi\n            python3 scripts/verify_worker_release.py require-absent "$label" "$status"\n          }\n          check_absent tag "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}"\n          check_absent release "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}"\n          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > release-pages.json\n          if [[ -n "$RESUME_RELEASE_ID" ]]; then\n            [[ "$RESUME_RELEASE_ID" =~ ^[1-9][0-9]*$ ]] || { echo "resume_release_id must be a positive integer" >&2; exit 64; }\n            gh api "repos/${GITHUB_REPOSITORY}/releases/${RESUME_RELEASE_ID}" > draft.json\n            target_commit="$(python3 scripts/verify_worker_release.py validate-draft \\\n              draft.json release-pages.json "$RESUME_RELEASE_ID" "$TAG")"\n            printf \'mode=resume\\nrelease_id=%s\\ntarget_commit=%s\\n\' \\\n              "$RESUME_RELEASE_ID" "$target_commit" >> "$GITHUB_OUTPUT"\n          else\n            python3 scripts/verify_worker_release.py require-no-tagged-release \\\n              release-pages.json "$TAG"\n            printf \'mode=create\\ntarget_commit=%s\\n\' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"\n          fi\n\n      - name: Build immutable assets from pinned target\n        env:\n          GH_TOKEN: ${{ github.token }}\n          RELEASE_VERSION: ${{ inputs.version }}\n          RELEASE_MODE: ${{ steps.prepare.outputs.mode }}\n          RELEASE_ID: ${{ steps.prepare.outputs.release_id }}\n          TARGET_COMMIT: ${{ steps.prepare.outputs.target_commit }}\n        run: |\n          set -euo pipefail\n          if [[ "$RELEASE_MODE" == resume ]]; then\n            mkdir remote-dist\n            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > draft.json\n            python3 - draft.json > asset-ids.tsv <<\'PY\'\n          import json, pathlib, re, sys\n          release = json.loads(pathlib.Path(sys.argv[1]).read_text())\n          for asset in release.get("assets", []):\n              name, asset_id = asset.get("name"), asset.get("id")\n              if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", name) or not isinstance(asset_id, int):\n                  raise SystemExit("invalid_release_asset_identity")\n              print(f"{asset_id}\\t{name}")\n          PY\n            while IFS=$\'\\t\' read -r asset_id asset_name; do\n              gh api -H \'Accept: application/octet-stream\' \\\n                "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "remote-dist/${asset_name}"\n            done < asset-ids.tsv\n            if [[ -s asset-ids.tsv ]]; then\n              git worktree add --detach target-worktree "$TARGET_COMMIT"\n              python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \\\n                --commit "$TARGET_COMMIT" --source-root target-worktree \\\n                --reproduce-metadata-from remote-dist --output dist\n            else\n              python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \\\n                --commit "$TARGET_COMMIT" --output dist\n            fi\n          else\n            python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \\\n              --commit "$TARGET_COMMIT" --output dist\n          fi\n\n      - name: Create or verify draft by ID, then publish by ID\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TAG: worker-v${{ inputs.version }}\n          RELEASE_VERSION: ${{ inputs.version }}\n          RELEASE_MODE: ${{ steps.prepare.outputs.mode }}\n          RESUME_RELEASE_ID: ${{ steps.prepare.outputs.release_id }}\n          TARGET_COMMIT: ${{ steps.prepare.outputs.target_commit }}\n        run: |\n          set -euo pipefail\n          upload_asset() {\n            local asset="$1"\n            curl --fail --silent --show-error --retry 3 --retry-all-errors \\\n              --header "Accept: application/vnd.github+json" \\\n              --header "Authorization: ***" \\\n              --header "X-GitHub-Api-Version: 2022-11-28" \\\n              --header "Content-Type: application/octet-stream" \\\n              --data-binary "@${asset}" \\\n              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=$(basename "$asset")" > /dev/null\n          }\n          if [[ "$RELEASE_MODE" == create ]]; then\n            gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \\\n              -f tag_name="$TAG" -f target_commitish="$TARGET_COMMIT" \\\n              -f name="AOT Worker ${RELEASE_VERSION}" \\\n              -f body="Immutable AOT Worker ${RELEASE_VERSION}" -F draft=true > draft.json\n            RELEASE_ID="$(python3 -c \'import json; print(json.load(open("draft.json"))["id"])\')"\n            [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]] || exit 65\n            for asset in dist/*; do\n              upload_asset "$asset"\n            done\n          else\n            RELEASE_ID="$RESUME_RELEASE_ID"\n            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > resume-draft.json\n            asset_count="$(python3 -c \'import json; print(len(json.load(open("resume-draft.json")).get("assets", [])))\')"\n            [[ "$asset_count" == 0 ]] || { echo "resume_draft_assets_not_empty" >&2; exit 67; }\n            for asset in dist/*; do\n              upload_asset "$asset"\n            done\n          fi\n          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > draft.json\n          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > release-pages.json\n          verified_target="$(python3 scripts/verify_worker_release.py validate-draft \\\n            draft.json release-pages.json "$RELEASE_ID" "$TAG")"\n          [[ "$verified_target" == "$TARGET_COMMIT" ]] || { echo "draft target changed" >&2; exit 66; }\n          python3 scripts/verify_worker_release.py verify \\\n            "$TARGET_COMMIT" "$TAG" dist draft.json - draft\n          cp draft.json verified-draft.json\n          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false > /dev/null\n          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > published-by-id.json\n          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > published-by-tag.json\n          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > published-ref.json\n          python3 scripts/verify_worker_release.py verify \\\n            "$TARGET_COMMIT" "$TAG" dist published-by-id.json published-ref.json published verified-draft.json\n          python3 scripts/verify_worker_release.py verify \\\n            "$TARGET_COMMIT" "$TAG" dist published-by-tag.json published-ref.json published verified-draft.json\n          python3 - "$RELEASE_ID" <<\'PY\'\n          import json, sys\n          expected = int(sys.argv[1])\n          by_id = json.load(open("published-by-id.json"))\n          by_tag = json.load(open("published-by-tag.json"))\n          if by_id.get("id") != expected or by_tag.get("id") != expected:\n              raise SystemExit("published_release_identity_mismatch")\n          PY\n'
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4481765Z 
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4481991Z ----------------------------------------------------------------------
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4482485Z Ran 123 tests in 2.385s
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4482716Z 
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4482911Z FAILED (failures=1, errors=1)
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4483531Z [2026-08-15 18:52:14 UTC] [group=BADGROUP] Error in install_group_script: Unsupported group: BADGROUP
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4484078Z NoneType: None
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4484251Z 
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4484256Z 
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4484528Z [2026-08-15 18:52:14 UTC] Error in get_device_group: Invalid device group: BADGROUP
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4485072Z Traceback (most recent call last):
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4485599Z   File "/home/runner/work/Aotscript/Aotscript/agent", line 866, in get_device_group
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4486239Z     raise ValueError(f"Invalid device group: {group}")
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4486692Z ValueError: Invalid device group: BADGROUP
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4486927Z 
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4486931Z 
+deploy	Run worker architecture tests	2026-08-15T18:52:16.4641092Z ##[error]Process completed with exit code 1.
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	﻿2026-08-15T18:52:16.4793866Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.4795393Z Post job cleanup.
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5525455Z [command]/usr/bin/git version
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5562464Z git version 2.54.0
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5596886Z Temporarily overriding HOME='/home/runner/work/_temp/6cdafe75-f945-4c5f-9a24-58c10f8db37d' before making global git config changes
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5598023Z Adding repository directory to the temporary git global config as a safe directory
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5602688Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Aotscript/Aotscript
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5636084Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5663297Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5832672Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+deploy	Post Run actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683	2026-08-15T18:52:16.5857568Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+deploy	Complete job	﻿2026-08-15T18:52:16.6170139Z Cleaning up orphan processes
+deploy	Complete job	2026-08-15T18:52:16.6406880Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
