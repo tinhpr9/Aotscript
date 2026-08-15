@@ -1390,7 +1390,7 @@ def backup_restore_data(
                     return True
                 if _find_text("Backing up...", n) or _find_text("Backup progress", n):
                     return True
-                return ui_fingerprint(SWIFT_BACKUP_PACKAGE, n) != before_fp
+                return False
 
             if deadline is not None and time.time() >= deadline:
                 raise AotExpiredError("expired_before_tap")

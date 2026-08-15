@@ -413,6 +413,44 @@ class TestRestoreData(unittest.TestCase):
             _wrap(_node(text="Random Screen"))
         ], [], expected_error="unknown_ui_state")
 
+    def test_restore_started_explicit_indicator(self):
+        self.mock_dump.side_effect = _Rotator([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(),
+            _wrap(_node(text="Backing up..."))
+        ])
+        res = CONTROLLER.backup_restore_data("test_id")
+        self.assertEqual("RESTORE_STARTED", res.get("status"))
+
+    def test_restore_started_confirmation_dialog(self):
+        self.mock_dump.side_effect = _Rotator([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(),
+            _wrap(_node(text="Are you sure?"), _node(text="Yes"), _node(text="No"))
+        ])
+        with mock.patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70]):
+            res = CONTROLLER.backup_restore_data("test_id")
+        self.assertEqual("TIMEOUT", res.get("status"))
+        self.assertEqual("post_tap_start_unconfirmed", res.get("safe_reason"))
+
+    def test_restore_started_arbitrary_ui_change(self):
+        self.mock_dump.side_effect = _Rotator([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(),
+            _wrap(_node(text="Some other screen that is totally different"))
+        ])
+        with mock.patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70]):
+            res = CONTROLLER.backup_restore_data("test_id")
+        self.assertEqual("TIMEOUT", res.get("status"))
+        self.assertEqual("post_tap_start_unconfirmed", res.get("safe_reason"))
+
+    def test_restore_started_error_screen(self):
+        self.mock_dump.side_effect = _Rotator([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(),
+            _wrap(_node(text="Error occurred"), _node(text="OK"))
+        ])
+        with mock.patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70]):
+            res = CONTROLLER.backup_restore_data("test_id")
+        self.assertEqual("TIMEOUT", res.get("status"))
+        self.assertEqual("post_tap_start_unconfirmed", res.get("safe_reason"))
+
 
     # 14. redelivery không chạy RESTORE lần hai.
     def test_redelivery(self):
