@@ -20,22 +20,18 @@ from omnicontrol.router import CommandRouter, RouteRequest, RouterError
 logger = logging.getLogger(__name__)
 
 
+import time
+import uuid
+
 class DiscordGateway:
     def __init__(self, router: CommandRouter, config: OmniConfig):
         self.router = router
         self.config = config
+        # Map of token -> {"caller": CallerIdentity, "command_name": str, "args": list[str], "expires": float}
+        self.pending_requests: dict[str, dict] = {}
 
     def handle_slash_command(self, interaction: Any, command_name: str, args: list[str]) -> dict:
-        """Handle an incoming slash command from Discord.
-        
-        Args:
-            interaction: The raw Discord interaction object.
-            command_name: The name of the slash command (e.g. "status").
-            args: Positional string arguments parsed from the slash command.
-            
-        Returns:
-            A dictionary containing the response payload to send to Discord.
-        """
+        """Handle an incoming slash command from Discord."""
         caller = self._extract_identity(interaction)
         
         req = RouteRequest(
@@ -51,12 +47,19 @@ class DiscordGateway:
                 return self._format_error("Unknown command")
                 
             if cmd_def.destructive:
+                token = uuid.uuid4().hex
+                self.pending_requests[token] = {
+                    "caller": caller,
+                    "command_name": command_name,
+                    "args": args,
+                    "expires": time.time() + 300  # 5 minutes expiry
+                }
                 return {
                     "content": f"⚠️ **Confirmation Required**\nAre you sure you want to execute `{command_name} {' '.join(args)}`?",
                     "components": [
                         {"type": 1, "components": [
-                            {"type": 2, "style": 3, "label": "Approve", "custom_id": f"approve"},
-                            {"type": 2, "style": 4, "label": "Cancel", "custom_id": "cancel"}
+                            {"type": 2, "style": 3, "label": "Approve", "custom_id": f"approve:{token}"},
+                            {"type": 2, "style": 4, "label": "Cancel", "custom_id": f"cancel:{token}"}
                         ]}
                     ]
                 }
@@ -70,23 +73,41 @@ class DiscordGateway:
             logger.exception("Unexpected error in Discord gateway")
             return self._format_error("Internal server error")
 
-    def handle_button_click(self, interaction: Any, action: str, state: dict) -> dict:
-        """Handle interactive buttons like Approve / Cancel / Retry.
+    def handle_button_click(self, interaction: Any, custom_id: str) -> dict:
+        """Handle interactive buttons like Approve / Cancel.
         
         Args:
             interaction: The raw Discord interaction object.
-            action: The button identifier (e.g. "approve", "cancel").
-            state: Serialised state attached to the message.
+            custom_id: The button identifier from Discord (e.g. "approve:<token>").
         """
+        parts = custom_id.split(":", 1)
+        action = parts[0]
+        token = parts[1] if len(parts) > 1 else None
+
+        if not token or token not in self.pending_requests:
+            return self._format_error("Invalid, expired, or forged request token.")
+
+        pending = self.pending_requests[token]
+        
+        # Prevent replay or double-click by deleting immediately
+        del self.pending_requests[token]
+
+        if time.time() > pending["expires"]:
+            return self._format_error("Request has expired.")
+
+        caller = self._extract_identity(interaction)
+        if pending["caller"].user_id != caller.user_id:
+            return self._format_error("You cannot confirm another user's request.")
+
         if action == "cancel":
             return {"content": "❌ Action cancelled."}
         elif action == "approve":
             try:
-                caller = self._extract_identity(interaction)
+                # Re-dispatch with the stored authenticated state
                 req = RouteRequest(
-                    caller=caller,
-                    command_name=state.get("command_name", ""),
-                    args=state.get("args", [])
+                    caller=pending["caller"],
+                    command_name=pending["command_name"],
+                    args=pending["args"]
                 )
                 result = self.router.dispatch(req)
                 return self._format_success(result)
