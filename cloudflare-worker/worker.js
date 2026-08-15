@@ -4964,6 +4964,8 @@ export default {
             { command: "alerts", description: "Cấu hình cảnh báo tự động" },
             { command: "device", description: "Chi tiết một thiết bị" },
             { command: "to", description: "Gửi lệnh tới máy cụ thể" },
+            { command: "update", description: "Cập nhật canary hoặc stable" },
+            { command: "batch", description: "Chạy lệnh theo lô (backup/apps)" },
             { command: "maintenance", description: "Bật hoặc tắt bảo trì" },
             { command: "rename", description: "Đổi tên thiết bị" },
             { command: "delete", description: "Thu hồi thiết bị vĩnh viễn" },
@@ -5327,6 +5329,49 @@ async function handleUpdate(update, env) {
 
   if (input === "/progress") {
     await sendProgress(chatId, env);
+    return;
+  }
+
+  const updateMatch = input.match(/^\/update\s+(canary|stable)(?:\s+([A-Za-z0-9_,-]+))?$/i);
+  if (updateMatch) {
+    const channel = updateMatch[1].toLowerCase();
+    const target = updateMatch[2] ? updateMatch[2].split(",") : undefined;
+    const body = {
+      protocol: AOT_HUB_PROTOCOL_VERSION,
+      kind: `update_${channel}`,
+    };
+    if (target) body.target_device_ids = target;
+    const result = await fleetStateCall(env, "/aot/hub/control", { method: "POST", body });
+    if (result.response.ok) {
+      await sendMessage(chatId, env, `Lệnh update_${channel} đã được gửi thành công.`);
+    } else {
+      await sendMessage(chatId, env, `Lỗi: ${result.data?.error || result.response.status}`);
+    }
+    return;
+  }
+
+  const batchMatch = input.match(/^\/batch\s+(backup|apps|restore_data)(?:\s+([A-Za-z0-9_,-]+))?$/i);
+  if (batchMatch) {
+    const actionMap = {
+      "backup": "open_swift_backup",
+      "apps": "open_swift_apps",
+      "restore_data": "backup_restore_data"
+    };
+    const kind = actionMap[batchMatch[1].toLowerCase()];
+    const target = batchMatch[2] ? batchMatch[2].split(",") : undefined;
+    
+    const body = {
+      protocol: AOT_HUB_PROTOCOL_VERSION,
+      kind: kind,
+    };
+    if (target) body.target_device_ids = target;
+
+    const result = await fleetStateCall(env, "/aot/hub/control", { method: "POST", body });
+    if (result.response.ok) {
+      await sendMessage(chatId, env, `Lệnh ${kind} đã được gửi thành công.`);
+    } else {
+      await sendMessage(chatId, env, `Lỗi: ${result.data?.error || result.response.status}`);
+    }
     return;
   }
 
