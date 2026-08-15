@@ -17,6 +17,7 @@ const AOT_APPS_ACTION = "OPEN_SWIFT_APPS";
 // Fixed, allowlisted, fail-closed full-chain RESTORE_DATA backup action.
 // Does not accept arbitrary labels, packages, or tap instructions from browser.
 const AOT_BACKUP_RESTORE_DATA_ACTION = "BACKUP_RESTORE_DATA";
+const AOT_ALLOCATE_SERVER_ACTION = "ALLOCATE_SERVER";
 const AOT_BATCH_PACKAGE = "org.swiftapps.swiftbackup";
 const AOT_BATCH_TTL_MS = 75 * 1000;
 // Full chain bound: launch(45s) + multiple 30s UI transitions + final wait(45s) = ~300s total safe bound
@@ -3015,8 +3016,8 @@ export class FleetState
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async dispatchFleetBatch(record, action, requestedTargetIds) {
-    const allowed = new Set([AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_BACKUP_RESTORE_DATA_ACTION]);
+  async dispatchFleetBatch(record, action, requestedTargetIds, options = {}) {
+    const allowed = new Set([AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_BACKUP_RESTORE_DATA_ACTION, AOT_ALLOCATE_SERVER_ACTION]);
     if (!allowed.has(action)) return json({ ok: false, error: "invalid_batch_action" }, 400);
     const seen = new Set();
     const targets = [];
@@ -3037,8 +3038,12 @@ export class FleetState
     }
     record.last_batch = { action_id: actionId, action, package: AOT_BATCH_PACKAGE, created_at: createdAt, expires_at: expiresAt, devices };
     await this.writeFleet(record);
-    const payload = { type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: online, action_id: actionId, action, package: AOT_BATCH_PACKAGE, expires_at: expiresAt };
+    const payloadTemplate = { type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: online, action_id: actionId, action, package: AOT_BATCH_PACKAGE, expires_at: expiresAt };
     for (const id of online) {
+      const payload = { ...payloadTemplate };
+      if (action === AOT_ALLOCATE_SERVER_ACTION && options.allocationMap) {
+        payload.allocation = options.allocationMap[id];
+      }
       if (!this.sendAotPayload(this.aotSocketTag("device", "fleet", id), payload)) {
         devices[id].status = "FAILED"; devices[id].history.push("FAILED"); devices[id].reason = "websocket_send_failed";
       }
@@ -3056,6 +3061,9 @@ export class FleetState
     }
     if (body.kind === "backup_restore_data") {
       return this.dispatchFleetBatch(record, AOT_BACKUP_RESTORE_DATA_ACTION, Array.isArray(body.target_device_ids) ? body.target_device_ids : []);
+    }
+    if (body.kind === "allocate_server") {
+      return this.dispatchFleetBatch(record, AOT_ALLOCATE_SERVER_ACTION, Array.isArray(body.target_device_ids) ? body.target_device_ids : [], { allocationMap: body.allocationMap });
     }
     if (body.kind === "update_canary" || body.kind === "update_stable") {
       record.followers = Object.fromEntries(this.fleetMembers(record).map((m) => [m.device_id, m]));

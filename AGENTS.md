@@ -72,12 +72,10 @@ worker actions in `cloudflare-worker/`.
 - `FILTER_RESTORE_DATA` as a standalone, browser-controlled, arbitrary-tap
   action is outside the worker-updater scope and must not be introduced by
   updater releases or accepted from the browser.
-- `BACKUP_RESTORE_DATA` (introduced in PR #34) is the sole explicitly
-  permitted exception: it is a fixed, allowlisted, fail-closed, 11-step
-  bounded semantic state machine implemented entirely on the device.  It does
-  not accept arbitrary labels, packages, option payloads, or tap instructions
-  from the browser.  The server dispatches only the opaque action token to
-  explicitly selected, ONLINE fleet members.  All safety gates, exactly-once
+- `BACKUP_RESTORE_DATA` (introduced in PR #34) and `ALLOCATE_SERVER` are the explicitly permitted exceptions.
+  `BACKUP_RESTORE_DATA` is a fixed, allowlisted, fail-closed, 11-step bounded semantic state machine.
+  `ALLOCATE_SERVER` securely fetches a globally managed link list to issue server allocations directly to explicit target devices.
+  Neither accepts arbitrary labels, packages, or tap instructions from the browser. The server dispatches opaque action tokens or strictly server-validated URL allocations to selected ONLINE fleet members.  All safety gates, exactly-once
   guarantees, and monotonic stage ACKs are enforced device-side.  This action
   may only be extended, renamed, or removed through a future maintainer-
   approved PR that updates this policy and the smoke-test guard consistently.

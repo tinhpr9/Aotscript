@@ -80,11 +80,12 @@ OPEN_SWIFT_APPS_ACTION = "OPEN_SWIFT_APPS"
 # 11-step bounded semantic state machine, and does not accept arbitrary labels,
 # packages, or tap instructions from the browser.  See PR #34 policy note.
 BACKUP_RESTORE_DATA_ACTION = "BACKUP_RESTORE_DATA"
+ALLOCATE_SERVER_ACTION = "ALLOCATE_SERVER"
 SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.14.03"
+WORKER_VERSION = "aot-worker-2026.08.15.01"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic")
 
 
@@ -717,6 +718,8 @@ def _handle_batch_action(
     # Route BACKUP_RESTORE_DATA to its dedicated handler.
     if action == BACKUP_RESTORE_DATA_ACTION:
         return _handle_backup_restore_data(cfg, state, local_id=local_id, message=message)
+    if action == ALLOCATE_SERVER_ACTION:
+        return _handle_allocate_server(cfg, state, local_id=local_id, message=message)
     if (
         message.get("protocol") not in {HUB_PROTOCOL_VERSION, "phase4-1"}
         or action not in {OPEN_SWIFT_BACKUP_ACTION, OPEN_SWIFT_APPS_ACTION}
@@ -1001,6 +1004,77 @@ def _handle_worker_update(
     )
     return True
 
+def _handle_allocate_server(
+    cfg: dict[str, str],
+    state: dict[str, Any],
+    *,
+    local_id: str,
+    message: dict[str, Any],
+) -> bool:
+    if message.get("protocol") not in {HUB_PROTOCOL_VERSION, "fleet-batch-v1"}:
+        return True
+    action_id = normalize_action_id(message.get("action_id"))
+    if not action_id:
+        return True
+    if action_already_processed(state, action_id):
+        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="DUPLICATE", executed=False)
+        return True
+    try:
+        expires_at = int(message.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return True
+    if expires_at <= int(time.time() * 1000):
+        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="TIMEOUT", executed=False)
+        return True
+
+    allocation = message.get("allocation")
+    if not isinstance(allocation, list) or not allocation:
+        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="FAILED", executed=False, reason="invalid_allocation_format")
+        return True
+
+    links_path = "/storage/emulated/0/Download/Shouko/server_links.txt"
+    bak_path = links_path + ".bak"
+    tmp_path = links_path + ".tmp"
+    
+    import shutil
+    try:
+        os.makedirs(os.path.dirname(links_path), exist_ok=True)
+        if os.path.exists(links_path):
+            shutil.copy2(links_path, bak_path)
+            
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for item in allocation:
+                f.write(f"{item['pkg']},{item['url']}\n")
+                
+        os.rename(tmp_path, links_path)
+        
+        # Verify
+        with open(links_path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+            
+        if len(lines) != len(allocation):
+            raise RuntimeError("verify_length_mismatch")
+        for i, item in enumerate(allocation):
+            if lines[i] != f"{item['pkg']},{item['url']}":
+                raise RuntimeError("verify_content_mismatch")
+                
+    except Exception as e:
+        if os.path.exists(bak_path):
+            try:
+                shutil.copy2(bak_path, links_path)
+            except Exception:
+                pass
+        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="FAILED", executed=False, reason="write_verify_failed: " + str(e))
+        return True
+
+    mark_action_processed(state, action_id)
+    _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="ALLOCATED", executed=True)
+
+    try:
+        controller.open_roblox_servers(allocation)
+    except Exception:
+        pass
+    return True
 
 
 def normalize_target_ids(values: Any) -> list[str]:
