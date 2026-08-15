@@ -3,7 +3,7 @@ import importlib.util, pathlib, sys, tempfile, time
 root = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("relay", root / "relay.py")
 module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
-assert module.WORKER_VERSION == "aot-worker-2026.08.14.03"
+assert module.WORKER_VERSION == "aot-worker-2026.08.15.01"
 assert module.websocket_url("https://example.test/report", device_id="m301") == "wss://example.test/aot/control/ws?device_id=m301"
 assert module.build_parser().parse_args(["fleet"]).command == "fleet"
 assert "backup_restore_data_semantic" in module.WORKER_CAPABILITIES

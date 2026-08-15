@@ -1696,6 +1696,23 @@ def save_screenshot(path: pathlib.Path) -> dict[str, Any]:
     return {"path": str(path), "bytes": len(data)}
 
 
+def open_roblox_servers(allocation: list[dict[str, str]]) -> None:
+    import shlex
+    import time
+    for item in allocation:
+        pkg = item["pkg"]
+        url = item["url"]
+        
+        # Determine if it's placeID or URL
+        formatted_url = url
+        if url.isdigit():
+            formatted_url = f"roblox://placeID={url}"
+        
+        cmd_join = f"am start -a android.intent.action.VIEW -n {shlex.quote(pkg)}/com.roblox.client.ActivityProtocolLaunch -d {shlex.quote(formatted_url)}"
+        
+        _root_run(cmd_join + " >/dev/null")
+        time.sleep(1)
+
 def probe() -> dict[str, Any]:
     identity = device_identity()
     data: dict[str, Any] = {
