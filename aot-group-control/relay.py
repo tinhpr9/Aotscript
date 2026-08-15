@@ -1016,6 +1016,22 @@ def _handle_allocate_server(
     action_id = normalize_action_id(message.get("action_id"))
     if not action_id:
         return True
+    action_results = state.get("action_results")
+    cached_result = action_results.get(action_id) if isinstance(action_results, dict) else None
+    if cached_result:
+        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, **cached_result)
+        return True
+
+    def terminal_ack(status: str, reason: str = None, executed: bool = False):
+        res = {"status": status, "executed": executed}
+        if reason:
+            res["reason"] = reason
+        ar = state.get("action_results")
+        if not isinstance(ar, dict):
+            ar = state["action_results"] = {}
+        ar[action_id] = res
+        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, **res)
+
     if action_already_processed(state, action_id):
         _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="DUPLICATE", executed=False)
         return True
@@ -1024,12 +1040,12 @@ def _handle_allocate_server(
     except (TypeError, ValueError):
         return True
     if expires_at <= int(time.time() * 1000):
-        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="TIMEOUT", executed=False)
+        terminal_ack("TIMEOUT", executed=False)
         return True
 
     allocation = message.get("allocation")
     if not isinstance(allocation, list) or not allocation:
-        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="FAILED", executed=False, reason="invalid_allocation_format")
+        terminal_ack("FAILED", executed=False, reason="invalid_allocation_format")
         return True
 
     links_path = "/storage/emulated/0/Download/Shouko/server_links.txt"
@@ -1037,9 +1053,10 @@ def _handle_allocate_server(
     tmp_path = links_path + ".tmp"
     
     import shutil
+    existed_before = os.path.exists(links_path)
     try:
         os.makedirs(os.path.dirname(links_path), exist_ok=True)
-        if os.path.exists(links_path):
+        if existed_before:
             shutil.copy2(links_path, bak_path)
             
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -1059,21 +1076,38 @@ def _handle_allocate_server(
                 raise RuntimeError("verify_content_mismatch")
                 
     except Exception as e:
-        if os.path.exists(bak_path):
+        if existed_before and os.path.exists(bak_path):
             try:
                 shutil.copy2(bak_path, links_path)
             except Exception:
                 pass
-        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="FAILED", executed=False, reason="write_verify_failed: " + str(e))
+        elif not existed_before and os.path.exists(links_path):
+            try:
+                os.remove(links_path)
+            except Exception:
+                pass
+        terminal_ack("FAILED", executed=False, reason="write_verify_failed: " + str(e))
         return True
 
-    mark_action_processed(state, action_id)
     _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, status="ALLOCATED", executed=True)
 
     try:
         controller.open_roblox_servers(allocation)
-    except Exception:
-        pass
+        terminal_ack("OPENED", executed=True)
+        mark_action_processed(state, action_id)
+    except Exception as e:
+        if existed_before and os.path.exists(bak_path):
+            try:
+                shutil.copy2(bak_path, links_path)
+            except Exception:
+                pass
+        elif not existed_before and os.path.exists(links_path):
+            try:
+                os.remove(links_path)
+            except Exception:
+                pass
+        terminal_ack("FAILED", executed=False, reason="open_servers_failed: " + str(e))
+
     return True
 
 

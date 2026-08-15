@@ -189,7 +189,7 @@ if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_
   throw new Error("Explicit canary update did not select exactly the targeted device");
 }
 await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.14.03", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.15.01", device_ids: [ids[0], ids[1]] };
 await store.set("aot_session:test_explicit_targets", sRecord);
 
 // Stable with explicit targets (keeps exactly the targets)
