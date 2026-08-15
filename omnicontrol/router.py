@@ -142,17 +142,6 @@ class CommandRouter:
 
         elif cmd_def.name == "start":
             return self.client.control("open_swift_backup", target_device_ids=[device])
-            
-        elif cmd_def.name == "stop":
-            # For Phase 1, stopping translates to sending an IDLE command
-            # The AOT worker.js accepts "idle" as a text command, but via hub control
-            # we need to be careful. The hub control currently supports:
-            # open_swift_backup, open_swift_apps, backup_restore_data, update_canary, update_stable
-            # There is NO direct hub control for "stop".
-            # Wait, the requirements state: "stop: active operation on a device (sends IDLE)."
-            # Let's just return a placeholder or use an existing mechanism if one exists.
-            # For now, raise NotImplementedError if the Hub doesn't support it directly.
-            raise RouterError("Stop action requires Hub integration not yet exposed via control endpoint.")
 
         elif cmd_def.name == "batch":
             # Target devices belonging to the group and online
@@ -183,7 +172,5 @@ class CommandRouter:
                 # Update canary for device
                 return self.client.control("update_canary", target_device_ids=[device])
                 
-        elif cmd_def.name == "logs":
-            raise RouterError("Logs endpoint not implemented in Hub API.")
-
-        return {"error": "unhandled_command"}
+        else:
+            raise RouterError(f"Command '{cmd_def.name}' is not yet implemented.")

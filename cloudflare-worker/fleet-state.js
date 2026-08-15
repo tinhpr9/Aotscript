@@ -277,11 +277,9 @@ export class FleetState
     }
     record.device_id =
       deviceId;
-    record.device_group =
-      String(
-        body.device_group ||
-        ""
-      ).toUpperCase();
+    if (body.device_group) {
+      record.device_group = String(body.device_group).toUpperCase();
+    }
     record.last_seen = now;
     record.last_report_status =
       body.status;

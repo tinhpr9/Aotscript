@@ -89,24 +89,12 @@ COMMAND_REGISTRY: dict[str, CommandDef] = {
         destructive=False,
         hub_action="open_swift_backup",
     ),
-    "stop": CommandDef(
-        name="stop",
-        description="Stop active operation on a device (sends IDLE).",
-        arg_kind=ArgKind.DEVICE,
-        destructive=True,
-        hub_action=None,          # translates to a Telegram session IDLE token
-    ),
     "batch": CommandDef(
         name="batch",
         description="Run an action on all devices in a group.",
         arg_kind=ArgKind.GROUP,
         destructive=True,
         hub_action="batch_group",  # router resolves to Hub control kind
-    ),
-    "logs": CommandDef(
-        name="logs",
-        description="Fetch recent log snapshot for a device.",
-        arg_kind=ArgKind.DEVICE,
     ),
     "update": CommandDef(
         name="update",

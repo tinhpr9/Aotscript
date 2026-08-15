@@ -161,5 +161,16 @@ const stateBody = await stateResp.json();
 const marmotDevice = stateBody.state.devices.find(d => d.device_id === "MARMOT-01");
 if (!marmotDevice || marmotDevice.device_group !== "MARMOT") throw new Error("device_group not exposed in getFleetHubState");
 
+// Test device_group preservation on heartbeat without device_group
+const heartbeatReq = new Request("https://fleet.test/api/report?id=MARMOT-01", {
+  method: "POST",
+  body: JSON.stringify({ status: "heartbeat" })
+});
+await fleet.report(heartbeatReq);
+const afterHeartbeatRecord = await fleet.readFleet();
+if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
+  throw new Error("device_group was overwritten by a heartbeat without device_group");
+}
+
 console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");

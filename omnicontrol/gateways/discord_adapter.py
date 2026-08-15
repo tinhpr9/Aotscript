@@ -47,12 +47,31 @@ class DiscordGateway:
                 return self._format_error("Unknown command")
                 
             if cmd_def.destructive:
+                from omnicontrol.auth import is_authorized
+                if not is_authorized(caller, self.config):
+                    return self._format_error("Unauthorized")
+                    
+                now = time.time()
+                # Cleanup expired
+                expired_keys = [k for k, v in self.pending_requests.items() if now > v["expires"]]
+                for k in expired_keys:
+                    del self.pending_requests[k]
+                    
+                # Global capacity
+                if len(self.pending_requests) >= 50:
+                    return self._format_error("Global pending request limit reached. Please try again later.")
+                    
+                # Per-user capacity
+                user_requests = sum(1 for v in self.pending_requests.values() if v["caller"].user_id == caller.user_id)
+                if user_requests >= 5:
+                    return self._format_error("Too many pending requests for your user. Please approve or wait for them to expire.")
+                    
                 token = uuid.uuid4().hex
                 self.pending_requests[token] = {
                     "caller": caller,
                     "command_name": command_name,
                     "args": args,
-                    "expires": time.time() + 300  # 5 minutes expiry
+                    "expires": now + 300  # 5 minutes expiry
                 }
                 return {
                     "content": f"⚠️ **Confirmation Required**\nAre you sure you want to execute `{command_name} {' '.join(args)}`?",
