@@ -116,14 +116,14 @@ jobs:
               gh api -H 'Accept: application/octet-stream' \
                 "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "remote-dist/${asset_name}"
             done < asset-ids.tsv
+            git worktree add --detach target-worktree "$TARGET_COMMIT"
             if [[ -s asset-ids.tsv ]]; then
-              git worktree add --detach target-worktree "$TARGET_COMMIT"
               python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \
                 --commit "$TARGET_COMMIT" --source-root target-worktree \
                 --reproduce-metadata-from remote-dist --output dist
             else
               python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \
-                --commit "$TARGET_COMMIT" --output dist
+                --commit "$TARGET_COMMIT" --source-root target-worktree --output dist
             fi
           else
             python3 scripts/build-worker-release.py --version "$RELEASE_VERSION" \

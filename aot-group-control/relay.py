@@ -97,7 +97,9 @@ ALLOWED_SAFE_REASONS = {
     "restore_data_label_not_found", "ambiguous_selector", "selector_missing",
     "apks_toggle_failed", "data_toggle_failed", "options_verify_failed",
     "unknown_ui_state", "state_machine_timeout", "screencap_failed",
-    "final_restore_button_not_found",
+    "final_restore_button_not_found", "screencap_resolution_mismatch",
+    "ui_bounds_exceed_screencap", "screencap_unsupported_format",
+    "screencap_invalid_format",
 }
 SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0

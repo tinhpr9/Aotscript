@@ -1731,6 +1731,11 @@ def _is_green_selected(name: str, nodes: list[UiNode], frame: tuple[int, int, by
     if frame is None:
         frame = _raw_screencap()
     w, h, pixels = frame
+    dw, dh = display_size()
+    if w != dw or h != dh:
+        raise AotControllerError(f"screencap_resolution_mismatch:{w}x{h}_vs_{dw}x{dh}")
+    if card.right > w or card.bottom > h:
+        raise AotControllerError(f"ui_bounds_exceed_screencap:{card.right},{card.bottom}_vs_{w}x{h}")
     x1 = max(0, min(w - 1, card.left))
     x2 = max(0, min(w, card.right))
     y1 = max(0, min(h - 1, card.top))
