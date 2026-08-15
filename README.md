@@ -24,7 +24,7 @@ Mục tiêu:
 Các path chính:
 - `cloudflare-worker/`
 - `aot-group-control/`
-- `tests/` (selftests tương ứng: `test_fleet_batch_architecture.py`, `test_agent.py`, `test_aot_launcher.py`, vv.)
+- `tests/` (selftests tương ứng: `test_fleet_batch_architecture.py`, `test_agent.py`, vv.)
 - `AGENTS.md` (Release & immutable rules)
 
 Kiến trúc:
@@ -67,6 +67,7 @@ Các path chính:
 - `Termuxboot`
 - `tests/setup-self-test.sh`
 - `tests/test_aot_msetup_integration.py`
+- `tests/test_aot_launcher.py`
 
 ### Setup hiện tại
 Điều kiện ban đầu: Termux đã được cài và mở. Bootstrap đã được GPT kiểm tra chỉ cần chạy một lần; nó cài launcher local vào `$PREFIX/bin/aotsetup`.
@@ -108,6 +109,7 @@ Mục tiêu:
 - staged activation / health ACK / rollback
 
 Các path chính:
+- `.github/workflows/release-worker.yml`
 - `scripts/build-worker-release.py`
 - `scripts/verify_worker_release.py`
 - `aot-group-control/worker-manifest-canary.json`
@@ -151,7 +153,7 @@ Các path chính:
 | `tong_hop_link.txt` | Project 2 | Server source links | Working on Batch Phân Server |
 | `setup.sh`, `provision-device.sh`, vv | Project 3 | Device Setup, migration | Updating setup checkpoint, Termux bootstrap |
 | `aot-group-control/controller.py` | Project 4 | Swift Backup automation | Fixing backup/restore UI automation steps |
-| `scripts/` | Project 5 | Release packaging | Troubleshooting worker release CI/CD |
+| `.github/workflows/`, `scripts/` | Project 5 | Release packaging | Troubleshooting worker release CI/CD |
 | `AGENTS.md` | Project 1, 5 | Release / Safety Rules | ALWAYS read before touching `aot-group-control` or `cloudflare-worker` |
 | `agent`, `Marmotgag2`, `Updatedelta` | Project 6 | Misc device scripts, solver | Updating solvers or Delta tools |
 | `rejoin-tool/` | Project 7 | Auto Rejoin logic | Modifying rejoin behavior |
