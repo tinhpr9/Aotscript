@@ -232,6 +232,7 @@ class TestRestoreData(unittest.TestCase):
         self.mock_open_sb.return_value = True
         self.mock_fg_relay = mock.patch.object(RELAY.controller, "_sb_assert_foreground").start()
         self.mock_dump = mock.patch.object(CONTROLLER, "dump_ui_xml").start()
+        self.mock_display = mock.patch.object(CONTROLLER, "display_size", return_value=(1080, 2400)).start()
         
         self._apks_on = True
         self._data_on = True
@@ -547,6 +548,36 @@ class TestRestoreData(unittest.TestCase):
             custom_wrap
         ], ["SELECTED"], expected_error="selector_missing:APKs")
 
+
+    def test_rid_backup_zero_bounds(self):
+        nodes = [_node(text="User app parts", clickable=False, bounds="[0,0][100,200]")]
+        for opt in ["APKs", "Data", "Cloud", "Ext.data", "Expansion", "Media", "Device"]:
+            nodes.append(_node(text=opt, bounds="[10,10][20,20]"))
+        nodes.append(_node(text="BACKUP", bounds="[80,80][80,80]"))
+        self.run_ctrl([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU,
+            _wrap(*nodes)
+        ], ["SELECTED", "OPTIONS_VERIFIED"], expected_error="invalid_target_bounds:BACKUP")
+
+    def test_rid_backup_negative_bounds(self):
+        nodes = [_node(text="User app parts", clickable=False, bounds="[0,0][100,200]")]
+        for opt in ["APKs", "Data", "Cloud", "Ext.data", "Expansion", "Media", "Device"]:
+            nodes.append(_node(text=opt, bounds="[10,10][20,20]"))
+        nodes.append(_node(rid=CONTROLLER._RID_FINAL_BACKUP, bounds="[-10,-10][10,10]"))
+        self.run_ctrl([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU,
+            _wrap(*nodes)
+        ], ["SELECTED", "OPTIONS_VERIFIED"], expected_error="target_out_of_bounds:BACKUP")
+
+    def test_rid_backup_outside_screen(self):
+        nodes = [_node(text="User app parts", clickable=False, bounds="[0,0][100,200]")]
+        for opt in ["APKs", "Data", "Cloud", "Ext.data", "Expansion", "Media", "Device"]:
+            nodes.append(_node(text=opt, bounds="[10,10][20,20]"))
+        nodes.append(_node(rid=CONTROLLER._RID_FINAL_BACKUP, bounds="[9000,9000][9100,9100]"))
+        self.run_ctrl([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU,
+            _wrap(*nodes)
+        ], ["SELECTED", "OPTIONS_VERIFIED"], expected_error="target_out_of_bounds:BACKUP")
 
 class TestControllerFixes(unittest.TestCase):
     def test_unclickable_target_no_parent(self):

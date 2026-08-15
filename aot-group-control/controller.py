@@ -1611,11 +1611,17 @@ def _save_unknown_debug(reason: str):
     _root_run(f"mkdir -p {debug_dir}")
     try:
         xml = dump_ui_xml()
-        import tempfile
+        import tempfile, os
         with tempfile.NamedTemporaryFile("w", delete=False) as f:
             f.write(xml)
             tmp_path = f.name
-        _root_run(f"cp {tmp_path} {debug_dir}/window.xml")
+        try:
+            _root_run(f"cp {tmp_path} {debug_dir}/window.xml")
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
     except Exception:
         pass
     try:
@@ -1641,20 +1647,29 @@ def _actionable_bounds(n: UiNode, nodes: list[UiNode], label: str) -> Bounds:
     if not n.enabled:
         raise AotControllerError(f"disabled_target:{label}")
     tb = n.bounds
+    final_b = None
     if n.clickable:
-        return tb
-    candidates = []
-    for c in nodes:
-        if not c.clickable:
-            continue
-        if c.bounds.left <= tb.left and c.bounds.top <= tb.top and c.bounds.right >= tb.right and c.bounds.bottom >= tb.bottom:
-            candidates.append((c.bounds.area, c))
-    if candidates:
+        final_b = tb
+    else:
+        candidates = []
+        for c in nodes:
+            if not c.clickable:
+                continue
+            if c.bounds.left <= tb.left and c.bounds.top <= tb.top and c.bounds.right >= tb.right and c.bounds.bottom >= tb.bottom:
+                candidates.append((c.bounds.area, c))
+        if not candidates:
+            raise AotControllerError(f"unclickable_target:{label}")
         best_c = min(candidates, key=lambda x: x[0])[1]
         if not best_c.enabled:
             raise AotControllerError(f"disabled_target:{label}")
-        return best_c.bounds
-    raise AotControllerError(f"unclickable_target:{label}")
+        final_b = best_c.bounds
+        
+    if final_b.area <= 0:
+        raise AotControllerError(f"invalid_target_bounds:{label}")
+    dw, dh = display_size()
+    if final_b.left < 0 or final_b.top < 0 or final_b.right > dw or final_b.bottom > dh:
+        raise AotControllerError(f"target_out_of_bounds:{label}")
+    return final_b
 
 def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
     target = _clean(text)

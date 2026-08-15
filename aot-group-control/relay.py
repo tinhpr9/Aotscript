@@ -101,7 +101,8 @@ ALLOWED_SAFE_REASONS = {
     "ui_bounds_exceed_screencap", "screencap_unsupported_format",
     "screencap_invalid_format", "active_backup_found", "unnamed_checked_label",
     "selected_count_mismatch", "unclickable_target", "tap_wait_no_transition",
-    "stale_options_screen",
+    "stale_options_screen", "filter_trigger_disabled", "disabled_target",
+    "subprocess_spawn_failed", "invalid_target_bounds", "target_out_of_bounds"
 }
 SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
