@@ -1,59 +1,59 @@
 {
   "schema_version": 2,
-  "version": "aot-worker-2026.08.14.06",
+  "version": "aot-worker-2026.08.14.05",
   "channel": "canary",
   "minimum_bootstrap_version": 2,
-  "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/legacy_relay_bridge.py",
+  "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/legacy_relay_bridge.py",
   "sha256": "659877b7c55dec6c0fa8c83b213fd3af260f0f4fff30c13ec3e72ff670207cee",
   "bootstrap": {
     "version": 6,
-    "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/bootstrap.py",
+    "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/bootstrap.py",
     "sha256": "bd0febde0dc64d4ee7ac23ac6be30c49dd4a4445c74bd221c6ca9b2d3e83db23"
   },
   "files": [
     {
       "path": "relay.py",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/relay.py",
-      "sha256": "1057f3332c44be8eb91388be0e5caeba0346966c9a48407ec772406759815426"
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/relay.py",
+      "sha256": "12f605bd9513dfe045b15c2eec79bc19b5bf92405a53d351b85ba9e8967ed392"
     },
     {
       "path": "runtime.py",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/runtime.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/runtime.py",
       "sha256": "f69d8d8a7e028088c19667fe0d5317e8a48fffa82c0e12327be726cd02edbeb5"
     },
     {
       "path": "controller.py",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/controller.py",
-      "sha256": "54236e0148ecd8e87e700a392b4bf3d3e61a179931aee16bcf7c75faa187464c"
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/controller.py",
+      "sha256": "751e7996f16fff229192303a1a24d106560e3718393ebeaf24703011b5d3b457"
     },
     {
       "path": "updater.py",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/updater.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/updater.py",
       "sha256": "029a219a0336f2262705e0a82a1e65ab81e0f7d1ab5e90296931c45d82d21dc5"
     },
     {
       "path": "e2e.py",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/e2e.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/e2e.py",
       "sha256": "5a51d0f8cba9d6b922f3b95dc9a1296d6470dc8b71f64caadd80a5efa0e3f190"
     },
     {
       "path": "worker_smoke_test.py",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/worker_smoke_test.py",
-      "sha256": "3e7c7d3797ff2a2fc1aa7cae157ad0cc0c52fcfd49ce001a771759613b4595ca"
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/worker_smoke_test.py",
+      "sha256": "f4e9a56160026c6ce35d22c22df6d6517c84a09070242de4c6179bdd7780d307"
     },
     {
       "path": "worker-release-schema.json",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/worker-release-schema.json",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/worker-release-schema.json",
       "sha256": "ce814db0ce9a54a03406e0f2a00f2c12b58852b80cad02b5fc73ae2bad36c045"
     },
     {
       "path": "msetup_registration.py",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/msetup_registration.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/msetup_registration.py",
       "sha256": "8bfadcafe72305c0a428e4d858620b02974c43be94fc4aaf30b58ded31897d64"
     },
     {
       "path": "legacy_relay_bridge.py",
-      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/legacy_relay_bridge.py",
+      "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.05/legacy_relay_bridge.py",
       "sha256": "659877b7c55dec6c0fa8c83b213fd3af260f0f4fff30c13ec3e72ff670207cee"
     }
   ]

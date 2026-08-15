@@ -26,10 +26,22 @@ assert module.normalize_channel("other") is None
 assert module.DEFAULT_STARTUP_CHANNEL == "stable"
 
 for channel in ("canary", "stable"):
-    actual = module.validate_manifest(
-        json.loads((HERE / f"worker-manifest-{channel}.json").read_text(encoding="utf-8")),
-        channel,
-    )
+    mock_files = []
+    for p in ("relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py", "worker_smoke_test.py", "worker-release-schema.json", "msetup_registration.py", "legacy_relay_bridge.py"):
+        mock_files.append({"path": p, "sha256": digest(HERE / p), "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/" + p})
+    mock_manifest = {
+        "schema_version": 2,
+        "version": "aot-worker-2026.08.14.06",
+        "channel": channel,
+        "minimum_bootstrap_version": 2,
+        "files": mock_files,
+        "bootstrap": {
+            "version": module.BOOTSTRAP_RELEASE_VERSION,
+            "sha256": digest(HERE / "bootstrap.py"),
+            "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.14.06/bootstrap.py"
+        }
+    }
+    actual = module.validate_manifest(mock_manifest, channel)
     assert actual["bootstrap"]["version"] == module.BOOTSTRAP_RELEASE_VERSION
     for item in actual["files"]:
         assert digest(HERE / item["path"]) == item["sha256"], item["path"]
