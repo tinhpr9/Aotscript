@@ -5042,6 +5042,55 @@ export default {
   },
 };
 
+async function resolveAndValidateTelegramTargets(targetStr, env) {
+  if (!targetStr || !targetStr.trim()) {
+    throw new Error("Target không được để trống.");
+  }
+  const rawTarget = targetStr.trim();
+  const wantedGroup = normalizeDeviceGroup(rawTarget);
+  
+  const durableRecords = await listFleetDeviceRecords(env);
+  
+  if (wantedGroup) {
+    const ids = [];
+    for (const record of durableRecords) {
+      if (normalizeDeviceGroup(record?.device_group) === wantedGroup) {
+        if (!record?.online) {
+           throw new Error(`Thiết bị ${record?.device_id} trong nhóm ${wantedGroup} đang OFFLINE.`);
+        }
+        ids.push(normalizeDeviceId(record?.device_id));
+      }
+    }
+    if (ids.length === 0) {
+      throw new Error(`Nhóm ${wantedGroup} không có thiết bị nào.`);
+    }
+    return ids.sort(compareDeviceIds);
+  }
+  
+  const ids = normalizeDeviceIdList(rawTarget);
+  if (ids.length === 0) {
+     throw new Error("Danh sách target không hợp lệ.");
+  }
+  
+  const onlineIds = new Set();
+  const allIds = new Set();
+  for (const record of durableRecords) {
+    const did = normalizeDeviceId(record?.device_id);
+    if (!did) continue;
+    allIds.add(did);
+    if (record?.online) onlineIds.add(did);
+  }
+  
+  for (const id of ids) {
+    if (!allIds.has(id)) {
+      throw new Error(`Thiết bị ${id} không tồn tại.`);
+    }
+    if (!onlineIds.has(id)) {
+      throw new Error(`Thiết bị ${id} đang OFFLINE.`);
+    }
+  }
+  return ids;
+}
 async function handleUpdate(update, env) {
   const message = update.message;
   const callback = update.callback_query;
@@ -5332,45 +5381,63 @@ async function handleUpdate(update, env) {
     return;
   }
 
-  const updateMatch = input.match(/^\/update\s+(canary|stable)(?:\s+([A-Za-z0-9_,-]+))?$/i);
-  if (updateMatch) {
-    const channel = updateMatch[1].toLowerCase();
-    const target = updateMatch[2] ? updateMatch[2].split(",") : undefined;
-    const body = {
-      protocol: AOT_HUB_PROTOCOL_VERSION,
-      kind: `update_${channel}`,
-    };
-    if (target) body.target_device_ids = target;
-    const result = await fleetStateCall(env, "/aot/hub/control", { method: "POST", body });
-    if (result.response.ok) {
-      await sendMessage(chatId, env, `Lệnh update_${channel} đã được gửi thành công.`);
-    } else {
-      await sendMessage(chatId, env, `Lỗi: ${result.data?.error || result.response.status}`);
+  const updateCmdMatch = input.match(/^\/update(?:\s+(.*))?$/i);
+  if (updateCmdMatch) {
+    const argsMatch = (updateCmdMatch[1] || "").match(/^(canary|stable)\s+([A-Za-z0-9_,-]+)$/i);
+    if (!argsMatch) {
+      await sendMessage(chatId, env, "Sử dụng: /update canary|stable <m123|m123,m124|MARMOT>");
+      return;
+    }
+    const channel = argsMatch[1].toLowerCase();
+    
+    try {
+      const resolvedTarget = await resolveAndValidateTelegramTargets(argsMatch[2], env);
+      const body = {
+        protocol: AOT_HUB_PROTOCOL_VERSION,
+        kind: `update_${channel}`,
+        target_device_ids: resolvedTarget,
+      };
+      const result = await fleetStateCall(env, "/aot/hub/control", { method: "POST", body });
+      if (result.response.ok) {
+        await sendMessage(chatId, env, `Lệnh update_${channel} đã được gửi thành công tới ${resolvedTarget.join(",")}.`);
+      } else {
+        await sendMessage(chatId, env, `Lỗi: ${result.data?.error || result.response.status}`);
+      }
+    } catch (e) {
+      await sendMessage(chatId, env, `Lỗi: ${e.message}`);
     }
     return;
   }
 
-  const batchMatch = input.match(/^\/batch\s+(backup|apps|restore_data)(?:\s+([A-Za-z0-9_,-]+))?$/i);
-  if (batchMatch) {
+  const batchCmdMatch = input.match(/^\/batch(?:\s+(.*))?$/i);
+  if (batchCmdMatch) {
+    const argsMatch = (batchCmdMatch[1] || "").match(/^(backup|apps|restore_data)\s+([A-Za-z0-9_,-]+)$/i);
+    if (!argsMatch) {
+      await sendMessage(chatId, env, "Sử dụng: /batch backup|apps|restore_data <m123|m123,m124|MARMOT>");
+      return;
+    }
     const actionMap = {
       "backup": "open_swift_backup",
       "apps": "open_swift_apps",
       "restore_data": "backup_restore_data"
     };
-    const kind = actionMap[batchMatch[1].toLowerCase()];
-    const target = batchMatch[2] ? batchMatch[2].split(",") : undefined;
+    const kind = actionMap[argsMatch[1].toLowerCase()];
     
-    const body = {
-      protocol: AOT_HUB_PROTOCOL_VERSION,
-      kind: kind,
-    };
-    if (target) body.target_device_ids = target;
-
-    const result = await fleetStateCall(env, "/aot/hub/control", { method: "POST", body });
-    if (result.response.ok) {
-      await sendMessage(chatId, env, `Lệnh ${kind} đã được gửi thành công.`);
-    } else {
-      await sendMessage(chatId, env, `Lỗi: ${result.data?.error || result.response.status}`);
+    try {
+      const resolvedTarget = await resolveAndValidateTelegramTargets(argsMatch[2], env);
+      const body = {
+        protocol: AOT_HUB_PROTOCOL_VERSION,
+        kind: kind,
+        target_device_ids: resolvedTarget,
+      };
+      const result = await fleetStateCall(env, "/aot/hub/control", { method: "POST", body });
+      if (result.response.ok) {
+        await sendMessage(chatId, env, `Lệnh ${kind} đã được gửi thành công tới ${resolvedTarget.join(",")}.`);
+      } else {
+        await sendMessage(chatId, env, `Lỗi: ${result.data?.error || result.response.status}`);
+      }
+    } catch (e) {
+      await sendMessage(chatId, env, `Lỗi: ${e.message}`);
     }
     return;
   }
