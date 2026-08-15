@@ -34,7 +34,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          test "$RELEASE_VERSION" = "2026.08.14.03"
+          test "$RELEASE_VERSION" = "2026.08.15.01"
           grep -Fq 'WORKER_VERSION = "aot-worker-'"$RELEASE_VERSION"'"' aot-group-control/relay.py
           python3 - "$RELEASE_VERSION" <<'PY'
           import json, pathlib, sys
