@@ -47,6 +47,7 @@ jobs:
           for test in aot-group-control/*selftest.py; do timeout 180 python3 "$test"; done
           node --experimental-vm-modules cloudflare-worker/fleet-state-selftest.mjs
           node --experimental-vm-modules cloudflare-worker/aot-hub-session-selftest.mjs
+          node --experimental-vm-modules cloudflare-worker/telegram-targets-selftest.mjs
           python3 -m unittest discover -s tests -v
           timeout 300 bash tests/setup-self-test.sh
 
