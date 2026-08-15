@@ -451,6 +451,43 @@ class TestRestoreData(unittest.TestCase):
         self.assertEqual("TIMEOUT", res.get("status"))
         self.assertEqual("post_tap_start_unconfirmed", res.get("safe_reason"))
 
+    def test_restore_started_disabled_indicator(self):
+        self.mock_dump.side_effect = _Rotator([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(),
+            _wrap(_node(text="Backing up...", enabled=False))
+        ])
+        with mock.patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70]):
+            res = CONTROLLER.backup_restore_data("test_id")
+        self.assertEqual("TIMEOUT", res.get("status"))
+
+    def test_restore_started_zero_bounds_indicator(self):
+        self.mock_dump.side_effect = _Rotator([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(),
+            _wrap(_node(text="Backing up...", bounds="[0,0][0,0]"))
+        ])
+        with mock.patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70]):
+            res = CONTROLLER.backup_restore_data("test_id")
+        self.assertEqual("TIMEOUT", res.get("status"))
+
+    def test_restore_started_duplicate_indicator(self):
+        self.mock_dump.side_effect = _Rotator([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(),
+            _wrap(_node(text="Backing up..."), _node(text="Backing up..."))
+        ])
+        with mock.patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70]):
+            res = CONTROLLER.backup_restore_data("test_id")
+        self.assertEqual("TIMEOUT", res.get("status"))
+
+    def test_restore_started_negative_bounds_indicator(self):
+        self.mock_dump.side_effect = _Rotator([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU, _user_app_parts(),
+            _wrap(_node(text="Backing up...", bounds="[-10,-10][100,100]"))
+        ])
+        with mock.patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70]):
+            res = CONTROLLER.backup_restore_data("test_id")
+        self.assertEqual("TIMEOUT", res.get("status"))
+
+
 
     # 14. redelivery không chạy RESTORE lần hai.
     def test_redelivery(self):

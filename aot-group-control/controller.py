@@ -1386,11 +1386,29 @@ def backup_restore_data(
             def _restore_started() -> bool:
                 _sb_assert_foreground()
                 n = parse_ui_xml(dump_ui_xml())
-                if _find_unique_by_resource_ids(n, _RID_BACKUP_PROGRESS, _RID_BACKUP_RUNNING):
-                    return True
-                if _find_text("Backing up...", n) or _find_text("Backup progress", n):
-                    return True
-                return False
+                
+                matches = []
+                for node in n:
+                    if node.resource_id in (_RID_BACKUP_PROGRESS, _RID_BACKUP_RUNNING):
+                        matches.append(node)
+                    else:
+                        text = _clean(node.text)
+                        desc = _clean(node.content_description)
+                        if text in ("backing up...", "backup progress") or desc in ("backing up...", "backup progress"):
+                            matches.append(node)
+                
+                if len(matches) != 1:
+                    return False
+                
+                node = matches[0]
+                if not node.enabled:
+                    return False
+                if node.bounds.area <= 0:
+                    return False
+                if node.bounds.left < 0 or node.bounds.top < 0:
+                    return False
+                    
+                return True
 
             if deadline is not None and time.time() >= deadline:
                 raise AotExpiredError("expired_before_tap")
