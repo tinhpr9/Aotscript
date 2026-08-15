@@ -1205,6 +1205,23 @@ async function requireAotHubAdmin(
   request,
   env
 ) {
+  const authHeader = request.headers.get("Authorization");
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const token = authHeader.substring(7);
+    const secret = env.AOT_HUB_API_SECRET;
+    if (secret && token === secret) {
+      return { ok: true, user: { id: "server", first_name: "Server" } };
+    }
+    // Fail-closed for server-to-server auth
+    return {
+      ok: false,
+      response: noStoreJson(
+        { ok: false, error: "hub_unauthorized" },
+        401
+      ),
+    };
+  }
+
   const user =
     await validateAotTelegramInitData(
       request.headers.get(

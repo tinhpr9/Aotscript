@@ -126,8 +126,21 @@ class TestDiscordGateway(unittest.TestCase):
         self.mock_router.dispatch.assert_not_called()
         self.assertIn("cannot confirm another user's request", btn_res["content"])
         
-        # Token should still be deleted
-        self.assertNotIn(token, self.gateway.pending_requests)
+        # Token should still exist
+        self.assertIn(token, self.gateway.pending_requests)
+
+    def test_invalid_action_rejected(self):
+        self.gateway.handle_slash_command(self.interaction, "batch", ["marmot"])
+        token = list(self.gateway.pending_requests.keys())[0]
+        
+        custom_id = f"weird:{token}"
+        btn_res = self.gateway.handle_button_click(self.interaction, custom_id)
+        
+        self.mock_router.dispatch.assert_not_called()
+        self.assertIn("Unknown button action: weird", btn_res["content"])
+        
+        # Token should still exist
+        self.assertIn(token, self.gateway.pending_requests)
 
     def test_non_destructive_dispatches_immediately(self):
         self.mock_router.dispatch.return_value = {"message": "State fetched"}

@@ -107,16 +107,18 @@ class DiscordGateway:
             return self._format_error("Invalid, expired, or forged request token.")
 
         pending = self.pending_requests[token]
-        
-        # Prevent replay or double-click by deleting immediately
-        del self.pending_requests[token]
 
         if time.time() > pending["expires"]:
+            del self.pending_requests[token]
             return self._format_error("Request has expired.")
 
         caller = self._extract_identity(interaction)
         if pending["caller"].user_id != caller.user_id:
             return self._format_error("You cannot confirm another user's request.")
+
+        # Prevent replay or double-click by deleting upon valid owner action
+        if action in ("approve", "cancel"):
+            del self.pending_requests[token]
 
         if action == "cancel":
             return {"content": "❌ Action cancelled."}
