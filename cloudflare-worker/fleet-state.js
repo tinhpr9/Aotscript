@@ -2939,6 +2939,7 @@ export class FleetState
       const online = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", item.device_id)).length > 0;
       return {
         device_id: item.device_id, online, status: online ? "ONLINE" : "OFFLINE",
+        device_group: item.device_group || "",
         worker_version: live.worker_version || item.worker_version || "",
         capabilities: live.capabilities || item.capabilities || [], updated_at: live.updated_at || 0,
       };
