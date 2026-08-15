@@ -204,11 +204,11 @@ def _user_app_parts(apks_card="[10,10][90,50]", data_card="[10,60][90,100]", res
         nodes.append(_node(text="APKs", bounds=apks_card))
     if data_card:
         nodes.append(_node(text="Data", bounds=data_card))
-    nodes.append(_node(text="Cloud"))
-    nodes.append(_node(text="Ext.data"))
-    nodes.append(_node(text="Expansion"))
-    nodes.append(_node(text="Media"))
-    nodes.append(_node(text="Device"))
+    nodes.append(_node(text="Cloud", bounds="[10,10][20,20]"))
+    nodes.append(_node(text="Ext.data", bounds="[10,10][20,20]"))
+    nodes.append(_node(text="Expansion", bounds="[10,10][20,20]"))
+    nodes.append(_node(text="Media", bounds="[10,10][20,20]"))
+    nodes.append(_node(text="Device", bounds="[10,10][20,20]"))
     if restore_btn:
         nodes.append(_node(text="BACKUP", bounds=restore_btn))
     return _wrap(*nodes)
@@ -237,7 +237,7 @@ class TestRestoreData(unittest.TestCase):
         self._data_on = True
 
         def mock_is_green(opt, nodes, frame=None):
-            card = CONTROLLER._smart_find(opt, nodes)
+            card = CONTROLLER._option_card(opt, nodes)
             if not card:
                 return False, None
             if opt == "Cloud":
@@ -525,6 +525,29 @@ class TestRestoreData(unittest.TestCase):
                 _wrap(*nodes)
             ], ["SELECTED"], expected_error="options_verify_failed")
 
+    def test_rid_backup_disabled(self):
+        nodes = [_node(text="User app parts", clickable=False)]
+        for opt in ["APKs", "Data", "Cloud", "Ext.data", "Expansion", "Media", "Device"]:
+            nodes.append(_node(text=opt, bounds="[10,10][20,20]"))
+        nodes.append(_node(rid=CONTROLLER._RID_FINAL_BACKUP, clickable=False, bounds="[80,80][100,100]"))
+        self.run_ctrl([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU,
+            _wrap(*nodes)
+        ], ["SELECTED", "OPTIONS_VERIFIED"], expected_error="unclickable_target:BACKUP")
+
+    def test_label_without_card(self):
+        nodes = [_node(text="User app parts", clickable=False, bounds="[0,0][100,200]")]
+        nodes.append(_node(text="APKs", bounds="[10,10][10,10]"))
+        for opt in ["Data", "Cloud", "Ext.data", "Expansion", "Media", "Device"]:
+            nodes.append(_node(text=opt, bounds="[10,10][20,20]"))
+        nodes.append(_node(text="BACKUP", bounds="[80,80][100,100]"))
+        custom_wrap = f"<hierarchy><node class='Root' bounds='[0,0][100,200]'>{''.join(nodes)}</node></hierarchy>"
+        self.run_ctrl([
+            APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU,
+            custom_wrap
+        ], ["SELECTED"], expected_error="selector_missing:APKs")
+
+
 class TestControllerFixes(unittest.TestCase):
     def test_unclickable_target_no_parent(self):
         nodes = [_node(text="BACKUP", clickable=False, bounds="[10,10][20,20]")]
@@ -532,11 +555,12 @@ class TestControllerFixes(unittest.TestCase):
             CONTROLLER._smart_find("BACKUP", CONTROLLER.parse_ui_xml(_wrap(*nodes)))
 
     def test_is_green_selected_zero_samples(self):
-        nodes = CONTROLLER.parse_ui_xml("<hierarchy><node class='Root' bounds='[0,0][100,200]'><node class='android.widget.Button' text='APKs' bounds='[10,10][10,10]'/></node></hierarchy>")
+        nodes = []
         frame = (100, 100, b'\x00' * 40000)
         with mock.patch.object(CONTROLLER, "display_size", return_value=(100, 100)):
-            with self.assertRaisesRegex(CONTROLLER.AotControllerError, "screencap_invalid_format:zero_samples_for_APKs"):
-                CONTROLLER._is_green_selected("APKs", nodes, frame=frame)
+            with mock.patch.object(CONTROLLER, "_option_card", return_value=CONTROLLER.Bounds(10,10,10,10)):
+                with self.assertRaisesRegex(CONTROLLER.AotControllerError, "screencap_invalid_format:zero_samples_for_APKs"):
+                    CONTROLLER._is_green_selected("APKs", nodes, frame=frame)
 
 class TestLegacyActionsUnchanged(unittest.TestCase):
     def setUp(self):

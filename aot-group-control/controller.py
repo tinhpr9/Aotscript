@@ -1374,7 +1374,7 @@ def backup_restore_data(
             _cb("OPTIONS_VERIFIED")
 
             n = _find_unique_by_resource_ids(nodes, _RID_FINAL_BACKUP, _RID_FINAL_BACKUP_ALT)
-            b = n.bounds if n else _smart_find("BACKUP", nodes) or _smart_find("+ BACKUP", nodes)
+            b = _actionable_bounds(n, nodes, "BACKUP") if n else (_smart_find("BACKUP", nodes) or _smart_find("+ BACKUP", nodes))
             if not b:
                 _save_unknown_debug("final_restore_button_not_found")
                 raise AotControllerError("final_restore_button_not_found")
@@ -1637,19 +1637,9 @@ def _find_text(text: str, nodes: list[UiNode]) -> Bounds | None:
             return n.bounds
     return None
 
-def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
-    target = _clean(text)
-    matches = []
-    for n in nodes:
-        if _clean(n.text) == target or _clean(n.content_description) == target:
-            matches.append(n)
-    if not matches:
-        return None
-    if len(matches) > 1:
-        raise AotControllerError(f"ambiguous_selector:{text}")
-    n = matches[0]
+def _actionable_bounds(n: UiNode, nodes: list[UiNode], label: str) -> Bounds:
     if not n.enabled:
-        raise AotControllerError(f"disabled_target:{text}")
+        raise AotControllerError(f"disabled_target:{label}")
     tb = n.bounds
     if n.clickable:
         return tb
@@ -1662,9 +1652,21 @@ def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
     if candidates:
         best_c = min(candidates, key=lambda x: x[0])[1]
         if not best_c.enabled:
-            raise AotControllerError(f"disabled_target:{text}")
+            raise AotControllerError(f"disabled_target:{label}")
         return best_c.bounds
-    raise AotControllerError(f"unclickable_target:{text}")
+    raise AotControllerError(f"unclickable_target:{label}")
+
+def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
+    target = _clean(text)
+    matches = []
+    for n in nodes:
+        if _clean(n.text) == target or _clean(n.content_description) == target:
+            matches.append(n)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise AotControllerError(f"ambiguous_selector:{text}")
+    return _actionable_bounds(matches[0], nodes, text)
 
 def _tap_wait(bounds: Bounds, deadline: float | None):
     xml_before = dump_ui_xml()
@@ -1763,7 +1765,7 @@ def _option_card(name: str, nodes: list[UiNode]) -> Bounds | None:
                 cands.append((b.area, b))
     if cands:
         return min(cands, key=lambda x: x[0])[1]
-    return tb
+    return None
 
 def _is_green_selected(name: str, nodes: list[UiNode], frame: tuple[int, int, bytes] | None = None) -> tuple[bool, Bounds | None]:
     card = _option_card(name, nodes)
