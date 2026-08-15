@@ -1355,13 +1355,16 @@ def backup_restore_data(
                     _save_unknown_debug("data_toggle_failed")
                     raise AotControllerError("data_toggle_failed")
 
-            apk_on, _ = _is_green_selected("APKs", nodes, frame=frame)
-            data_on, _ = _is_green_selected("Data", nodes, frame=frame)
-            cloud_on, _ = _is_green_selected("Cloud", nodes, frame=frame)
-            ext_on, _ = _is_green_selected("Ext.data", nodes, frame=frame)
-            exp_on, _ = _is_green_selected("Expansion", nodes, frame=frame)
-            med_on, _ = _is_green_selected("Media", nodes, frame=frame)
-            dev_on, _ = _is_green_selected("Device", nodes, frame=frame)
+            apk_on, apk_card_fin = _is_green_selected("APKs", nodes, frame=frame)
+            data_on, data_card_fin = _is_green_selected("Data", nodes, frame=frame)
+            cloud_on, cloud_card_fin = _is_green_selected("Cloud", nodes, frame=frame)
+            ext_on, ext_card_fin = _is_green_selected("Ext.data", nodes, frame=frame)
+            exp_on, exp_card_fin = _is_green_selected("Expansion", nodes, frame=frame)
+            med_on, med_card_fin = _is_green_selected("Media", nodes, frame=frame)
+            dev_on, dev_card_fin = _is_green_selected("Device", nodes, frame=frame)
+
+            if not all([apk_card_fin, data_card_fin, cloud_card_fin, ext_card_fin, exp_card_fin, med_card_fin, dev_card_fin]):
+                raise AotControllerError("options_verify_failed")
 
             if not apk_on or not data_on or not cloud_on:
                 raise AotControllerError("options_verify_failed")
@@ -1606,9 +1609,17 @@ def _save_unknown_debug(reason: str):
     debug_dir = "/sdcard/Download/SwiftDebug"
     import shlex
     _root_run(f"mkdir -p {debug_dir}")
-    _root_run(f"cp /sdcard/window.xml {debug_dir}/window.xml")
     try:
-        _root_run(f"screencap -p {debug_dir}/screen.png")
+        xml = dump_ui_xml()
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write(xml)
+            tmp_path = f.name
+        _root_run(f"cp {tmp_path} {debug_dir}/window.xml")
+    except Exception:
+        pass
+    try:
+        _root_run(f"screencap -p {debug_dir}/screen.png", timeout=15)
     except Exception:
         pass
     try:
@@ -1653,7 +1664,7 @@ def _smart_find(text: str, nodes: list[UiNode]) -> Bounds | None:
         if not best_c.enabled:
             raise AotControllerError(f"disabled_target:{text}")
         return best_c.bounds
-    return tb
+    raise AotControllerError(f"unclickable_target:{text}")
 
 def _tap_wait(bounds: Bounds, deadline: float | None):
     xml_before = dump_ui_xml()
@@ -1663,13 +1674,14 @@ def _tap_wait(bounds: Bounds, deadline: float | None):
     end = time.time() + 4.0
     while time.time() < end:
         if deadline and time.time() >= deadline:
-            break
+            raise AotControllerError("state_machine_timeout")
         time.sleep(0.5)
         xml_after = dump_ui_xml()
         after_nodes = parse_ui_xml(xml_after)
         after_fp = ui_fingerprint(SWIFT_BACKUP_PACKAGE, after_nodes)
         if after_fp != before_fp:
             return
+    raise AotControllerError("tap_wait_no_transition")
 
 def _selected_stats(nodes: list[UiNode]) -> tuple[int, int, Bounds | None]:
     for n in nodes:
@@ -1714,7 +1726,7 @@ def _press_filter(nodes: list[UiNode], deadline: float | None) -> bool:
 def _raw_screencap():
     import struct
     try:
-        proc = subprocess.run([TERMUX_SU, "-c", SCREENCAP], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        proc = subprocess.run([TERMUX_SU, "-c", SCREENCAP], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15)
         raw = proc.stdout
         if len(raw) < 12:
             raise AotControllerError("screencap_failed")
@@ -1778,7 +1790,9 @@ def _is_green_selected(name: str, nodes: list[UiNode], frame: tuple[int, int, by
             total += 1
             if g >= 70 and g - r >= 10 and g - b_ >= 6:
                 green += 1
-    score = green / max(total, 1)
+    if total == 0:
+        raise AotControllerError(f"screencap_invalid_format:zero_samples_for_{name}")
+    score = green / total
     return score > 0.20, card
 
 def swipe_normalized(

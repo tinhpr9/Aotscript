@@ -513,6 +513,31 @@ class TestRestoreData(unittest.TestCase):
         self.assertEqual(calls[-1].kwargs["status"], "FAILED")
         self.assertEqual(calls[-1].kwargs["reason"], "unknown_ui_state")
 
+    def test_missing_prohibited_card(self):
+        for missing_opt in ["Cloud", "Ext.data", "Expansion", "Media", "Device"]:
+            nodes = [_node(text="User app parts", clickable=False)]
+            for opt in ["APKs", "Data", "Cloud", "Ext.data", "Expansion", "Media", "Device"]:
+                if opt != missing_opt:
+                    nodes.append(_node(text=opt, bounds="[10,10][20,20]"))
+            nodes.append(_node(text="BACKUP", bounds="[80,80][100,100]"))
+            self.run_ctrl([
+                APPS_RESTORE_ACTIVE, BATCH_MENU, OPTIONS_MENU,
+                _wrap(*nodes)
+            ], ["SELECTED"], expected_error="options_verify_failed")
+
+class TestControllerFixes(unittest.TestCase):
+    def test_unclickable_target_no_parent(self):
+        nodes = [_node(text="BACKUP", clickable=False, bounds="[10,10][20,20]")]
+        with self.assertRaisesRegex(CONTROLLER.AotControllerError, "unclickable_target:BACKUP"):
+            CONTROLLER._smart_find("BACKUP", CONTROLLER.parse_ui_xml(_wrap(*nodes)))
+
+    def test_is_green_selected_zero_samples(self):
+        nodes = CONTROLLER.parse_ui_xml("<hierarchy><node class='Root' bounds='[0,0][100,200]'><node class='android.widget.Button' text='APKs' bounds='[10,10][10,10]'/></node></hierarchy>")
+        frame = (100, 100, b'\x00' * 40000)
+        with mock.patch.object(CONTROLLER, "display_size", return_value=(100, 100)):
+            with self.assertRaisesRegex(CONTROLLER.AotControllerError, "screencap_invalid_format:zero_samples_for_APKs"):
+                CONTROLLER._is_green_selected("APKs", nodes, frame=frame)
+
 class TestLegacyActionsUnchanged(unittest.TestCase):
     def setUp(self):
         self._old_controller = getattr(RELAY, "controller", None)
