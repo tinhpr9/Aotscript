@@ -1951,7 +1951,7 @@ function aotHubHtml() {
 }
 
 function fleetHubHtml() {
-  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AOT Hub</title><script src="https://telegram.org/js/telegram-web-app.js?63"></script><style>body{font:14px system-ui;background:#101114;color:#f5f7fb;margin:0}.app{max-width:900px;margin:auto;padding:16px}button{padding:10px;margin:4px;border:1px solid #555;border-radius:9px;background:#20232b;color:inherit}button:disabled{opacity:0.5;cursor:not-allowed}.device{display:flex;gap:10px;padding:10px;border-bottom:1px solid #333}.OFFLINE,.error{color:#ff9ca6}.ONLINE{color:#8df1b8}.error{min-height:22px}.result{font-family:monospace;padding:4px}.allocate-section{margin-top:10px;padding:10px;border:1px solid #333;border-radius:9px}</style></head><body><main class="app"><h1>AOT HUB</h1><button id="refresh">Làm mới</button><div><button id="selectOnline">Chọn máy online</button><button id="clear">Bỏ chọn hết</button><button id="backup">Mở Swift Backup</button><button id="apps">Mở Apps</button><button id="backupRestoreData">Backup RESTORE_DATA</button></div><div class="allocate-section"><label>Số tab (1-10): <input type="number" id="tabCount" value="5" min="1" max="10" style="width:50px"></label><button id="previewAllocate">Preview PHÂN SERVER</button><button id="allocate" disabled>Chạy PHÂN SERVER</button><div id="allocatePreview"></div></div><div id="error" class="error"></div><section id="devices"></section><section id="results"></section><hr><button id="canary">Cập nhật 2 máy thử</button><button id="stable">Phát hành cho tất cả</button><div id="updateError" class="error"></div></main><script>(()=>{'use strict';const tg=window.Telegram&&window.Telegram.WebApp,auth=tg?String(tg.initData||''):'',selected=new Set();let state=null,ws=null,retry=0,timer=null,allocationCache=null;const el=id=>document.getElementById(id);if(tg){tg.ready();tg.expand()}const api=async(path,init={})=>{init.headers=Object.assign({},init.headers||{}, {'X-Telegram-Init-Data':auth,'Accept':'application/json'});if(init.body&&typeof init.body!=='string'){init.headers['Content-Type']='application/json';init.body=JSON.stringify(init.body)}const r=await fetch(path,init),d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.message||d.error||('HTTP '+r.status));return d},devices=()=>state&&Array.isArray(state.devices)?state.devices:[],render=()=>{el('devices').innerHTML=devices().map(d=>'<label class="device"><input type="checkbox" data-id="'+d.device_id+'" '+(selected.has(d.device_id)?'checked':'')+' '+(d.online?'':'disabled')+'><b>'+d.device_id+'</b><span class="'+(d.online?'ONLINE':'OFFLINE')+'">'+(d.online?'ONLINE':'OFFLINE')+'</span></label>').join('');el('devices').querySelectorAll('input').forEach(n=>n.onchange=()=>n.checked?selected.add(n.dataset.id):selected.delete(n.dataset.id));const b=state&&state.last_batch;el('results').innerHTML=b&&b.devices?b.devices.map(d=>'<div class="result">'+d.device_id+': '+d.history.join(' → ')+(d.reason?' — '+d.reason:'')+(Number.isFinite(d.app_count)?' [Apps: '+d.app_count+']':'')+(Number.isFinite(d.selected_count)?' [Selected: '+d.selected_count+']':'')+'</div>').join(''):''},load=async()=>{try{state=(await api('/aot/hub/api/state')).state;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},control=async(kind,ids,extra={})=>api('/aot/hub/api/control',{method:'POST',body:Object.assign({kind,target_device_ids:ids},extra)}),run=async kind=>{try{const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));if(!ids.length)throw Error('Hãy chọn ít nhất một máy ONLINE.');const d=await control(kind,ids);state.last_batch=d.batch;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},connect=()=>{if(!auth||!window.WebSocket)return;clearTimeout(timer);ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/aot/hub/api/ws?init_data='+encodeURIComponent(auth));ws.onopen=()=>{retry=0};ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='aot_hub_state'){state=d;render()}};ws.onclose=()=>{const delay=Math.min(30000,1000*Math.pow(2,retry++))*(.75+Math.random()*.5);timer=setTimeout(connect,delay)}};el('refresh').onclick=load;el('selectOnline').onclick=()=>{devices().filter(d=>d.online).forEach(d=>selected.add(d.device_id));render()};el('clear').onclick=()=>{selected.clear();render()};el('backup').onclick=()=>run('open_swift_backup');el('apps').onclick=()=>run('open_swift_apps');el('backupRestoreData').onclick=()=>run('backup_restore_data');el('canary').onclick=()=>control('update_canary').catch(e=>el('updateError').textContent=e.message);el('stable').onclick=()=>control('update_stable').catch(e=>el('updateError').textContent=e.message);el('previewAllocate').onclick=async()=>{try{const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));if(!ids.length)throw Error('Hãy chọn ít nhất một máy ONLINE.');const tabs=parseInt(el('tabCount').value);if(isNaN(tabs)||tabs<1||tabs>10)throw Error('Số tab không hợp lệ.');el('previewAllocate').disabled=true;const d=await control('preview_allocate_server',ids,{tabs});allocationCache=d.allocationMap;let html='<div style="max-height:300px;overflow-y:auto;background:#000;padding:10px;margin-top:10px">';for(const[id,list]of Object.entries(allocationCache)){html+='<div style="margin-bottom:8px"><b>'+id+'</b><br>'+list.map(x=>x.pkg+' : '+x.url).join('<br>')+'</div>';}html+='</div>';el('allocatePreview').innerHTML=html;el('allocate').disabled=false;el('error').textContent='';}catch(e){el('error').textContent=e.message;el('allocate').disabled=true;}finally{el('previewAllocate').disabled=false;}};el('allocate').onclick=async()=>{if(!allocationCache)return;try{el('allocate').disabled=true;const ids=Object.keys(allocationCache);const d=await control('allocate_server',ids,{allocationMap:allocationCache});state.last_batch=d.batch;render();allocationCache=null;el('allocatePreview').innerHTML='';el('error').textContent='';}catch(e){el('error').textContent=e.message;el('allocate').disabled=false;}};load();connect()})();</script></body></html>`;
+  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AOT Hub</title><script src="https://telegram.org/js/telegram-web-app.js?63"></script><style>body{font:14px system-ui;background:#101114;color:#f5f7fb;margin:0}.app{max-width:900px;margin:auto;padding:16px}button{padding:10px;margin:4px;border:1px solid #555;border-radius:9px;background:#20232b;color:inherit}button:disabled{opacity:0.5;cursor:not-allowed}.device{display:flex;gap:10px;padding:10px;border-bottom:1px solid #333}.OFFLINE,.error{color:#ff9ca6}.ONLINE{color:#8df1b8}.error{min-height:22px}.result{font-family:monospace;padding:4px}.allocate-section{margin-top:10px;padding:10px;border:1px solid #333;border-radius:9px}</style></head><body><main class="app"><h1>AOT HUB</h1><button id="refresh">Làm mới</button><div><button id="selectOnline">Chọn máy online</button><button id="clear">Bỏ chọn hết</button><button id="backup">Mở Swift Backup</button><button id="apps">Mở Apps</button><button id="backupRestoreData">Backup RESTORE_DATA</button></div><div class="allocate-section"><label>Số tab (1-10): <input type="number" id="tabCount" value="5" min="1" max="10" style="width:50px"></label><button id="previewAllocate">Preview PHÂN SERVER</button><button id="allocate" disabled>Chạy PHÂN SERVER</button><div id="allocatePreview"></div></div><div id="error" class="error"></div><section id="devices"></section><section id="results"></section><hr><button id="canary">Cập nhật 2 máy thử</button><button id="stable">Phát hành cho tất cả</button><div id="updateError" class="error"></div></main><script>(()=>{'use strict';const tg=window.Telegram&&window.Telegram.WebApp,auth=tg?String(tg.initData||''):'',selected=new Set();let state=null,ws=null,retry=0,timer=null,allocationCache=null;const el=id=>document.getElementById(id);if(tg){tg.ready();tg.expand()}const api=async(path,init={})=>{init.headers=Object.assign({},init.headers||{}, {'X-Telegram-Init-Data':auth,'Accept':'application/json'});if(init.body&&typeof init.body!=='string'){init.headers['Content-Type']='application/json';init.body=JSON.stringify(init.body)}const r=await fetch(path,init),d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.message||d.error||('HTTP '+r.status));return d},devices=()=>state&&Array.isArray(state.devices)?state.devices:[],render=()=>{el('devices').innerHTML=devices().map(d=>'<label class="device"><input type="checkbox" data-id="'+d.device_id+'" '+(selected.has(d.device_id)?'checked':'')+' '+(d.online?'':'disabled')+'><b>'+d.device_id+'</b><span class="'+(d.online?'ONLINE':'OFFLINE')+'">'+(d.online?'ONLINE':'OFFLINE')+'</span></label>').join('');el('devices').querySelectorAll('input').forEach(n=>n.onchange=()=>n.checked?selected.add(n.dataset.id):selected.delete(n.dataset.id));const b=state&&state.last_batch;el('results').innerHTML=b&&b.devices?b.devices.map(d=>'<div class="result">'+d.device_id+': '+d.history.join(' → ')+(d.reason?' — '+d.reason:'')+(Number.isFinite(d.app_count)?' [Apps: '+d.app_count+']':'')+(Number.isFinite(d.selected_count)?' [Selected: '+d.selected_count+']':'')+'</div>').join(''):''},load=async()=>{try{state=(await api('/aot/hub/api/state')).state;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},control=async(kind,ids,extra={})=>api('/aot/hub/api/control',{method:'POST',body:Object.assign({kind,target_device_ids:ids},extra)}),run=async kind=>{try{const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));if(!ids.length)throw Error('Hãy chọn ít nhất một máy ONLINE.');const d=await control(kind,ids);state.last_batch=d.batch;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},connect=()=>{if(!auth||!window.WebSocket)return;clearTimeout(timer);ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/aot/hub/api/ws?init_data='+encodeURIComponent(auth));ws.onopen=()=>{retry=0};ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='aot_hub_state'){state=d;render()}};ws.onclose=()=>{const delay=Math.min(30000,1000*Math.pow(2,retry++))*(.75+Math.random()*.5);timer=setTimeout(connect,delay)}};el('refresh').onclick=load;el('selectOnline').onclick=()=>{devices().filter(d=>d.online).forEach(d=>selected.add(d.device_id));render()};el('clear').onclick=()=>{selected.clear();render()};el('backup').onclick=()=>run('open_swift_backup');el('apps').onclick=()=>run('open_swift_apps');el('backupRestoreData').onclick=()=>run('backup_restore_data');el('canary').onclick=()=>control('update_canary').catch(e=>el('updateError').textContent=e.message);el('stable').onclick=()=>control('update_stable').catch(e=>el('updateError').textContent=e.message);el('previewAllocate').onclick=async()=>{try{const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));if(!ids.length)throw Error('Hãy chọn ít nhất một máy ONLINE.');const tabs=parseInt(el('tabCount').value);if(isNaN(tabs)||tabs<1||tabs>10)throw Error('Số tab không hợp lệ.');el('previewAllocate').disabled=true;const d=await control('preview_allocate_server',ids,{tabs});let html='<div style="max-height:300px;overflow-y:auto;background:#000;padding:10px;margin-top:10px">';for(const[id,list]of Object.entries(d.allocationMap)){html+='<div style="margin-bottom:8px"><b>'+id+'</b><br>'+list.map(x=>x.pkg+' : '+x.url).join('<br>')+'</div>';}html+='</div>';el('allocatePreview').innerHTML=html;el('allocate').disabled=false;el('error').textContent='';}catch(e){el('error').textContent=e.message;el('allocate').disabled=true;}finally{el('previewAllocate').disabled=false;}};el('allocate').onclick=async()=>{try{el('allocate').disabled=true;const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));const tabs=parseInt(el('tabCount').value);const d=await control('allocate_server',ids,{tabs});state.last_batch=d.batch;render();el('allocatePreview').innerHTML='';el('error').textContent='';}catch(e){el('error').textContent=e.message;el('allocate').disabled=false;}};load();connect()})();</script></body></html>`;
 }
 
 async function handleAotHubPage() {
@@ -2054,12 +2054,11 @@ function normalizeAotHubControl(body) {
         return null;
       }
       control.target_device_ids = body.target_device_ids.map(String);
-      if (kind === "preview_allocate_server") {
-        control.tabs = Number(body.tabs) || 5;
-      }
-      if (kind === "allocate_server") {
-        if (!body.allocationMap || typeof body.allocationMap !== "object") return null;
-        control.allocationMap = body.allocationMap;
+      if (kind === "preview_allocate_server" || kind === "allocate_server") {
+        control.tabs = Number(body.tabs);
+        if (isNaN(control.tabs) || control.tabs < 1 || control.tabs > 10 || !Number.isInteger(control.tabs)) {
+          return null;
+        }
       }
     } else if (["update_canary", "update_stable"].includes(kind)) {
       if (Array.isArray(body.target_device_ids)) {
@@ -2074,6 +2073,64 @@ function normalizeAotHubControl(body) {
     return control;
   }
   return null;
+}
+
+export function parseTongHopLink(text, target_device_ids, tabs) {
+  const pkgs = ["com.tinh.vv.hi", "com.tinh.vv.hj", "com.tinh.vv.hk", "com.tinh.vv.hl", "com.tinh.vv.hm", "com.tinh.vv.hn", "com.tinh.vv.ho", "com.tinh.vv.hp", "com.tinh.vv.hq", "com.tinh.vv.hr"];
+  const lines = text.split('\n');
+  const blocks = [];
+  let currentBlock = [];
+  const seenUrls = new Set();
+  let blockInvalid = false;
+  
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+    if (line === '===') {
+      if (!blockInvalid && currentBlock.length === 10) {
+        blocks.push(currentBlock);
+      }
+      currentBlock = [];
+      blockInvalid = false;
+      continue;
+    }
+    if (blockInvalid) continue;
+    
+    const parts = line.split(',');
+    if (parts.length < 2) {
+      blockInvalid = true;
+      continue;
+    }
+    const pkg = parts[0].trim();
+    const url = parts.slice(1).join(',').trim();
+    if (!url.match(/^https:\/\/(www\.)?roblox\.com\/games\/\d+\?privateServerLinkCode=[0-9a-fA-F]+$/i)) {
+      blockInvalid = true;
+      continue;
+    }
+    if (seenUrls.has(url)) {
+      blockInvalid = true;
+      continue;
+    }
+    if (currentBlock.length >= 10 || pkg !== pkgs[currentBlock.length]) {
+      blockInvalid = true;
+      continue;
+    }
+    seenUrls.add(url);
+    currentBlock.push({ pkg, url });
+  }
+  if (!blockInvalid && currentBlock.length === 10) {
+    blocks.push(currentBlock);
+  }
+  
+  if (target_device_ids.length > blocks.length) {
+    throw new Error(`Không đủ block URL hợp lệ! Cần ${target_device_ids.length} block, nhưng file chỉ có ${blocks.length} block hợp lệ và duy nhất.`);
+  }
+
+  const allocationMap = {};
+  for (let i = 0; i < target_device_ids.length; i++) {
+    allocationMap[target_device_ids[i]] = blocks[i].slice(0, tabs);
+  }
+  return allocationMap;
 }
 
 async function handleAotHubControl(
@@ -2110,43 +2167,20 @@ async function handleAotHubControl(
     );
   }
 
-  if (control.kind === "preview_allocate_server") {
+  if (control.kind === "preview_allocate_server" || control.kind === "allocate_server") {
     try {
       const resp = await fetch("https://raw.githubusercontent.com/tinhpr9/Aotscript/main/tong_hop_link.txt");
       if (!resp.ok) throw new Error("Fetch tong_hop_link.txt failed");
       const text = await resp.text();
-      const urls = [];
-      const seenUrls = new Set();
-      const lines = text.split('\n');
-      for (let line of lines) {
-        line = line.trim();
-        if (!line || line === '===') continue;
-        let url = line;
-        if (line.includes(',')) {
-          url = line.split(',').slice(1).join(',').trim();
-        }
-        if (!url.match(/^https:\/\/(www\.)?roblox\.com\/games\/\d+\?privateServerLinkCode=[0-9a-fA-F]+$/i)) continue;
-        if (seenUrls.has(url)) continue;
-        seenUrls.add(url);
-        urls.push(url);
-      }
       
-      const ids = control.target_device_ids;
-      const tabs = control.tabs || 5;
-      if (ids.length * tabs > urls.length) {
-        throw new Error(`Không đủ URL! Cần ${ids.length * tabs}, nhưng file chỉ có ${urls.length} URL hợp lệ và duy nhất.`);
+      const allocationMap = parseTongHopLink(text, control.target_device_ids, control.tabs);
+      
+      if (control.kind === "preview_allocate_server") {
+        return noStoreJson({ ok: true, allocationMap });
+      } else {
+        // Attach allocationMap to control for allocate_server
+        control.allocationMap = allocationMap;
       }
-
-      const allocationMap = {};
-      const pkgs = ["com.tinh.vv.hi", "com.tinh.vv.hj", "com.tinh.vv.hk", "com.tinh.vv.hl", "com.tinh.vv.hm", "com.tinh.vv.hn", "com.tinh.vv.ho", "com.tinh.vv.hp", "com.tinh.vv.hq", "com.tinh.vv.hr"];
-      let urlIdx = 0;
-      for (const id of ids) {
-        allocationMap[id] = [];
-        for (let i = 0; i < tabs; i++) {
-          allocationMap[id].push({ pkg: pkgs[i], url: urls[urlIdx++] });
-        }
-      }
-      return noStoreJson({ ok: true, allocationMap });
     } catch (e) {
       return noStoreJson({ ok: false, error: e.message }, 400);
     }
