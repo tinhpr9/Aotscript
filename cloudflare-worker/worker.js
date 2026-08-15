@@ -5050,12 +5050,14 @@ async function resolveAndValidateTelegramTargets(targetStr, env) {
   const wantedGroup = normalizeDeviceGroup(rawTarget);
   
   const durableRecords = await listFleetDeviceRecords(env);
+  const now = Date.now();
   
   if (wantedGroup) {
     const ids = [];
     for (const record of durableRecords) {
       if (normalizeDeviceGroup(record?.device_group) === wantedGroup) {
-        if (!record?.online) {
+        const isOnline = now - Number(record?.last_seen || 0) <= ONLINE_WINDOW_MS;
+        if (!isOnline) {
            throw new Error(`Thiết bị ${record?.device_id} trong nhóm ${wantedGroup} đang OFFLINE.`);
         }
         ids.push(normalizeDeviceId(record?.device_id));
@@ -5078,7 +5080,8 @@ async function resolveAndValidateTelegramTargets(targetStr, env) {
     const did = normalizeDeviceId(record?.device_id);
     if (!did) continue;
     allIds.add(did);
-    if (record?.online) onlineIds.add(did);
+    const isOnline = now - Number(record?.last_seen || 0) <= ONLINE_WINDOW_MS;
+    if (isOnline) onlineIds.add(did);
   }
   
   for (const id of ids) {

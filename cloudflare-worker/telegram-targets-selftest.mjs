@@ -6,12 +6,16 @@ const source = await fs.readFile(new URL("./worker.js", import.meta.url), "utf8"
 // We need to extract resolveAndValidateTelegramTargets and some mock functions
 const context = vm.createContext({
   console,
-  listFleetDeviceRecords: async () => [
-    { device_id: "m1", device_group: "NOVA", online: true },
-    { device_id: "m2", device_group: "NOVA", online: true },
-    { device_id: "m3", device_group: "MARMOT", online: false },
-    { device_id: "m4", device_group: "MARMOT", online: true }
-  ],
+  ONLINE_WINDOW_MS: 90000,
+  listFleetDeviceRecords: async () => {
+    const now = Date.now();
+    return [
+      { device_id: "m1", device_group: "NOVA", last_seen: now - 1000 },
+      { device_id: "m2", device_group: "NOVA", last_seen: now - 50000 },
+      { device_id: "m3", device_group: "MARMOT", last_seen: now - 100000 }, // stale (offline)
+      { device_id: "m4", device_group: "MARMOT", last_seen: now - 2000 }
+    ];
+  },
   normalizeDeviceGroup: (value) => {
     const group = String(value || "").trim().toUpperCase();
     return ["MARMOT", "NOVA"].includes(group) ? group : null;
