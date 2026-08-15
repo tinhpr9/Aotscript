@@ -323,6 +323,7 @@ class TestRestoreData(unittest.TestCase):
     def test_apks_on_data_off(self):
         self._apks_on, self._data_on = True, False
         def side_effect():
+            yield APPS_RESTORE_ACTIVE
             yield _user_app_parts()
             self._data_on = True
             yield _user_app_parts()
@@ -336,6 +337,7 @@ class TestRestoreData(unittest.TestCase):
     def test_apks_off_data_on(self):
         self._apks_on, self._data_on = False, True
         def side_effect():
+            yield APPS_RESTORE_ACTIVE
             yield _user_app_parts()
             self._apks_on = True
             yield _user_app_parts()
@@ -352,6 +354,9 @@ class TestRestoreData(unittest.TestCase):
             state = {"step": 0}
             while True:
                 if state["step"] == 0:
+                    yield APPS_RESTORE_ACTIVE
+                    state["step"] = 0.5
+                elif state["step"] == 0.5:
                     yield _user_app_parts()
                     state["step"] = 1
                 elif state["step"] == 1:
@@ -371,21 +376,23 @@ class TestRestoreData(unittest.TestCase):
     # 9. cả hai ON.
     def test_both_on(self):
         self._apks_on, self._data_on = True, True
-        self.mock_dump.side_effect = _Rotator([_user_app_parts(), RESTORING_SCREEN])
+        self.mock_dump.side_effect = _Rotator([APPS_RESTORE_ACTIVE, _user_app_parts(), RESTORING_SCREEN])
         res = CONTROLLER.backup_restore_data("test_id")
         self.assertEqual("RESTORE_STARTED", res["status"])
 
     # 10. RESTORE disabled.
     def test_restore_disabled(self):
         self.run_ctrl([
+            APPS_RESTORE_ACTIVE,
             _user_app_parts(restore_btn=None)
-        ], ["OPTIONS_VERIFIED"], expected_error="final_restore_button_not_found")
+        ], ["SELECTED", "OPTIONS_VERIFIED"], expected_error="final_restore_button_not_found")
 
     # 11. selector missing.
     def test_selector_missing(self):
         self.run_ctrl([
+            APPS_RESTORE_ACTIVE,
             _user_app_parts(apks_card=None)
-        ], [], expected_error="selector_missing:APKs")
+        ], ["SELECTED"], expected_error="selector_missing:APKs")
 
     # 12. selector ambiguous.
     def test_missing_apply(self):
@@ -409,7 +416,7 @@ class TestRestoreData(unittest.TestCase):
 
     # 14. redelivery không chạy RESTORE lần hai.
     def test_redelivery(self):
-        self.mock_dump.side_effect = _Rotator([_user_app_parts(), RESTORING_SCREEN])
+        self.mock_dump.side_effect = _Rotator([APPS_RESTORE_ACTIVE, _user_app_parts(), RESTORING_SCREEN])
         state = {}
         msg = {"action_id": "test_id", "type": "aot_batch_action", "action": "BACKUP_RESTORE_DATA", "expires_at": 9999999999999, "protocol": "phase4-1", "package": _PKG, "target_device_ids": ["m123"]}
         cfg = {"hub_url": "mock", "auth_token": "mock"}

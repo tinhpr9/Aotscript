@@ -1310,6 +1310,10 @@ def backup_restore_data(
 
     _sb_assert_foreground()
     unknown = 0
+    _verified_selection = False
+    _final_app_count = 0
+    _final_selected_count = 0
+
     for _step in range(80):
         _sb_assert_foreground()
         if deadline is not None and time.time() >= deadline:
@@ -1318,6 +1322,9 @@ def backup_restore_data(
         nodes = parse_ui_xml(dump_ui_xml())
 
         if _find_text("User app parts", nodes):
+            if not _verified_selection:
+                _save_unknown_debug("stale_options_screen")
+                raise AotControllerError("stale_options_screen")
             unknown = 0
             import struct
             
@@ -1428,6 +1435,8 @@ def backup_restore_data(
                 "executed": True,
                 "status": "RESTORE_STARTED",
                 "safe_reason": "",
+                "app_count": _final_app_count,
+                "selected_count": _final_selected_count,
             }
 
 
@@ -1523,6 +1532,9 @@ def backup_restore_data(
             if b:
                 unknown = 0
                 _cb("SELECTED")
+                _verified_selection = True
+                _final_app_count = tot
+                _final_selected_count = sel
                 _tap_wait(b, deadline)
                 continue
 
