@@ -1450,18 +1450,47 @@ def backup_restore_data(
 
         if _find_text("Select labels", nodes):
             unknown = 0
-            if _selected_count(nodes) > 0:
+            # Verify that exactly RESTORE_DATA (and no other label) is checked.
+            # If another label is already selected the apply would scope to the
+            # wrong set; fail-closed to prevent operating outside RESTORE_DATA.
+            checked_labels = [
+                n for n in nodes
+                if n.checked and (
+                    _clean(n.text) == "restore_data"
+                    or _clean(n.content_description) == "restore_data"
+                )
+            ]
+            other_checked = [
+                n for n in nodes
+                if n.checked and (
+                    # The node's primary label identity must not be RESTORE_DATA.
+                    # Use the first non-empty of text/description as the label.
+                    _clean(n.text or n.content_description) not in ("restore_data", "")
+                )
+            ]
+            if other_checked:
+                # A stale/unrelated label is checked → fail-closed.
+                _save_unknown_debug("stale_label_checked")
+                raise AotControllerError("stale_label_checked")
+            if checked_labels and not other_checked:
+                # Exactly RESTORE_DATA is selected; apply the filter.
                 b = _smart_find("Apply", nodes)
+                if not b:
+                    n_apply = _find_unique_by_resource_ids(nodes, _RID_FILTER_APPLY, _RID_FILTER_APPLY_ALT)
+                    b = n_apply.bounds if n_apply else None
                 if not b:
                     _save_unknown_debug("filter_apply_not_found")
                     raise AotControllerError("filter_apply_not_found")
+                _sb_assert_foreground()
                 _tap_wait(b, deadline)
                 _cb("FILTERED")
                 continue
+            # RESTORE_DATA not yet checked; tap the chip to select it.
             b = _smart_find("RESTORE_DATA", nodes)
             if not b:
                 _save_unknown_debug("restore_data_label_not_found")
                 raise AotControllerError("restore_data_label_not_found")
+            _sb_assert_foreground()
             _tap_wait(b, deadline)
             continue
 
@@ -1500,16 +1529,17 @@ def backup_restore_data(
         if _find_text("Batch actions", nodes):
             unknown = 0
             _cb("APPS_OPENED")
-            
+
             n = _find_unique_by_resource_ids(nodes, _RID_FILTER_TRIGGER, _RID_FILTER_TRIGGER_ALT)
-            if n:
-                if not n.enabled:
-                    raise AotControllerError("filter_trigger_disabled")
-                _tap_wait(n.bounds, deadline)
-            else:
-                if not _press_filter(nodes, deadline):
-                    _save_unknown_debug("filter_trigger_not_found")
-                    raise AotControllerError("filter_trigger_not_found")
+            if not n:
+                # No uniquely-identified filter trigger found; fail-closed.
+                # Do NOT fall back to positional/heuristic guessing.
+                _save_unknown_debug("filter_trigger_not_found")
+                raise AotControllerError("filter_trigger_not_found")
+            if not n.enabled:
+                raise AotControllerError("filter_trigger_disabled")
+            _sb_assert_foreground()
+            _tap_wait(n.bounds, deadline)
             continue
 
         b = _smart_find("Apps", nodes)

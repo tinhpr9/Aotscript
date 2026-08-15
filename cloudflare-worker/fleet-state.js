@@ -25,8 +25,8 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.14.05";
-const AOT_WORKER_TAG = "worker-v2026.08.14.05";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.14.06";
+const AOT_WORKER_TAG = "worker-v2026.08.14.06";
 const AOT_RELEASE_PROTOCOL = "github-release-v1";
 const AOT_RELEASE_REPOSITORY = "tinhpr9/Aotscript";
 const AOT_RELEASE_CACHE_MS = 5 * 60 * 1000;
@@ -3056,6 +3056,12 @@ export class FleetState
       return response;
     }
     const batch = record.last_batch, device = batch?.devices?.[id];
+    // Backward-compat: pre-2026.08.14.05 workers report "BACKUP_STARTED" for
+    // the BACKUP_RESTORE_DATA action.  Map it to the canonical "RESTORE_STARTED"
+    // so a mixed-version fleet during rollout does not get rejected.
+    if (action === AOT_BACKUP_RESTORE_DATA_ACTION && body.status === "BACKUP_STARTED") {
+      body.status = "RESTORE_STARTED";
+    }
     const allowed = new Set(["ACCEPTED", "OPENED", "APPS_OPENED", "SWIFT_OPENED", "FILTERED", "SELECTED", "OPTIONS_VERIFIED", "RESTORE_STARTED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "DUPLICATE"]);
     if (!batch || batch.action_id !== actionId || batch.action !== action || !device || !allowed.has(body.status)) return json({ ok: false, error: "invalid_batch_ack" }, 400);
     const terminal = new Set(["FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE"]);

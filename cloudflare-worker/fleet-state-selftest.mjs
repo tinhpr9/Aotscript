@@ -88,6 +88,16 @@ const batchViewAfterInfoFailed = fleet.aotBatchView((await fleet.readFleet()).la
 const dFailedInfo = batchViewAfterInfoFailed.devices.find(d => d.device_id === ids[2]);
 if (dFailedInfo.status !== "RESTORE_STARTED" || dFailedInfo.reason !== "started_ok") throw new Error("reason overwritten by late ack");
 
+// Rollout backward-compat: pre-2026.08.14.05 workers send BACKUP_STARTED instead of RESTORE_STARTED
+response = await fleet.dispatchFleetBatch(record, "BACKUP_RESTORE_DATA", [ids[3]]);
+body = await response.json();
+const compatActionId = body.batch.action_id;
+const compatAck = (status) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[3], action_id: compatActionId, batch_action: "BACKUP_RESTORE_DATA", status, executed: true }) }));
+const compatResp = await compatAck("BACKUP_STARTED"); // old worker terminology
+if (!compatResp.ok) throw new Error("BACKUP_STARTED backward-compat rejected");
+const dCompat = (await fleet.readFleet()).last_batch.devices[ids[3]];
+if (dCompat.status !== "RESTORE_STARTED") throw new Error("BACKUP_STARTED not mapped to RESTORE_STARTED");
+
 const file = source;
 if (!file.includes("AOT_UPDATE_GROUP_SIZE = 5") || !file.includes("ROLLED_BACK")) throw new Error("update rollout/rollback lost");
 const fleetProtocol = file.slice(file.indexOf("async readFleet()"));

@@ -150,24 +150,53 @@ class _Rotator:
 # ── Controller unit tests ─────────────────────────────────────────────────────
 
 
-_B = "[0,0][100,100]"
+_SB_RID = CONTROLLER.SWIFT_BACKUP_PACKAGE + ":id/"
 
-def _node(text="", desc="", clickable=True, bounds=_B, cls="android.widget.Button", enabled=True):
-    return f"<node class='{cls}' text='{text}' content-desc='{desc}' clickable='{'true' if clickable else 'false'}' enabled='{'true' if enabled else 'false'}' bounds='{bounds}'/>"
+def _node(text="", desc="", clickable=True, bounds=_B, cls="android.widget.Button", enabled=True, checked=False, rid=""):
+    return (
+        f"<node class='{cls}' resource-id='{rid}' text='{text}' content-desc='{desc}'"
+        f" clickable='{'true' if clickable else 'false'}' enabled='{'true' if enabled else 'false'}'"
+        f" checked='{'true' if checked else 'false'}' scrollable='false' password='false'"
+        f" selected='false' bounds='{bounds}'/>"
+    )
 
 def _wrap(*children: str) -> str:
     inner = "".join(children)
     return f"<hierarchy><node class='Root' bounds='{_B}'>{inner}</node></hierarchy>"
 
 HOME_SCREEN = _wrap(_node(text="Apps"))
-APPS_RESTORE_ACTIVE = _wrap(_node(text="Labels: RESTORE_DATA", clickable=False), _node(text="Batch actions"), _node(text="5 / 5"))
-APPS_RESTORE_INACTIVE = _wrap(_node(text="Batch actions"), _node(text="0 / 5"))
+# APPS_RESTORE_INACTIVE: Batch actions screen — includes filter trigger RID so state machine can find it
+APPS_RESTORE_INACTIVE = _wrap(
+    _node(text="Batch actions"),
+    _node(rid=f"{_SB_RID}menu_filter", text="Filter"),
+    _node(text="0 / 5"),
+)
+# APPS_RESTORE_ACTIVE: filter already applied, apps listed
+APPS_RESTORE_ACTIVE = _wrap(
+    _node(text="Labels: RESTORE_DATA", clickable=False),
+    _node(text="Batch actions"),
+    _node(text="5 / 5"),
+)
 FILTER_SCREEN_EMPTY = _wrap(_node(text="Select labels to filter"))
+# RESTORE_DATA chip not yet checked
 FILTER_SCREEN_SELECT_LABELS = _wrap(_node(text="Select labels", clickable=False), _node(text="RESTORE_DATA"))
-FILTER_SCREEN_SELECT_LABELS_CHECKED = _wrap(_node(text="Select labels", clickable=False), _node(text="RESTORE_DATA"), _node(text="1 / 3"), _node(text="Apply"))
+# RESTORE_DATA chip IS checked → Apply should be tapped
+FILTER_SCREEN_SELECT_LABELS_CHECKED = _wrap(
+    _node(text="Select labels", clickable=False),
+    _node(text="RESTORE_DATA", checked=True),
+    _node(text="Apply"),
+)
+# A stale unrelated label is checked → must fail-closed
+FILTER_SCREEN_STALE_LABEL = _wrap(
+    _node(text="Select labels", clickable=False),
+    _node(text="SOME_OTHER_LABEL", checked=True),
+    _node(text="RESTORE_DATA", checked=False),
+    _node(text="Apply"),
+)
 FILTER_SCREEN_ACTIVE = _wrap(_node(text="APPLY OPTIONS", clickable=False), _node(text="Labels: RESTORE_DATA", clickable=False))
 BATCH_MENU = _wrap(_node(text="Backup"))
 OPTIONS_MENU = _wrap(_node(text="Backup options"))
+
 
 def _user_app_parts(apks_card="[10,10][90,50]", data_card="[10,60][90,100]", restore_btn="[10,110][90,150]"):
     nodes = [_node(text="User app parts", clickable=False)]
@@ -228,20 +257,17 @@ class TestRestoreData(unittest.TestCase):
         self.mock_foreground = mock.patch.object(CONTROLLER, "_sb_assert_foreground").start()
         self.mock_tap_wait = mock.patch.object(CONTROLLER, "_tap_wait").start()
         self.mock_tap_xy = mock.patch.object(CONTROLLER, "_tap_xy").start()
-        self.mock_press_filter = mock.patch.object(CONTROLLER, "_press_filter", return_value=True).start()
         
         self.mock_screencap = mock.patch.object(CONTROLLER, "_raw_screencap").start()
         import struct
         w, h = 100, 200
-        fmt = 1
         pixels = bytearray(w * h * 4)
         for i in range(0, len(pixels), 4):
             pixels[i] = 10
             pixels[i+1] = 200
             pixels[i+2] = 10
             pixels[i+3] = 255
-        header = struct.pack("<III", w, h, fmt)
-        self.mock_screencap.return_value = (w, h, header + pixels)
+        self.mock_screencap.return_value = (w, h, bytes(pixels))
 
     def tearDown(self):
         mock.patch.stopall()
@@ -367,11 +393,19 @@ class TestRestoreData(unittest.TestCase):
             FILTER_SCREEN_SELECT_LABELS_CHECKED.replace("Apply", "NoApply")
         ], [], expected_error="filter_apply_not_found")
 
-    # 13. unknown UI state.
+    # 13. stale/unrelated label checked in filter → fail-closed, not apply.
+    def test_stale_label_checked(self):
+        """Greptile P1: stale label checked must fail-closed, never apply wrong filter scope."""
+        self.run_ctrl([
+            FILTER_SCREEN_STALE_LABEL
+        ], [], expected_error="stale_label_checked")
+
+    # 14. unknown UI state.
     def test_unknown_ui_state(self):
         self.run_ctrl([
             _wrap(_node(text="Random Screen"))
         ], [], expected_error="unknown_ui_state")
+
 
     # 14. redelivery không chạy RESTORE lần hai.
     def test_redelivery(self):
@@ -481,7 +515,7 @@ class TestArchitectureConstraints(unittest.TestCase):
         self.assertIn("backup_restore_data_semantic", RELAY.WORKER_CAPABILITIES)
 
     def test_worker_version_bumped_to_12(self):
-        self.assertEqual("aot-worker-2026.08.14.05", RELAY.WORKER_VERSION)
+        self.assertEqual("aot-worker-2026.08.14.06", RELAY.WORKER_VERSION)
 
     def test_fleet_hub_html_has_backup_restore_data_button(self):
         src = (ROOT / "cloudflare-worker/worker.js").read_text()
@@ -512,8 +546,8 @@ class TestArchitectureConstraints(unittest.TestCase):
 
     def test_fleet_state_version_bumped(self):
         src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
-        self.assertIn("aot-worker-2026.08.14.05", src)
-        self.assertIn("worker-v2026.08.14.05", src)
+        self.assertIn("aot-worker-2026.08.14.06", src)
+        self.assertIn("worker-v2026.08.14.06", src)
 
     def test_fleet_state_has_backup_restore_data_action(self):
         src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
@@ -537,12 +571,12 @@ class TestArchitectureConstraints(unittest.TestCase):
 
     def test_smoke_test_checks_new_version(self):
         src = (ROOT / "aot-group-control/worker_smoke_test.py").read_text()
-        self.assertIn("aot-worker-2026.08.14.05", src)
+        self.assertIn("aot-worker-2026.08.14.06", src)
         self.assertIn("backup_restore_data_semantic", src)
         self.assertIn("BACKUP_RESTORE_DATA_ACTION", src)
 
     def test_relay_selftest_checks_new_version(self):
         src = (ROOT / "aot-group-control/relay_selftest.py").read_text()
-        self.assertIn("aot-worker-2026.08.14.05", src)
+        self.assertIn("aot-worker-2026.08.14.06", src)
         self.assertIn("BACKUP_RESTORE_DATA", src)
 
