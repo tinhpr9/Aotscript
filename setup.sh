@@ -913,7 +913,7 @@ def apply_identity():
         "provision_ref": provision_ref,
         "device_id": new_id,
         "device_group": new_group,
-        "phase": "complete" if data.get("mode") == "full" else "identity_applied",
+        "phase": "complete" if data.get("mode") == "full" else "automatic",
         "run_id": f"clone-{data['created_at'].replace(':', '').replace('-', '')}-{new_id}",
         "backup_before": "",
         "backup_before_remote": "",

@@ -929,5 +929,86 @@ class TestCloneRecoveryAndWebSocketValidation(unittest.TestCase):
         self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
 
 
+    def test_35_production_e2e_recovery(self):
+        """35. Production E2E test without DRY_RUN. Uses real wizard orchestration logic."""
+        fix = self.create_fixture("35-e2e-recovery")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        # Create a mock wizard that actually runs `provision-device.sh reconcile`!
+        wizard_path = fix.home / "bin/aotscript-wizard"
+        wizard_path.parent.mkdir(parents=True, exist_ok=True)
+        wizard_path.write_text(
+            "#!/bin/bash\n"
+            "if [ \"$1\" = start ]; then\n"
+            f"  AOTSCRIPT_SETUP_TEST_MODE=1 STATE_DIR='{fix.state_dir}' \\\n"
+            f"  bash {REPO_ROOT}/provision-device.sh reconcile\n"
+            "fi\n",
+            encoding="utf-8",
+        )
+        wizard_path.chmod(0o755)
+
+        # Mock rclone and su so provision-device.sh automatic() doesn't fail
+        rclone_path = fix.home / "bin/rclone"
+        rclone_path.write_text(
+            "#!/bin/bash\n"
+            "echo \"rclone called with: $@\" >> /tmp/mock_rclone.log\n"
+            "if [ \"$1\" = listremotes ]; then echo \"gdrive:\"; exit 0; fi\n"
+            "if [ \"$1\" = lsf ]; then\n"
+            "  echo \"Shouko.zip\"\n"
+            "  echo \"Shouko.zip.sha256\"\n"
+            "  echo \"Delta.zip\"\n"
+            "  echo \"Delta.zip.sha256\"\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        rclone_path.chmod(0o755)
+        
+        su_path = fix.home / "bin/su"
+        su_path.write_text(
+            "#!/bin/bash\n"
+            "if [ \"$2\" = id ]; then echo \"uid=0(root)\"; exit 0; fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        su_path.chmod(0o755)
+        curl_path = fix.home / "bin/curl"
+        curl_path.write_text(
+            "#!/bin/bash\n"
+            "for arg in \"$@\"; do\n"
+            "  if [[ \"$arg\" == *\"setup-m166.sh\"* ]]; then\n"
+            "    echo \"#!/bin/bash\" > \"${!#}\"\n"
+            "    echo \"echo MOCKED SETUP-M166\" >> \"${!#}\"\n"
+            "    exit 0\n"
+            "  fi\n"
+            "done\n"
+            "exec /usr/bin/curl \"$@\"\n",
+            encoding="utf-8",
+        )
+        curl_path.chmod(0o755)
+        print(f"DEBUG: wizard_path is {wizard_path}, exists: {wizard_path.exists()}, exec: {os.access(wizard_path, os.X_OK)}")
+
+        res = fix.run_setup(
+            "target-host-35",
+            device_id="m74",
+            group="NOVA",
+            extra_env={"AOTSCRIPT_SETUP_DRY_RUN": "0"},
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        
+        self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
+        
+        mprov_path = fix.state_dir / "mprovision.json"
+        self.assertTrue(mprov_path.exists())
+        jdata = json.loads(mprov_path.read_text())
+        
+        # In provision-device.sh, automatic -> manual_post via pause_post
+        self.assertEqual(jdata["phase"], "manual_post")
+
+
 if __name__ == "__main__":
     unittest.main()
