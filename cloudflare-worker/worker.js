@@ -1353,16 +1353,16 @@ function parseTongHopLink(text, target_device_ids, tabs) {
     blocks.push(currentBlock);
   }
   
-  if (target_device_ids.length > blocks.length) {
-    throw new Error(`Không đủ block URL! Cần ${target_device_ids.length} block, nhưng file chỉ có ${blocks.length} block.`);
+  // Fix 3: only consider blocks that have >= tabs links (filter before assignment)
+  const validBlocks = blocks.filter(b => b.length >= tabs);
+
+  if (target_device_ids.length > validBlocks.length) {
+    throw new Error(`Không đủ block URL có đủ ${tabs} link! Cần ${target_device_ids.length} block, nhưng chỉ có ${validBlocks.length} block đủ link (tổng ${blocks.length} block).`);
   }
 
   const allocationMap = {};
   for (let i = 0; i < target_device_ids.length; i++) {
-    const block = blocks[i];
-    if (block.length < tabs) {
-      throw new Error(`Block số ${i + 1} chỉ có ${block.length} link, cần ít nhất ${tabs} link cho số tab đã chọn.`);
-    }
+    const block = validBlocks[i];
     allocationMap[target_device_ids[i]] = block.slice(0, tabs);
   }
   return allocationMap;

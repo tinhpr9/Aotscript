@@ -32,74 +32,96 @@ cfg: dict[str, str] = {}
 
 links_path = "/storage/emulated/0/Download/Shouko/server_links.txt"
 bak_path = links_path + ".bak"
+prep_path = links_path + ".prep.a1"
 
 # Cleanup
-for p in (links_path, bak_path):
+for p in (links_path, bak_path, prep_path):
     if os.path.exists(p):
         os.remove(p)
 
-# 1. Invalid payload -> FAILED
-relay._handle_allocate_server(cfg, state, local_id="m1", message={"type": "aot_batch_action", "protocol": "fleet-batch-v1", "action": "ALLOCATE_SERVER", "action_id": "a1", "expires_at": int(time.time()*1000) + 10000})
-assert acks[-1]["status"] == "FAILED"
+expires_future = int(time.time() * 1000) + 60_000
+
+# 1. PREPARE with invalid allocation -> PREPARE_FAILED
+relay._handle_allocate_server(cfg, state, local_id="m1", message={
+    "type": "aot_batch_action", "protocol": "fleet-batch-v1",
+    "action": "PREPARE_ALLOCATE_SERVER", "action_id": "a1",
+    "expires_at": expires_future,
+    # missing allocation field
+})
+assert acks[-1]["status"] == "PREPARE_FAILED", f"Expected PREPARE_FAILED got {acks[-1]['status']}"
 assert "invalid_allocation_format" in acks[-1]["reason"]
 
-# 2. Valid payload -> ALLOCATED then OPENED
+# 2. PREPARE with expired expires_at -> TIMEOUT immediately
+acks.clear()
+relay._handle_allocate_server(cfg, state, local_id="m1", message={
+    "type": "aot_batch_action", "protocol": "fleet-batch-v1",
+    "action": "PREPARE_ALLOCATE_SERVER", "action_id": "a1_exp",
+    "expires_at": int(time.time() * 1000) - 1000,  # already expired
+    "allocation": [{"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc"}],
+})
+assert acks[-1]["status"] == "TIMEOUT", f"Expected TIMEOUT for expired PREPARE, got {acks[-1]['status']}"
+
+# 3. Full 2PC: PREPARE -> COMMIT -> OPENED
 alloc = [
     {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc"},
     {"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/123?privateServerLinkCode=def"}
 ]
-msg = {
-    "type": "aot_batch_action",
-    "protocol": "fleet-batch-v1",
-    "action": "ALLOCATE_SERVER",
-    "action_id": "a2",
-    "expires_at": int(time.time()*1000) + 10000,
-    "allocation": alloc
-}
+acks.clear()
+mock_ctrl.fail = False
+# Step 1: PREPARE
+relay._handle_allocate_server(cfg, state, local_id="m1", message={
+    "type": "aot_batch_action", "protocol": "fleet-batch-v1",
+    "action": "PREPARE_ALLOCATE_SERVER", "action_id": "a2",
+    "expires_at": expires_future,
+    "allocation": alloc,
+})
+assert acks[-1]["status"] == "PREPARE_READY", f"Expected PREPARE_READY, got {acks[-1]['status']}"
+assert os.path.exists(links_path + ".prep.a2"), "prep file should exist"
 
-relay._handle_allocate_server(cfg, state, local_id="m1", message=msg)
-assert len(acks) >= 3
-assert acks[-2]["status"] == "ALLOCATED"
-print("ACKS:", acks); assert acks[-1]["status"] == "OPENED"
+# Step 2: COMMIT (must carry same expires_at)
+relay._handle_allocate_server(cfg, state, local_id="m1", message={
+    "type": "aot_batch_action", "protocol": "fleet-batch-v1",
+    "action": "COMMIT_ALLOCATE_SERVER", "action_id": "a2",
+    "expires_at": expires_future,  # Fix 1: same expires_at
+})
+assert acks[-1]["status"] == "OPENED", f"Expected OPENED, got {acks[-1]['status']}"
 assert acks[-1]["executed"] == True
 assert state["processed"] == True
-assert "action_results" in state
-assert state["action_results"]["a2"]["status"] == "OPENED"
+assert not os.path.exists(links_path + ".prep.a2"), "prep file should be gone after COMMIT"
 
 with open(links_path, "r", encoding="utf-8") as f:
     lines = f.read().splitlines()
 assert len(lines) == 2
 assert lines[0] == "com.tinh.vv.hi,https://www.roblox.com/games/123?privateServerLinkCode=abc"
 
-# Replay terminal result exactly once pattern
-acks.clear()
-relay._handle_allocate_server(cfg, state, local_id="m1", message=msg)
-assert len(acks) == 1
-assert acks[0]["status"] == "OPENED"
-
-# 3. Open fails -> FAILED and rollback
+# 4. ABORT: PREPARE then ABORT -> cleans up prep file
 state.clear()
 acks.clear()
-mock_ctrl.fail = True
-msg["action_id"] = "a3"
-with open(links_path, "w", encoding="utf-8") as f:
-    f.write("OLD\n")
-relay._handle_allocate_server(cfg, state, local_id="m1", message=msg)
-assert acks[-1]["status"] == "FAILED"
-assert "open_servers_failed" in acks[-1]["reason"]
-assert state.get("processed") is not True
-# Verify rollback
-with open(links_path, "r", encoding="utf-8") as f:
-    assert f.read() == "OLD\n"
+relay._handle_allocate_server(cfg, state, local_id="m1", message={
+    "type": "aot_batch_action", "protocol": "fleet-batch-v1",
+    "action": "PREPARE_ALLOCATE_SERVER", "action_id": "a3",
+    "expires_at": expires_future,
+    "allocation": alloc,
+})
+assert acks[-1]["status"] == "PREPARE_READY"
+prep_path_a3 = links_path + ".prep.a3"
+assert os.path.exists(prep_path_a3), "prep file must exist before ABORT"
 
-# 4. Open fails when file didn't exist -> file should be deleted
+relay._handle_allocate_server(cfg, state, local_id="m1", message={
+    "type": "aot_batch_action", "protocol": "fleet-batch-v1",
+    "action": "ABORT_ALLOCATE_SERVER", "action_id": "a3",
+    "expires_at": expires_future,  # Fix 1: same expires_at
+})
+assert not os.path.exists(prep_path_a3), "ABORT must clean up exact .prep.<action_id> file"
+
+# 5. COMMIT with expired expires_at -> TIMEOUT (fail-closed)
 state.clear()
 acks.clear()
-mock_ctrl.fail = True
-os.remove(links_path)
-msg["action_id"] = "a4"
-relay._handle_allocate_server(cfg, state, local_id="m1", message=msg)
-assert acks[-1]["status"] == "FAILED"
-assert not os.path.exists(links_path)
+relay._handle_allocate_server(cfg, state, local_id="m1", message={
+    "type": "aot_batch_action", "protocol": "fleet-batch-v1",
+    "action": "COMMIT_ALLOCATE_SERVER", "action_id": "a4",
+    "expires_at": int(time.time() * 1000) - 1000,  # expired
+})
+assert acks[-1]["status"] == "TIMEOUT", f"Expected TIMEOUT for expired COMMIT, got {acks[-1]['status']}"
 
 print("AOT_ALLOCATE_SERVER_RELAY_TEST=OK")

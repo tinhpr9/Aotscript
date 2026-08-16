@@ -75,12 +75,37 @@ com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateServerLinkCode
   if(!e.message.includes("URL bị lặp")) throw e;
 }
 
-// Test 8: Block < requested tabs
+// Test 8: Block < requested tabs (no valid block with >= 9 links exists)
 try {
   parse(mockText, ["m1"], 9);
   throw new Error("should throw");
 } catch(e) {
-  if(!e.message.includes("cần ít nhất 9 link")) throw e;
+  if(!e.message.includes("block đủ link")) throw e;
 }
+
+// Test 9: 8,8,10,10 block file — tabs=10 must skip first 2 blocks (only 8 links) and pick 3rd+4th
+const generate10Lines = (offset) => {
+  const pkgs = ["com.tinh.vv.hi","com.tinh.vv.hj","com.tinh.vv.hk","com.tinh.vv.hl","com.tinh.vv.hm","com.tinh.vv.hn","com.tinh.vv.ho","com.tinh.vv.hp","com.tinh.vv.hq","com.tinh.vv.hr"];
+  return pkgs.map((p,i) => `${p},https://www.roblox.com/games/97598239454123?privateServerLinkCode=${String(offset * 10 + i + 1).padStart(32,"0")}`).join("\n");
+};
+const generate8Lines = (offset) => {
+  const pkgs = ["com.tinh.vv.hi","com.tinh.vv.hj","com.tinh.vv.hk","com.tinh.vv.hl","com.tinh.vv.hm","com.tinh.vv.hn","com.tinh.vv.ho","com.tinh.vv.hp"];
+  return pkgs.map((p,i) => `${p},https://www.roblox.com/games/97598239454123?privateServerLinkCode=${String(offset * 10 + i + 101).padStart(32,"0")}`).join("\n");
+};
+const mixedText = [generate8Lines(0), "===", generate8Lines(1), "===", generate10Lines(2), "===", generate10Lines(3)].join("\n");
+const result9 = parse(mixedText, ["m1", "m2"], 10);
+if (result9["m1"].length !== 10) throw new Error(`Test 9a: m1 got ${result9["m1"].length} links, expected 10`);
+if (result9["m2"].length !== 10) throw new Error(`Test 9b: m2 got ${result9["m2"].length} links, expected 10`);
+// Verify m1 comes from block 3 (offset=2) and m2 from block 4 (offset=3) — not blocks 1 or 2
+if (result9["m1"][0].pkg !== "com.tinh.vv.hi") throw new Error("Test 9c: m1 wrong pkg");
+if (result9["m2"][9].pkg !== "com.tinh.vv.hr") throw new Error("Test 9d: m2 wrong last pkg");
+// Verify all URLs are unique across both devices
+const allUrls = [...result9["m1"], ...result9["m2"]].map(x => x.url);
+if (new Set(allUrls).size !== allUrls.length) throw new Error("Test 9e: duplicate URLs across batch");
+
+// Test 9f: tabs=8 should pick first 2 blocks (with 8 links each), not the later ones
+const result9f = parse(mixedText, ["m1", "m2"], 8);
+if (result9f["m1"].length !== 8) throw new Error(`Test 9f: m1 got ${result9f["m1"].length} links, expected 8`);
+if (result9f["m2"].length !== 8) throw new Error(`Test 9g: m2 got ${result9f["m2"].length} links, expected 8`);
 
 console.log("AOT_ALLOCATE_SERVER_SELFTEST=OK");

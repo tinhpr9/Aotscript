@@ -85,8 +85,8 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.15.01"
-WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic")
+WORKER_VERSION = "aot-worker-2026.08.16.01"
+WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
 class AotRelayError(RuntimeError):
@@ -1081,19 +1081,15 @@ def _handle_allocate_server(
                 mark_action_processed(state, action_id)
             except Exception as e:
                 if existed_before and os.path.exists(bak_path):
-                    try: shutil.copy2(bak_path, links_path)
-                    except: pass
+                    shutil.copy2(bak_path, links_path)
                 elif not existed_before and os.path.exists(links_path):
-                    try: os.remove(links_path)
-                    except: pass
+                    os.remove(links_path)
                 terminal_ack("FAILED", executed=False, reason="open_servers_failed: " + str(e))
         except Exception as e:
             if existed_before and os.path.exists(bak_path):
-                try: shutil.copy2(bak_path, links_path)
-                except: pass
+                shutil.copy2(bak_path, links_path)
             elif not existed_before and os.path.exists(links_path):
-                try: os.remove(links_path)
-                except: pass
+                os.remove(links_path)
             terminal_ack("FAILED", executed=False, reason="commit_failed: " + str(e))
         finally:
             import glob
@@ -1107,8 +1103,10 @@ def _handle_allocate_server(
 
     if action == "ABORT_ALLOCATE_SERVER":
         prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
-        try: os.remove(prep_path)
-        except: pass
+        try:
+            os.remove(prep_path)
+        except FileNotFoundError:
+            pass
         terminal_ack("FAILED", executed=False, reason="aborted_by_hub")
         return True
 
