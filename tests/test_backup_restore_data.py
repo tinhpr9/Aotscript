@@ -887,7 +887,7 @@ class TestArchitectureConstraints(unittest.TestCase):
         self.assertIn("backup_restore_data_semantic", RELAY.WORKER_CAPABILITIES)
 
     def test_worker_version_bumped_to_12(self):
-        self.assertEqual("aot-worker-2026.08.16.03", RELAY.WORKER_VERSION)
+        self.assertEqual("aot-worker-2026.08.16.04", RELAY.WORKER_VERSION)
 
     def test_fleet_hub_html_has_backup_restore_data_button(self):
         src = (ROOT / "cloudflare-worker/worker.js").read_text()
@@ -918,8 +918,8 @@ class TestArchitectureConstraints(unittest.TestCase):
 
     def test_fleet_state_version_bumped(self):
         src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
-        self.assertIn("aot-worker-2026.08.16.03", src)
-        self.assertIn("worker-v2026.08.16.03", src)
+        self.assertIn("aot-worker-2026.08.16.04", src)
+        self.assertIn("worker-v2026.08.16.04", src)
 
     def test_fleet_state_has_backup_restore_data_action(self):
         src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
@@ -943,13 +943,13 @@ class TestArchitectureConstraints(unittest.TestCase):
 
     def test_smoke_test_checks_new_version(self):
         src = (ROOT / "aot-group-control/worker_smoke_test.py").read_text()
-        self.assertIn("aot-worker-2026.08.16.03", src)
+        self.assertIn("aot-worker-2026.08.16.04", src)
         self.assertIn("backup_restore_data_semantic", src)
         self.assertIn("BACKUP_RESTORE_DATA_ACTION", src)
 
     def test_relay_selftest_checks_new_version(self):
         src = (ROOT / "aot-group-control/relay_selftest.py").read_text()
-        self.assertIn("aot-worker-2026.08.16.03", src)
+        self.assertIn("aot-worker-2026.08.16.04", src)
         self.assertIn("BACKUP_RESTORE_DATA", src)
 
 class TestBoundaryTaps(unittest.TestCase):

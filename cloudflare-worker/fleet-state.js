@@ -26,8 +26,8 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.16.03";
-const AOT_WORKER_TAG = "worker-v2026.08.16.03";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.16.04";
+const AOT_WORKER_TAG = "worker-v2026.08.16.04";
 const AOT_ALLOCATE_SERVER_CAPABILITY = "allocate_server_2pc";
 const AOT_RELEASE_PROTOCOL = "github-release-v1";
 const AOT_RELEASE_REPOSITORY = "tinhpr9/Aotscript";
@@ -1663,7 +1663,7 @@ export class FleetState
 
   updateDispatchProtocols(sessionId, member, requestedChannel) {
     const live = this.aotLive.get(this.aotLiveKey(sessionId, member.device_id));
-    let capabilities = Array.isArray(live?.capabilities) ? live.capabilities : [];
+    let capabilities = (Array.isArray(live?.capabilities) && live.capabilities.length > 0) ? live.capabilities : [];
     if (!capabilities.includes(AOT_DYNAMIC_CHANNEL_CAPABILITY)) {
       for (const socket of this.ctx.getWebSockets(
         this.aotSocketTag(member.role, sessionId, member.device_id)
@@ -1672,11 +1672,14 @@ export class FleetState
           const attachment = typeof socket.deserializeAttachment === "function"
             ? socket.deserializeAttachment()
             : null;
-          if (Array.isArray(attachment?.capabilities)) {
+          if (Array.isArray(attachment?.capabilities) && attachment.capabilities.length > 0) {
             capabilities = attachment.capabilities;
           }
         } catch (error) {}
       }
+    }
+    if (!capabilities.includes(AOT_DYNAMIC_CHANNEL_CAPABILITY) && Array.isArray(member.capabilities) && member.capabilities.length > 0) {
+      capabilities = member.capabilities;
     }
     if (capabilities.includes(AOT_DYNAMIC_CHANNEL_CAPABILITY)) {
       return [{ name: "phase4-dynamic", action: AOT_UPDATE_ACTION, channel: requestedChannel }];
@@ -3148,12 +3151,12 @@ export class FleetState
 
     const getLiveCaps = (id) => {
       const live = this.aotLive.get(id);
-      if (live && live.capabilities) return live.capabilities;
+      if (live && Array.isArray(live.capabilities)) return live.capabilities;
       const socks = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", id));
       if (socks.length > 0) {
         try {
           const st = socks[0].deserializeAttachment();
-          if (st && st.capabilities) return st.capabilities;
+          if (st && st.worker_version && Array.isArray(st.capabilities)) return st.capabilities;
         } catch(e) {}
       }
       return fresh.devices[id]?.capabilities || [];

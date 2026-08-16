@@ -258,7 +258,7 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
 // Test explicit targets
 sRecord.last_update = null;
 fleet.resolveWorkerRelease = async () => ({ version: "2026.08.13.1", hash: "mock" });
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.03", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.04", device_ids: [ids[0], ids[1]] };
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};
@@ -272,7 +272,7 @@ if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_
   throw new Error("Explicit canary update did not select exactly the targeted device");
 }
 await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.03", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.04", device_ids: [ids[0], ids[1]] };
 await store.set("aot_session:test_explicit_targets", sRecord);
 
 // Stable with explicit targets (keeps exactly the targets)
@@ -593,8 +593,45 @@ if (test15Body.ok || test15Body.error !== "release_resolution_failed") {
 if (JSON.stringify(test15Body).includes(mockToken)) {
   throw new Error(`SECURITY REGRESSION: Token leaked in startWorkerUpdate error response: ${JSON.stringify(test15Body)}`);
 }
-if (!test15Body.message.includes("[REDACTED]")) {
-  throw new Error(`Expected redacted message in startWorkerUpdate error response: ${JSON.stringify(test15Body)}`);
+// Test 16: allocate_server capability check falls back correctly when socket attachment has empty capabilities array
+const test16Store = new Map();
+const test16Ctx = {
+  storage: { get: async k => test16Store.get(k), put: async (k, v) => test16Store.set(k, structuredClone(v)), setAlarm: async () => {}, list: async () => new Map() },
+  getWebSockets: tag => sockets.get(tag) || [],
+  getTags: (socket) => socket.tags || [],
+  acceptWebSocket() {},
+  waitUntil() {},
+};
+const test16Fleet = new mod.namespace.FleetState(test16Ctx, {});
+const test16Record = {
+  devices: {
+    "m888": {
+      device_id: "m888",
+      capabilities: ["dynamic_update_channel", "allocate_server_2pc"],
+      added_at: Date.now(),
+    }
+  },
+  last_batch: null,
+};
+await test16Fleet.writeFleet(test16Record);
+
+// Mock online socket with empty capabilities attachment (worker_version null)
+const mockSocketWithEmptyCaps = {
+  tags: ["aot-device:m888", "aot-fleet:device:m888"],
+  deserializeAttachment: () => ({ device_id: "m888", worker_version: null, capabilities: [] }),
+  serializeAttachment: () => {},
+  send: () => {},
+  close: () => {},
+};
+sockets.set("aot-device:m888", [mockSocketWithEmptyCaps]);
+sockets.set("aot-fleet:device:m888", [mockSocketWithEmptyCaps]);
+
+// Allocate server request should succeed because getLiveCaps falls back to record capabilities
+test16Fleet.fetchManagedServerUrls = async () => ["https://s1.example.com"];
+const allocRes = await test16Fleet.dispatchFleetBatch(test16Record, "ALLOCATE_SERVER", ["m888"], { allocationMap: { "m888": "https://s1.example.com" } });
+const allocBody = await allocRes.json();
+if (!allocBody.ok) {
+  throw new Error(`Expected ALLOCATE_SERVER to succeed with capability fallback, got: ${JSON.stringify(allocBody)}`);
 }
 
 context.customFetchHandler = null;

@@ -90,7 +90,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.16.03"
+WORKER_VERSION = "aot-worker-2026.08.16.04"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -1309,22 +1309,36 @@ def _send_live_status(
 ) -> str | None:
     try:
         snap = controller.snapshot(include_nodes=False)
-    except (OSError, controller.AotControllerError):
+        current_fingerprint = snap.get("fingerprint")
+        meaningful_change = (current_fingerprint != previous_fingerprint)
+        include_preview = force_preview or meaningful_change
+        payload = _live_status_payload(
+            device_id=device_id,
+            include_preview=include_preview,
+            snapshot=snap,
+            role=role,
+            session_id=session_id,
+        )
+        _ws_send_json(sock, payload)
+        return current_fingerprint
+    except (controller.AotControllerError, OSError) as exc:
+        if isinstance(exc, (ConnectionError, BrokenPipeError)):
+            raise
+        if previous_fingerprint is None:
+            payload = _live_status_payload(
+                device_id=device_id,
+                include_preview=False,
+                snapshot={},
+                role=role,
+                session_id=session_id,
+            )
+            try:
+                _ws_send_json(sock, payload)
+            except (ConnectionError, BrokenPipeError):
+                raise
+            except Exception:
+                pass
         return None
-    current_fingerprint = snap.get("fingerprint")
-    meaningful_change = (current_fingerprint != previous_fingerprint)
-
-    include_preview = force_preview or meaningful_change
-
-    payload = _live_status_payload(
-        device_id=device_id,
-        include_preview=include_preview,
-        snapshot=snap,
-        role=role,
-        session_id=session_id,
-    )
-    _ws_send_json(sock, payload)
-    return current_fingerprint
 
 
 def _send_control_result(
@@ -1647,7 +1661,7 @@ def reference_loop(
                 "AOT_REFERENCE_CHANNEL=CONNECTED"
             )
             try:
-                updater.notify_pending_healthy()
+                updater.notify_pending_healthy(WORKER_VERSION)
             except Exception:
                 pass
             previous_fingerprint = None
@@ -1842,7 +1856,7 @@ def follower_loop(
                 "AOT_FOLLOWER_CHANNEL=CONNECTED"
             )
             try:
-                updater.notify_pending_healthy()
+                updater.notify_pending_healthy(WORKER_VERSION)
             except Exception:
                 pass
             previous_fingerprint = None
@@ -2209,7 +2223,7 @@ def fleet_loop(*, open_package: str | None = None) -> int:
             print(f"AOT_DEVICE={local_id}")
             print("AOT_FLEET_CHANNEL=CONNECTED")
             try:
-                updater.notify_pending_healthy()
+                updater.notify_pending_healthy(WORKER_VERSION)
             except Exception:
                 pass
             previous_fingerprint = None

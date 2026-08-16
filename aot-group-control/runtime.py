@@ -13,7 +13,8 @@ import time
 from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parent
-RELAY_PATH = ROOT / "relay.py"
+CURRENT_RELAY = ROOT / "current" / "relay.py"
+RELAY_PATH = CURRENT_RELAY if CURRENT_RELAY.is_file() else (ROOT / "relay.py")
 E2E_PATH = ROOT / "e2e.py"
 CONFIG_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/aot_group_config.json"

@@ -33,11 +33,13 @@ def notify_healthy(action_id: str, version: str) -> bool:
     return result.returncode == 0
 
 
-def notify_pending_healthy() -> bool:
+def notify_pending_healthy(running_version: str | None = None) -> bool:
     try:
         pending = json.loads(PENDING_PATH.read_text(encoding="utf-8"))
         action_id = str(pending["action_id"])
         version = str(pending["version"])
+        if running_version is not None and running_version != version:
+            return False
     except Exception:
         return False
     return notify_healthy(action_id, version)
