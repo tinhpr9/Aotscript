@@ -60,4 +60,97 @@ class FleetArchitectureTests(unittest.TestCase):
         for forbidden in ("tap_selector", "tap_normalized", "swipe_normalized", "preview_b64"):
             self.assertNotIn(forbidden, bridge)
 
+
+class TestFleetLoopResilience(unittest.TestCase):
+    def setUp(self):
+        self.SPEC_RELAY = importlib.util.spec_from_file_location("fleet_relay", ROOT / "aot-group-control/relay.py")
+        self.RELAY = importlib.util.module_from_spec(self.SPEC_RELAY)
+        sys.modules[self.SPEC_RELAY.name] = self.RELAY
+        self.SPEC_RELAY.loader.exec_module(self.RELAY)
+
+    @mock.patch("fleet_relay.load_agent_config")
+    @mock.patch("fleet_relay._read_small")
+    @mock.patch("fleet_relay.controller.root_available", return_value=True)
+    @mock.patch("fleet_relay.ws_connect")
+    @mock.patch("fleet_relay.time.sleep")
+    def test_initial_snapshot_error_does_not_kill_socket_and_processes_update_worker(
+        self, mock_sleep, mock_ws_connect, mock_root, mock_read, mock_cfg
+    ):
+        mock_read.side_effect = lambda p: "m116" if "device_id" in str(p) else "NOVA"
+        mock_cfg.return_value = {
+            "worker_report_url": "https://hub.example.com/report",
+            "agent_report_secret": "sec",
+        }
+        mock_sock = mock.MagicMock()
+        mock_ws_connect.return_value = mock_sock
+
+        update_msg = {
+            "type": "aot_batch_action",
+            "protocol": "fleet-batch-v1",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-update-m116",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": 9999999999000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": self.RELAY.WORKER_VERSION,
+                "tag": "worker-v" + self.RELAY.WORKER_VERSION.removeprefix("aot-worker-"),
+            }
+        }
+        import json
+        frames = [
+            (0x1, json.dumps(update_msg).encode("utf-8")),
+            KeyboardInterrupt(),
+        ]
+        def fake_recv(s):
+            res = frames.pop(0)
+            if isinstance(res, BaseException):
+                raise res
+            return res
+
+        with mock.patch.object(self.RELAY.controller, "snapshot", side_effect=self.RELAY.controller.AotControllerError("dumpsys_locked")), \
+             mock.patch.object(self.RELAY, "_ws_recv_frame", side_effect=fake_recv), \
+             mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"), \
+             mock.patch.object(self.RELAY, "action_already_processed", return_value=False):
+            with self.assertRaises(KeyboardInterrupt):
+                self.RELAY.fleet_loop()
+
+        self.assertEqual(mock_ws_connect.call_count, 1)
+        self.assertNotIn(mock.call(2), mock_sleep.call_args_list)
+        mock_popen.assert_called_once()
+
+    @mock.patch("fleet_relay.load_agent_config")
+    @mock.patch("fleet_relay._read_small")
+    @mock.patch("fleet_relay.controller.root_available", return_value=True)
+    @mock.patch("fleet_relay.ws_connect")
+    @mock.patch("fleet_relay.time.sleep")
+    def test_real_transport_error_triggers_reconnect(
+        self, mock_sleep, mock_ws_connect, mock_root, mock_read, mock_cfg
+    ):
+        mock_read.side_effect = lambda p: "m116" if "device_id" in str(p) else "NOVA"
+        mock_cfg.return_value = {
+            "worker_report_url": "https://hub.example.com/report",
+            "agent_report_secret": "sec",
+        }
+        mock_sock = mock.MagicMock()
+        mock_ws_connect.return_value = mock_sock
+
+        calls = [0]
+        def fake_recv(s):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise ConnectionError("connection_reset")
+            raise KeyboardInterrupt()
+
+        with mock.patch.object(self.RELAY.controller, "snapshot", return_value={"fingerprint": "fp1"}), \
+             mock.patch.object(self.RELAY, "_ws_recv_frame", side_effect=fake_recv):
+            with self.assertRaises(KeyboardInterrupt):
+                self.RELAY.fleet_loop()
+
+        self.assertEqual(mock_ws_connect.call_count, 2)
+        self.assertIn(mock.call(2), mock_sleep.call_args_list)
+
+
 if __name__ == "__main__": unittest.main()

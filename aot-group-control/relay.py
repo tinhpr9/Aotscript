@@ -91,7 +91,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.16.01"
+WORKER_VERSION = "aot-worker-2026.08.16.02"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -1019,14 +1019,17 @@ def _handle_worker_update(
         "--reference-device", local_id,
         "--release-metadata", release_metadata,
     ]
-    subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
+    try:
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError:
+        pass
     return True
 
 def _handle_allocate_server(
@@ -1604,14 +1607,20 @@ def reference_loop(
             except Exception:
                 pass
             previous_fingerprint = None
-            previous_fingerprint = _send_live_status(
-                sock,
-                role="reference",
-                session_id=session_id,
-                device_id=local_id,
-                previous_fingerprint=previous_fingerprint,
-                force_preview=True,
-            )
+            try:
+                previous_fingerprint = _send_live_status(
+                    sock,
+                    role="reference",
+                    session_id=session_id,
+                    device_id=local_id,
+                    previous_fingerprint=previous_fingerprint,
+                    force_preview=True,
+                )
+            except (
+                OSError,
+                controller.AotControllerError,
+            ):
+                previous_fingerprint = None
             next_status = (
                 time.monotonic()
                 + _get_live_status_initial_delay(local_id)
@@ -1738,7 +1747,6 @@ def reference_loop(
             OSError,
             ConnectionError,
             AotRelayError,
-            controller.AotControllerError,
         ) as exc:
             print(
                 "AOT_REFERENCE_CHANNEL=RECONNECT:"
@@ -2150,7 +2158,6 @@ def follower_loop(
             OSError,
             ConnectionError,
             AotRelayError,
-            controller.AotControllerError,
         ) as exc:
             print(
                 "AOT_FOLLOWER_CHANNEL=RECONNECT:"
@@ -2197,19 +2204,24 @@ def fleet_loop(*, open_package: str | None = None) -> int:
                 updater.notify_pending_healthy()
             except Exception:
                 pass
-            previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
+            previous_fingerprint = None
+            try:
+                previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
+            except (OSError, controller.AotControllerError):
+                previous_fingerprint = None
             next_status = time.monotonic() + _get_live_status_initial_delay(local_id)
             while True:
                 if time.monotonic() >= next_status:
                     try:
                         previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=previous_fingerprint)
                     except (OSError, controller.AotControllerError):
-                        pass
+                        previous_fingerprint = None
                     next_status = time.monotonic() + _get_live_status_interval(local_id)
                 try:
                     opcode, payload = _ws_recv_frame(sock)
                 except socket.timeout:
                     continue
+                reconnect_delay = 2
                 if opcode == 0x8:
                     raise ConnectionError("websocket_closed")
                 if opcode == 0x9:
@@ -2223,12 +2235,15 @@ def fleet_loop(*, open_package: str | None = None) -> int:
                     continue
                 if not isinstance(message, dict):
                     continue
-                if _handle_worker_update(state, local_id=local_id, message=message):
-                    continue
-                _handle_batch_action(cfg, state, local_id=local_id, message=message)
+                try:
+                    if _handle_worker_update(state, local_id=local_id, message=message):
+                        continue
+                    _handle_batch_action(cfg, state, local_id=local_id, message=message)
+                except (OSError, AotRelayError, controller.AotControllerError):
+                    pass
         except KeyboardInterrupt:
             raise
-        except (OSError, ConnectionError, AotRelayError, controller.AotControllerError) as exc:
+        except (OSError, ConnectionError, AotRelayError) as exc:
             print("AOT_FLEET_CHANNEL=RECONNECT:" + type(exc).__name__)
             time.sleep(reconnect_delay)
             reconnect_delay = min(30, reconnect_delay * 2)
