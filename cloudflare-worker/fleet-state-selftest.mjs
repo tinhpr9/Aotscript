@@ -88,6 +88,20 @@ const batchViewAfterInfoFailed = fleet.aotBatchView((await fleet.readFleet()).la
 const dFailedInfo = batchViewAfterInfoFailed.devices.find(d => d.device_id === ids[2]);
 if (dFailedInfo.status !== "BACKUP_STARTED" || dFailedInfo.reason !== "started_ok") throw new Error("reason overwritten by late ack");
 
+// Allocate Server ACK test
+response = await fleet.dispatchFleetBatch(record, "ALLOCATE_SERVER", [ids[0]], { allocationMap: { [ids[0]]: [{ pkg: "com.tinh.vv.hi", url: "https://test" }] } });
+body = await response.json();
+const allocActionId = body.batch.action_id;
+const allocAck = async (status, executed = false) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[0], action_id: allocActionId, batch_action: "ALLOCATE_SERVER", status, executed }) }));
+await allocAck("ACCEPTED");
+if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "ACCEPTED") throw new Error("ALLOCATE_SERVER ACCEPTED failed");
+await allocAck("ALLOCATED");
+if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "ALLOCATED") throw new Error("ALLOCATE_SERVER ALLOCATED failed");
+await allocAck("OPENED", true);
+if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "OPENED") throw new Error("ALLOCATE_SERVER OPENED failed");
+await allocAck("FAILED"); // ignored because OPENED is terminal
+if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "OPENED") throw new Error("ALLOCATE_SERVER terminal override failed");
+
 const file = source;
 if (!file.includes("AOT_UPDATE_GROUP_SIZE = 5") || !file.includes("ROLLED_BACK")) throw new Error("update rollout/rollback lost");
 const fleetProtocol = file.slice(file.indexOf("async readFleet()"));

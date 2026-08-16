@@ -3079,7 +3079,7 @@ export class FleetState
   async dispatchFleetAck(request) {
     const body = await this.readJson(request);
     const id = validDeviceId(body?.device_id), actionId = String(body?.action_id || ""), action = String(body?.batch_action || "");
-    if (!id || !/^[A-Za-z0-9_-]{1,128}$/.test(actionId) || ![AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_BACKUP_RESTORE_DATA_ACTION, AOT_UPDATE_ACTION].includes(action)) return json({ ok: false, error: "invalid_aot_ack" }, 400);
+    if (!id || !/^[A-Za-z0-9_-]{1,128}$/.test(actionId) || ![AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_BACKUP_RESTORE_DATA_ACTION, AOT_UPDATE_ACTION, AOT_ALLOCATE_SERVER_ACTION].includes(action)) return json({ ok: false, error: "invalid_aot_ack" }, 400);
     const record = await this.readFleet();
     if (action === AOT_UPDATE_ACTION) {
       record.followers = Object.fromEntries(this.fleetMembers(record).map((m) => [m.device_id, m]));

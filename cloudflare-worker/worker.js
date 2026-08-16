@@ -1041,20 +1041,6 @@ async function handleAotRegistration(request, env, operation) {
 
 
 const AOT_HUB_PROTOCOL_VERSION = "fleet-batch-v1";
-const AOT_HUB_AUTH_MAX_AGE_SECONDS = 60 * 60;
-const AOT_HUB_INITDATA_MAX_BYTES = 16 * 1024;
-const AOT_HUB_FALLBACK_URL =
-  "https://billowing-haze-0cafaotscript-control.tinh1020pr.workers.dev/aot/hub";
-
-function aotHubPublicUrl(env) {
-  const configured = String(
-    env.AOT_HUB_URL || ""
-  ).trim();
-  if (isValidUrl(configured)) {
-    return configured;
-  }
-  return AOT_HUB_FALLBACK_URL;
-}
 
 function bytesToHex(bytes) {
   return Array.from(bytes)
@@ -4717,6 +4703,7 @@ export default {
             { command: "to", description: "Gửi lệnh tới máy cụ thể" },
             { command: "update", description: "Cập nhật canary hoặc stable" },
             { command: "batch", description: "Chạy lệnh theo lô (backup/apps)" },
+            { command: "phanserver", description: "Phân bổ riêng tư (1-10 tabs)" },
             { command: "maintenance", description: "Bật hoặc tắt bảo trì" },
             { command: "rename", description: "Đổi tên thiết bị" },
             { command: "delete", description: "Thu hồi thiết bị vĩnh viễn" },
@@ -4926,8 +4913,8 @@ async function handleUpdate(update, env) {
       return;
     }
     const targetStr = parts[1];
-    const tabs = parseInt(parts[2]);
-    if (isNaN(tabs) || tabs < 1 || tabs > 10) {
+    const tabs = Number(parts[2]);
+    if (!Number.isInteger(tabs) || tabs < 1 || tabs > 10 || parts[2] !== String(tabs)) {
       await telegram(env, "sendMessage", {
         chat_id: chatId,
         text: "Số tab phải từ 1 đến 10."
@@ -5866,9 +5853,23 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
       if (!result.response.ok) {
         throw new Error(JSON.stringify(result.data));
       }
-      const batch = result.data.batch;
+      const actionId = result.data.batch.action_id;
+      let finalBatch = result.data.batch;
+      const start = Date.now();
+      
+      while (Date.now() - start < 45000) {
+        const stateResult = await fleetStateCall(env, "/aot/hub/state");
+        if (stateResult.response.ok && stateResult.data?.state?.last_batch?.action_id === actionId) {
+          finalBatch = stateResult.data.state.last_batch;
+          const terminalStates = new Set(["OPENED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE", "DUPLICATE"]);
+          const allTerminal = finalBatch.devices.every(d => terminalStates.has(d.status));
+          if (allTerminal) break;
+        }
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      
       let msg = "<b>KẾT QUẢ PHÂN SERVER</b>\n";
-      for (const d of batch.devices) {
+      for (const d of finalBatch.devices) {
         msg += `\n<b>${d.device_id}</b>: ${d.history.join(' -> ')} ${d.reason ? '— ' + d.reason : ''}`;
       }
       await telegram(env, "sendMessage", {
@@ -6560,14 +6561,6 @@ async function showTargets(
           text: "🔔 CẢNH BÁO",
           callback_data:
             "alerts_status",
-        },
-      ],
-      [
-        {
-          text: "🎛 AOT HUB",
-          web_app: {
-            url: aotHubPublicUrl(env),
-          },
         },
       ],
     ],

@@ -45,9 +45,7 @@ jobs:
           PY
           python3 -m py_compile aot-group-control/*.py scripts/build-worker-release.py scripts/verify_worker_release.py
           for test in aot-group-control/*selftest.py; do timeout 180 python3 "$test"; done
-          node --experimental-vm-modules cloudflare-worker/fleet-state-selftest.mjs
-          node --experimental-vm-modules cloudflare-worker/aot-hub-session-selftest.mjs
-          node --experimental-vm-modules cloudflare-worker/telegram-targets-selftest.mjs
+          for test in cloudflare-worker/*selftest.mjs; do node --experimental-vm-modules "$test"; done
           python3 -m unittest discover -s tests -v
           timeout 300 bash tests/setup-self-test.sh
 
