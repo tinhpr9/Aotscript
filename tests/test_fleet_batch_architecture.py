@@ -103,6 +103,12 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "protocol": "github-release-v1",
                 "version": self.RELAY.WORKER_VERSION,
                 "tag": "worker-v" + self.RELAY.WORKER_VERSION.removeprefix("aot-worker-"),
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
             }
         }
         import json
@@ -204,9 +210,12 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "protocol": "github-release-v1",
                 "version": self.RELAY.WORKER_VERSION,
                 "tag": "worker-v" + self.RELAY.WORKER_VERSION.removeprefix("aot-worker-"),
-                "release_id": 12345,
-                "target_commitish": "main",
-                "files": {},
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
             },
         }
         with mock.patch.object(self.RELAY.subprocess, "Popen", side_effect=OSError("process limit reached")), \
@@ -215,13 +224,247 @@ class TestFleetLoopResilience(unittest.TestCase):
             self.assertTrue(res)
             self.assertNotIn("act-test-upd-1", state["processed_action_ids"])
 
-        # Second attempt with Popen working should execute and mark processed
+    def test_handle_worker_update_cross_version_spawns_bootstrap(self):
+        # Worker running older version .15.01 receiving target .16.03
+        self.RELAY.WORKER_VERSION = "aot-worker-2026.08.15.01"
+        state = {"processed_action_ids": []}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-cross-ver-1",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": "aot-worker-2026.08.16.03",
+                "tag": "worker-v2026.08.16.03",
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
+            },
+        }
         with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
              mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
             res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
             self.assertTrue(res)
             mock_popen.assert_called_once()
-            self.assertIn("act-test-upd-1", state["processed_action_ids"])
+            cmd = mock_popen.call_args[0][0]
+            self.assertIn("update-action", cmd)
+            self.assertIn("--action-id", cmd)
+            self.assertIn("act-cross-ver-1", cmd)
+            self.assertIn("--channel", cmd)
+            self.assertIn("canary", cmd)
+            self.assertIn("--release-metadata", cmd)
+            self.assertIn("act-cross-ver-1", state["processed_action_ids"])
+
+    def test_handle_worker_update_same_version_spawns_bootstrap(self):
+        state = {"processed_action_ids": []}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-same-ver-1",
+            "target_device_ids": ["m116"],
+            "channel": "stable",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": self.RELAY.WORKER_VERSION,
+                "tag": "worker-v" + self.RELAY.WORKER_VERSION.removeprefix("aot-worker-"),
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
+            },
+        }
+        with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="stable"):
+            res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+            self.assertTrue(res)
+            mock_popen.assert_called_once()
+            self.assertIn("act-same-ver-1", state["processed_action_ids"])
+
+    def test_handle_worker_update_malformed_version_rejected(self):
+        state = {"processed_action_ids": []}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-bad-ver-1",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": "bad_version_format",
+                "tag": "worker-vbad",
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
+            },
+        }
+        with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
+            res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+            self.assertTrue(res)
+            mock_popen.assert_not_called()
+            self.assertNotIn("act-bad-ver-1", state["processed_action_ids"])
+
+    def test_handle_worker_update_tag_mismatch_rejected(self):
+        state = {"processed_action_ids": []}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-tag-mismatch-1",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": "aot-worker-2026.08.16.03",
+                "tag": "worker-v2026.08.15.01",  # mismatch tag
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
+            },
+        }
+        with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
+            res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+            self.assertTrue(res)
+            mock_popen.assert_not_called()
+            self.assertNotIn("act-tag-mismatch-1", state["processed_action_ids"])
+
+    def test_handle_worker_update_missing_manifest_rejected(self):
+        state = {"processed_action_ids": []}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-no-manifest-1",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": "aot-worker-2026.08.16.03",
+                "tag": "worker-v2026.08.16.03",
+                "commit_sha": "a" * 40,
+            },
+        }
+        with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
+            res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+            self.assertTrue(res)
+            mock_popen.assert_not_called()
+            self.assertNotIn("act-no-manifest-1", state["processed_action_ids"])
+
+    def test_handle_worker_update_unauthorized_payload_rejected(self):
+        state = {"processed_action_ids": []}
+        for bad_key in ("token", "authorization", "secret", "password"):
+            message = {
+                "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+                "type": "aot_batch_action",
+                "action": "UPDATE_WORKER",
+                "action_id": f"act-bad-{bad_key}",
+                "target_device_ids": ["m116"],
+                "channel": "canary",
+                "expires_at": int(time.time() * 1000) + 60000,
+                "release": {
+                    "protocol": "github-release-v1",
+                    "version": "aot-worker-2026.08.16.03",
+                    "tag": "worker-v2026.08.16.03",
+                    "commit_sha": "a" * 40,
+                    "manifest": {
+                        "name": "worker-manifest.json",
+                        "size": 1234,
+                        "sha256": "b" * 64,
+                    },
+                    bad_key: "leaked_val",
+                },
+            }
+            with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+                 mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
+                res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+                self.assertTrue(res)
+                mock_popen.assert_not_called()
+                self.assertNotIn(f"act-bad-{bad_key}", state["processed_action_ids"])
+
+    def test_handle_worker_update_nested_secret_rejected(self):
+        state = {"processed_action_ids": []}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-nested-secret",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": "aot-worker-2026.08.16.03",
+                "tag": "worker-v2026.08.16.03",
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
+                "extra": {
+                    "nested_creds": {
+                        "token": "secret_token_val",
+                    },
+                },
+            },
+        }
+        with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
+            res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+            self.assertTrue(res)
+            mock_popen.assert_not_called()
+            self.assertNotIn("act-nested-secret", state["processed_action_ids"])
+
+    def test_handle_worker_update_idempotency_duplicate_skipped(self):
+        state = {"processed_action_ids": ["act-dup-1"]}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-dup-1",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": "aot-worker-2026.08.16.03",
+                "tag": "worker-v2026.08.16.03",
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
+            },
+        }
+        with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
+            res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+            self.assertTrue(res)
+            mock_popen.assert_not_called()
 
 
 if __name__ == "__main__": unittest.main()

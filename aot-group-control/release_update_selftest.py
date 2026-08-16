@@ -60,8 +60,8 @@ with tempfile.TemporaryDirectory(prefix="aot-release-download-") as folder:
             "github_digest": "sha256:" + hashlib.sha256(body).hexdigest(),
         })
     manifest = {
-        "schema_version": 3, "worker_version": "aot-worker-2026.08.15.01",
-        "tag": "worker-v2026.08.15.01", "commit_sha": "a" * 40,
+        "schema_version": 3, "worker_version": "aot-worker-2026.08.16.03",
+        "tag": "worker-v2026.08.16.03", "commit_sha": "a" * 40,
         "minimum_protocol": "github-release-v1", "minimum_bootstrap_version": 2,
         "files": release_files,
     }
@@ -69,18 +69,18 @@ with tempfile.TemporaryDirectory(prefix="aot-release-download-") as folder:
     manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
     module.urllib.request.urlopen = lambda request, timeout=0: Reply(manifest_bytes)
     metadata = {
-        "version": "aot-worker-2026.08.15.01", "tag": "worker-v2026.08.15.01",
+        "version": "aot-worker-2026.08.16.03", "tag": "worker-v2026.08.16.03",
         "commit_sha": "a" * 40,
         "manifest": {
             "name": "worker-manifest.json",
-            "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.15.01/worker-manifest.json",
+            "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.16.03/worker-manifest.json",
             "size": len(manifest_bytes), "sha256": manifest_sha,
             "github_digest": "sha256:" + manifest_sha,
         },
     }
     encoded = base64.urlsafe_b64encode(json.dumps(metadata).encode()).decode().rstrip("=")
     loaded = module.load_pinned_release(encoded, "canary")
-    assert loaded["version"] == "aot-worker-2026.08.15.01" and loaded["channel"] == "canary"
+    assert loaded["version"] == "aot-worker-2026.08.16.03" and loaded["channel"] == "canary"
     broken = json.loads(json.dumps(metadata))
     broken["manifest"]["github_digest"] = "sha256:" + "0" * 64
     encoded = base64.urlsafe_b64encode(json.dumps(broken).encode()).decode().rstrip("=")

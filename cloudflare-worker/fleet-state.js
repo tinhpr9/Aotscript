@@ -26,8 +26,8 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.16.02";
-const AOT_WORKER_TAG = "worker-v2026.08.16.02";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.16.03";
+const AOT_WORKER_TAG = "worker-v2026.08.16.03";
 const AOT_ALLOCATE_SERVER_CAPABILITY = "allocate_server_2pc";
 const AOT_RELEASE_PROTOCOL = "github-release-v1";
 const AOT_RELEASE_REPOSITORY = "tinhpr9/Aotscript";
@@ -3136,7 +3136,7 @@ export class FleetState
 
     const fresh = await this.readFleet();
     const previous = fresh.last_batch;
-    const allocateTerminal = new Set(["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "ABORT_SENT", "DUPLICATE"]);
+    const allocateTerminal = new Set(["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "ABORT_SENT", "DUPLICATE", "FAILED_NOT_INSTALLED"]);
     if (
       action === AOT_ALLOCATE_SERVER_ACTION &&
       previous?.action === AOT_ALLOCATE_SERVER_ACTION &&
@@ -3450,9 +3450,11 @@ export class FleetState
         }
       }
 
-      if (lb.telegram_chat_id && !lb.telegram_notified && Number(lb.telegram_retry_time || 0) > Date.now()) {
-        if (!nextAlarm || lb.telegram_retry_time < nextAlarm) {
-          nextAlarm = lb.telegram_retry_time;
+      if (lb.telegram_chat_id && !lb.telegram_notified && Number(lb.telegram_retry_time || 0) > 0) {
+        const tgRetry = Number(lb.telegram_retry_time);
+        const targetTime = tgRetry > Date.now() ? tgRetry : Date.now() + 1000;
+        if (!nextAlarm || targetTime < nextAlarm) {
+          nextAlarm = targetTime;
         }
       }
     }

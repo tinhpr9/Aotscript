@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import base64
 import hashlib
 import importlib.util
 import json
@@ -91,7 +90,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.16.02"
+WORKER_VERSION = "aot-worker-2026.08.16.03"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -969,6 +968,20 @@ def _handle_backup_restore_data(
     )
     return True
 
+def _has_forbidden_secret_key(obj: Any) -> bool:
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() in {"token", "authorization", "secret", "password"}:
+                return True
+            if _has_forbidden_secret_key(v):
+                return True
+    elif isinstance(obj, list):
+        for item in obj:
+            if _has_forbidden_secret_key(item):
+                return True
+    return False
+
+
 def _handle_worker_update(
     state: dict[str, Any],
     *,
@@ -996,17 +1009,43 @@ def _handle_worker_update(
     if updater.normalize_channel(channel) != channel:
         return True
     release = message.get("release")
+    if not isinstance(release, dict) or _has_forbidden_secret_key(release):
+        return True
+    rel_version = str(release.get("version") or "")
+    rel_tag = str(release.get("tag") or "")
+    commit_sha = str(release.get("commit_sha") or "").lower()
+    manifest = release.get("manifest")
     if (
-        not isinstance(release, dict)
-        or release.get("protocol") != "github-release-v1"
-        or release.get("version") != WORKER_VERSION
-        or release.get("tag") != "worker-v" + WORKER_VERSION.removeprefix("aot-worker-")
-        or any(key.lower() in {"token", "authorization", "secret"} for key in release)
+        release.get("protocol") != "github-release-v1"
+        or not re.fullmatch(r"aot-worker-\d{4}\.\d{2}\.\d{2}(?:\.\d+)?", rel_version)
+        or rel_tag != "worker-v" + rel_version.removeprefix("aot-worker-")
+        or not re.fullmatch(r"[0-9a-f]{40}", commit_sha)
+        or not isinstance(manifest, dict)
+        or manifest.get("name") != "worker-manifest.json"
     ):
         return True
+    size = manifest.get("size")
+    if not isinstance(size, int) or size <= 0:
+        return True
+    digest = str(manifest.get("sha256") or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return True
+    pinned_release = {
+        "protocol": "github-release-v1",
+        "version": rel_version,
+        "tag": rel_tag,
+        "commit_sha": commit_sha,
+        "manifest": {
+            "name": "worker-manifest.json",
+            "url": str(manifest.get("url") or ""),
+            "size": size,
+            "sha256": digest,
+            "github_digest": str(manifest.get("github_digest") or f"sha256:{digest}").lower(),
+        },
+    }
     try:
         release_metadata = base64.urlsafe_b64encode(
-            json.dumps(release, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(pinned_release, sort_keys=True, separators=(",", ":")).encode()
         ).decode().rstrip("=")
     except Exception:
         return True
