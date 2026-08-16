@@ -55,26 +55,38 @@ com.tinh.vv.hr,https://www.roblox.com/games/975?privateServerLinkCode=0000000000
     }
     return res;
   },
-  savePendingAllocate: async (token, spec) => {
-    pendingAllocates[token] = spec;
-  },
-  loadPendingAllocate: async (token) => {
-    return pendingAllocates[token];
-  },
-  clearPendingAllocate: async (token) => {
-    clearedTokens.push(token);
-    delete pendingAllocates[token];
-  },
   fleetStateCall: async (env, path, init) => {
     if (path === "/aot/hub/control") {
-      fleetControlCalls.push(init.body);
+      const body = init.body;
+      if (body.kind === "pending_allocate_save") {
+        pendingAllocates[body.token] = body.spec;
+        return { response: { ok: true } };
+      }
+      if (body.kind === "pending_allocate_consume") {
+        const spec = pendingAllocates[body.token];
+        if (spec) {
+          delete pendingAllocates[body.token];
+          clearedTokens.push(body.token); // For tests to verify it was cleared
+          return { response: { ok: true }, data: { spec } };
+        }
+        return { response: { ok: false } };
+      }
+      if (body.kind === "pending_allocate_clear") {
+        if (pendingAllocates[body.token]) {
+          clearedTokens.push(body.token);
+          delete pendingAllocates[body.token];
+          return { response: { ok: true }, data: { cleared: true } };
+        }
+        return { response: { ok: true }, data: { cleared: false } };
+      }
+      fleetControlCalls.push(body);
       return { response: { ok: true }, data: { batch: { action_id: "act-123", devices: [{ device_id: "m1", status: "SENT", history: ["SENT"] }] } } };
     }
     if (path === "/aot/hub/state") {
       getFleetHubStateCalls++;
       // Return terminal after 2 polls
       const status = getFleetHubStateCalls > 1 ? "OPENED" : "SENT";
-      return { response: { ok: true }, data: { state: { last_batch: { action_id: "act-123", devices: [{ device_id: "m1", status, history: ["SENT", status] }] } } } };
+      return { response: { ok: true }, data: { state: { devices: [{ device_id: "m1", online: context.isM1Online !== false }], last_batch: { action_id: "act-123", devices: [{ device_id: "m1", status, history: ["SENT", status] }] } } } };
     }
   },
   AOT_HUB_PROTOCOL_VERSION: "fleet-batch-v1"
@@ -93,10 +105,13 @@ vm.runInContext(handleUpdateSource, context);
 
 const handleCallbackSource = getFuncText("async function handleCallback", "\nfunction toggleCommand");
 if (!handleCallbackSource) throw new Error("Could not find handleCallback");
+const pendingFunctionsSource = getFuncText("async function savePendingAllocate", "\nfunction pendingDispatchCacheKey");
 vm.runInContext(`
+function normalizeDeviceId(id) { return String(id || "").toLowerCase(); }
 async function handleRolloutCallback() { return false; }
 async function handleRolloutCommand() { return false; }
 async function getRolloutOps() { return false; }
+${pendingFunctionsSource}
 ${handleCallbackSource}
 `, context);
 
@@ -126,22 +141,55 @@ async function runTests() {
   const okCallbackData = inlineKb[0].callback_data;
   const cancelCallbackData = inlineKb[1].callback_data;
 
-  // 3. confirm / cancel
   // Cancel
   await triggerCallback(cancelCallbackData);
   if (clearedTokens[0] !== cancelCallbackData.split(":")[1]) throw new Error("cancel test failed");
   if (answeredCallbacks[0].text !== "Đã hủy PHÂN SERVER.") throw new Error("cancel response failed");
+  
+  // Double Cancel
+  await triggerCallback(cancelCallbackData);
+  if (answeredCallbacks[0].text !== "Lệnh đã được xác nhận/đang xử lý, không thể hủy.") throw new Error("double cancel response failed");
+
+  // Confirm after Cancel
+  await triggerCallback(okCallbackData);
+  if (answeredCallbacks[0].text !== "Xác nhận đã hết hạn hoặc đã được xử lý.") throw new Error("confirm after cancel failed");
 
   // Confirm
   // recreate pending
   await triggerMessage("/phanserver m1 5");
-  const okCb2 = sentMessages[0].reply_markup.inline_keyboard[0][0].callback_data;
+  const inlineKb2 = sentMessages[0].reply_markup.inline_keyboard[0];
+  const okCb2 = inlineKb2[0].callback_data;
+  const cancelCb2 = inlineKb2[1].callback_data;
   
+  // mock m1 offline for confirm
+  context.isM1Online = false;
   await triggerCallback(okCb2);
-  if (clearedTokens[1] !== okCb2.split(":")[1]) throw new Error("confirm clear test failed");
+  if (!sentMessages[0].text.includes("OFFLINE")) throw new Error("Offline confirm did not fail properly: " + sentMessages[0].text);
+  
+  // reset to online
+  context.isM1Online = true;
+  await triggerMessage("/phanserver m1 5");
+  const inlineKb3 = sentMessages[0].reply_markup.inline_keyboard[0];
+  const okCb3 = inlineKb3[0].callback_data;
+  const cancelCb3 = inlineKb3[1].callback_data;
+
+  await triggerCallback(okCb3);
+  if (clearedTokens[clearedTokens.length - 1] !== okCb3.split(":")[1]) throw new Error("confirm clear test failed");
   if (answeredCallbacks[0].text !== "Đang chạy phân server...") throw new Error("confirm response failed");
-  if (fleetControlCalls[0].kind !== "allocate_server") throw new Error("fleet control dispatch failed");
-  if (!sentMessages[0] || !sentMessages[0].text.includes("đang chờ thiết bị phản hồi")) throw new Error("final intermediate result message failed");
+  const confirmMsg = sentMessages[0];
+  
+  // Double Confirm
+  await triggerCallback(okCb3);
+  if (answeredCallbacks[0].text !== "Xác nhận đã hết hạn hoặc đã được xử lý.") throw new Error("double confirm failed");
+  
+  // Cancel after Confirm
+  await triggerCallback(cancelCb3);
+  if (answeredCallbacks[0].text !== "Lệnh đã được xác nhận/đang xử lý, không thể hủy.") throw new Error("cancel after confirm failed");
+
+  const lastControl = fleetControlCalls[fleetControlCalls.length - 1];
+  if (lastControl.kind !== "allocate_server") throw new Error("fleet control dispatch failed");
+  if (lastControl.telegram_chat_id !== 1) throw new Error("fleet control dispatch telegram_chat_id failed");
+  if (!confirmMsg || !confirmMsg.text.includes("đang chờ thiết bị phản hồi")) throw new Error("final intermediate result message failed");
 
   // Duplicate device
   await triggerMessage("/phanserver dup,dup 5");

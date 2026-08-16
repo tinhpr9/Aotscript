@@ -2,6 +2,15 @@ import fs from "node:fs/promises";
 import vm from "node:vm";
 
 const context = vm.createContext({ URL, Request, Response, Headers, JSON, Map, Set, Object, Array, String, Number, Boolean, Math, Date, console, crypto, structuredClone });
+const telegramCalls = [];
+context.telegramMockStatus = 200;
+context.fetch = async (url, options) => {
+  if (url.includes("api.telegram.org")) {
+    telegramCalls.push({ url, options });
+    return { ok: context.telegramMockStatus >= 200 && context.telegramMockStatus < 300, status: context.telegramMockStatus, json: async () => ({}) };
+  }
+  return { ok: true, json: async () => ({}) };
+};
 const cf = new vm.SyntheticModule(["DurableObject"], function () {
   this.setExport("DurableObject", class { constructor(ctx, env) { this.ctx = ctx; this.env = env; } });
 }, { context });
@@ -10,13 +19,15 @@ const mod = new vm.SourceTextModule(source, { context });
 await mod.link(async specifier => { if (specifier === "cloudflare:workers") return cf; throw new Error(specifier); });
 await mod.evaluate();
 
+
+
 const store = new Map();
 const sockets = new Map();
 const ctx = {
   storage: { get: async k => store.get(k), put: async (k, v) => store.set(k, structuredClone(v)), setAlarm: async () => {}, list: async () => new Map() },
   getWebSockets: tag => sockets.get(tag) || [], getTags: () => [], acceptWebSocket() {}, waitUntil() {},
 };
-const fleet = new mod.namespace.FleetState(ctx, {});
+const fleet = new mod.namespace.FleetState(ctx, { TELEGRAM_BOT_TOKEN: "tok" });
 const ids = Array.from({ length: 40 }, (_, i) => `m${i + 201}`);
 const record = await fleet.readFleet();
 for (const id of ids) { record.devices[id] = { device_id: id }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
@@ -104,6 +115,53 @@ await allocAck("OPENED", true);
 if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "OPENED") throw new Error("ALLOCATE_SERVER OPENED failed");
 await allocAck("FAILED"); // ignored because OPENED is terminal
 if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "OPENED") throw new Error("ALLOCATE_SERVER terminal override failed");
+
+// Test offline device fail-closed
+sockets.delete(`aot-device:${ids[1]}`);
+response = await fleet.dispatchFleetBatch(record, "ALLOCATE_SERVER", [ids[0], ids[1]], { allocationMap: {} });
+body = await response.json();
+if (body.ok || body.error !== "offline_devices_in_allocate_batch") throw new Error("ALLOCATE_SERVER offline fail-closed test failed: " + JSON.stringify(body));
+sockets.set(`aot-device:${ids[1]}`, [{ send() {} }]);
+
+// Telegram integration test for ALLOCATE_SERVER
+telegramCalls.length = 0;
+response = await fleet.dispatchFleetBatch(record, "ALLOCATE_SERVER", [ids[0]], { allocationMap: { [ids[0]]: [{ pkg: "com.tinh.vv.hi", url: "https://test" }] }, telegram_chat_id: 999 });
+body = await response.json();
+const allocActionId2 = body.batch.action_id;
+const allocAck2 = async (status, executed = false) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[0], action_id: allocActionId2, batch_action: "ALLOCATE_SERVER", status, executed }) }));
+await allocAck2("ACCEPTED");
+if (telegramCalls.length !== 0) throw new Error("Telegram called prematurely");
+await allocAck2("ALLOCATED");
+if (telegramCalls.length !== 0) throw new Error("Telegram called prematurely");
+await allocAck2("OPENED", true);
+if (telegramCalls.length !== 1) throw new Error("Telegram not called on terminal ACK");
+const telegramBody = JSON.parse(telegramCalls[0].options.body);
+if (telegramBody.chat_id !== 999) throw new Error("Telegram chat_id mismatch");
+if (!telegramBody.text.includes("OPENED")) throw new Error("Telegram text mismatch");
+await allocAck2("FAILED");
+if (telegramCalls.length !== 1) throw new Error("Telegram called again on duplicate ACK");
+
+// Telegram timeout test
+telegramCalls.length = 0;
+response = await fleet.dispatchFleetBatch(record, "ALLOCATE_SERVER", [ids[0]], { allocationMap: { [ids[0]]: [{ pkg: "com.tinh.vv.hi", url: "https://test" }] }, telegram_chat_id: 888 });
+const allocActionId3 = (await response.json()).batch.action_id;
+let fleetRecord = await fleet.readFleet();
+fleetRecord.last_batch.expires_at = Date.now() - 1000;
+await fleet.writeFleet(fleetRecord);
+await fleet.alarm();
+if (telegramCalls.length !== 1) throw new Error("Telegram not called on timeout");
+const timeoutBody = JSON.parse(telegramCalls[0].options.body);
+if (timeoutBody.chat_id !== 888) throw new Error("Telegram timeout chat_id mismatch");
+if (!timeoutBody.text.includes("TIMEOUT")) throw new Error("Telegram timeout text mismatch");
+
+// Pending allocate test
+response = await fleet.controlFleetHub(new Request("https://test", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", kind: "pending_allocate_save", token: "tok1", spec: { test: 1 } }) }));
+if (!(await response.json()).ok) throw new Error("pending_allocate_save failed");
+response = await fleet.controlFleetHub(new Request("https://test", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", kind: "pending_allocate_consume", token: "tok1" }) }));
+body = await response.json();
+if (!body.ok || body.spec.test !== 1) throw new Error("pending_allocate_consume failed");
+response = await fleet.controlFleetHub(new Request("https://test", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", kind: "pending_allocate_consume", token: "tok1" }) }));
+if ((await response.json()).ok) throw new Error("pending_allocate_consume should be atomic one-time");
 
 const file = source;
 if (!file.includes("AOT_UPDATE_GROUP_SIZE = 5") || !file.includes("ROLLED_BACK")) throw new Error("update rollout/rollback lost");
@@ -229,6 +287,55 @@ let invalidTargetBody = await invalidTargetResp.json();
 if (invalidTargetBody.ok === true || invalidTargetBody.error !== "invalid_explicit_targets") {
   throw new Error("Invalid explicit target did not fail closed");
 }
+
+// Telegram Retry Tests
+const tgIds = ["m901", "m902"];
+let tgRecord = await fleet.readFleet();
+for (const id of tgIds) { tgRecord.devices[id] = { device_id: id }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
+await fleet.writeFleet(tgRecord);
+
+// 1. Simulate a batch dispatch for allocate_server
+await fleet.dispatchFleetBatch(tgRecord, "ALLOCATE_SERVER", tgIds);
+tgRecord = await fleet.readFleet();
+tgRecord.last_batch.telegram_chat_id = 12345;
+await fleet.writeFleet(tgRecord);
+
+// 2. Fail first notification with 500
+context.telegramMockStatus = 500;
+const tgActionId = tgRecord.last_batch.action_id;
+const initialCalls = telegramCalls.length;
+for (const id of tgIds) {
+  await fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: id, action_id: tgActionId, batch_action: "ALLOCATE_SERVER", status: "OPENED", executed: true }) }));
+}
+tgRecord = await fleet.readFleet();
+if (tgRecord.last_batch.telegram_notified) throw new Error("telegram_notified should be false after 500 error");
+if (telegramCalls.length !== initialCalls + 1) throw new Error("Should have attempted notification once");
+if (!tgRecord.last_batch.telegram_retry_time || tgRecord.last_batch.telegram_retries !== 1) throw new Error("Retry state not set correctly");
+
+// 3. Retry via alarm but fail with 429
+context.telegramMockStatus = 429;
+// simulate time passing
+const oldNow = Date.now;
+Date.now = () => oldNow() + 35000; // fast forward past retry time
+await fleet.alarm();
+tgRecord = await fleet.readFleet();
+if (tgRecord.last_batch.telegram_notified) throw new Error("telegram_notified should be false after 429 error");
+if (telegramCalls.length !== initialCalls + 2) throw new Error("Should have attempted notification twice");
+if (tgRecord.last_batch.telegram_retries !== 2) throw new Error("Retry count not incremented");
+
+// 4. Retry via alarm and succeed with 200
+context.telegramMockStatus = 200;
+Date.now = () => oldNow() + 70000;
+await fleet.alarm();
+tgRecord = await fleet.readFleet();
+if (!tgRecord.last_batch.telegram_notified) throw new Error("telegram_notified should be true after 200 success");
+if (telegramCalls.length !== initialCalls + 3) throw new Error("Should have attempted notification thrice");
+
+// 5. Duplicate ACK should not trigger again
+await fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: tgIds[0], action_id: tgActionId, batch_action: "ALLOCATE_SERVER", status: "OPENED", executed: true }) }));
+if (telegramCalls.length !== initialCalls + 3) throw new Error("Duplicate ACK triggered extra notification");
+
+Date.now = oldNow;
 
 console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");

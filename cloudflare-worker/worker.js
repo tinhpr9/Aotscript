@@ -867,7 +867,7 @@ async function handleAotControlAck(
   const status = String(body.status || "");
   const batchAction = String(body.batch_action || "");
   const isBatch = [AOT_HUB_PROTOCOL_VERSION, "phase4-1"].includes(body.protocol) &&
-    ["OPEN_SWIFT_BACKUP", "OPEN_SWIFT_APPS", "BACKUP_RESTORE_DATA", "UPDATE_WORKER"].includes(batchAction);
+    ["OPEN_SWIFT_BACKUP", "OPEN_SWIFT_APPS", "BACKUP_RESTORE_DATA", "UPDATE_WORKER", "ALLOCATE_SERVER"].includes(batchAction);
   const allowedStatus = new Set(
     batchAction === "UPDATE_WORKER"
       ? ["DOWNLOADING", "VERIFIED", "INSTALLING", "RESTARTING", "HEALTHY", "ROLLED_BACK", "FAILED"]
@@ -882,6 +882,16 @@ async function handleAotControlAck(
               "SELECTED",
               "OPTIONS_VERIFIED",
               "BACKUP_STARTED",
+              "FAILED_NOT_INSTALLED",
+              "FAILED",
+              "TIMEOUT",
+              "DUPLICATE",
+            ]
+          : batchAction === "ALLOCATE_SERVER"
+          ? [
+              "ACCEPTED",
+              "ALLOCATED",
+              "OPENED",
               "FAILED_NOT_INSTALLED",
               "FAILED",
               "TIMEOUT",
@@ -960,6 +970,10 @@ async function handleAotControlAck(
       }
       if (Number.isSafeInteger(body.selected_count) && body.selected_count >= 0 && body.selected_count <= 100000) {
         clean.selected_count = body.selected_count;
+      }
+    } else if (batchAction === "ALLOCATE_SERVER") {
+      if (typeof body.reason === "string") {
+        clean.reason = body.reason.trim().slice(0, 160);
       }
     }
   }
@@ -1801,54 +1815,54 @@ function parseTongHopLink(text, target_device_ids, tabs) {
   const blocks = [];
   let currentBlock = [];
   const seenUrls = new Set();
-  let blockInvalid = false;
   
   for (let line of lines) {
     line = line.trim();
     if (!line) continue;
     if (line === '===') {
-      if (!blockInvalid && currentBlock.length === 10) {
+      if (currentBlock.length > 0) {
         blocks.push(currentBlock);
       }
       currentBlock = [];
-      blockInvalid = false;
       continue;
     }
-    if (blockInvalid) continue;
     
     const parts = line.split(',');
     if (parts.length < 2) {
-      blockInvalid = true;
-      continue;
+      throw new Error(`Dòng không đúng định dạng: ${line}`);
     }
     const pkg = parts[0].trim();
     const url = parts.slice(1).join(',').trim();
     if (!url.match(/^https:\/\/(www\.)?roblox\.com\/games\/\d+\?privateServerLinkCode=[0-9a-fA-F]+$/i)) {
-      blockInvalid = true;
-      continue;
+      throw new Error(`URL không hợp lệ: ${url}`);
     }
     if (seenUrls.has(url)) {
-      blockInvalid = true;
-      continue;
+      throw new Error(`URL bị lặp: ${url}`);
     }
-    if (currentBlock.length >= 10 || pkg !== pkgs[currentBlock.length]) {
-      blockInvalid = true;
-      continue;
+    if (currentBlock.length >= 10) {
+      throw new Error(`Block có nhiều hơn 10 dòng.`);
+    }
+    if (pkg !== pkgs[currentBlock.length]) {
+      throw new Error(`Sai package hoặc sai thứ tự. Cần ${pkgs[currentBlock.length]}, nhưng nhận được ${pkg}.`);
     }
     seenUrls.add(url);
     currentBlock.push({ pkg, url });
   }
-  if (!blockInvalid && currentBlock.length === 10) {
+  if (currentBlock.length > 0) {
     blocks.push(currentBlock);
   }
   
   if (target_device_ids.length > blocks.length) {
-    throw new Error(`Không đủ block URL hợp lệ! Cần ${target_device_ids.length} block, nhưng file chỉ có ${blocks.length} block hợp lệ và duy nhất.`);
+    throw new Error(`Không đủ block URL! Cần ${target_device_ids.length} block, nhưng file chỉ có ${blocks.length} block.`);
   }
 
   const allocationMap = {};
   for (let i = 0; i < target_device_ids.length; i++) {
-    allocationMap[target_device_ids[i]] = blocks[i].slice(0, tabs);
+    const block = blocks[i];
+    if (block.length < tabs) {
+      throw new Error(`Block số ${i + 1} chỉ có ${block.length} link, cần ít nhất ${tabs} link cho số tab đã chọn.`);
+    }
+    allocationMap[target_device_ids[i]] = block.slice(0, tabs);
   }
   return allocationMap;
 }
@@ -2864,33 +2878,42 @@ function pendingAllocateCacheKey(token) {
   return `https://aotscript.local/pending-allocate/${token}`;
 }
 
-async function savePendingAllocate(token, spec) {
-  await caches.default.put(
-    new Request(pendingAllocateCacheKey(token)),
-    new Response(JSON.stringify({ ...spec, created: Date.now() }), {
-      headers: { "Content-Type": "application/json" }
-    })
-  );
-}
-
-async function loadPendingAllocate(token) {
-  const response = await caches.default.match(new Request(pendingAllocateCacheKey(token)));
-  if (!response) return null;
-  try {
-    const value = JSON.parse(await response.text());
-    if (!value || typeof value.created !== "number" || Date.now() - value.created > COMMAND_TTL_MS) {
-      await clearPendingAllocate(token);
-      return null;
+async function savePendingAllocate(token, spec, env) {
+  const result = await fleetStateCall(env, "/aot/hub/control", {
+    method: "POST",
+    body: {
+      protocol: AOT_HUB_PROTOCOL_VERSION,
+      kind: "pending_allocate_save",
+      token,
+      spec
     }
-    return value;
-  } catch (error) {
-    await clearPendingAllocate(token);
-    return null;
-  }
+  });
+  if (!result.response.ok) throw new Error("Lỗi lưu trạng thái PHÂN SERVER");
 }
 
-async function clearPendingAllocate(token) {
-  await caches.default.delete(new Request(pendingAllocateCacheKey(token)));
+async function loadPendingAllocate(token, env) {
+  const result = await fleetStateCall(env, "/aot/hub/control", {
+    method: "POST",
+    body: {
+      protocol: AOT_HUB_PROTOCOL_VERSION,
+      kind: "pending_allocate_consume",
+      token
+    }
+  });
+  if (!result.response.ok) return null;
+  return result.data.spec;
+}
+
+async function clearPendingAllocate(token, env) {
+  const result = await fleetStateCall(env, "/aot/hub/control", {
+    method: "POST",
+    body: {
+      protocol: AOT_HUB_PROTOCOL_VERSION,
+      kind: "pending_allocate_clear",
+      token
+    }
+  });
+  return result.response.ok && result.data?.cleared === true;
 }
 
 function pendingDispatchCacheKey(token) {
@@ -4820,15 +4843,17 @@ async function resolveAndValidateTelegramTargets(targetStr, env) {
   const rawTarget = targetStr.trim();
   const wantedGroup = normalizeDeviceGroup(rawTarget);
   
-  const durableRecords = await listFleetDeviceRecords(env);
-  const now = Date.now();
+  const stateResult = await fleetStateCall(env, "/aot/hub/state");
+  if (!stateResult.response.ok) {
+     throw new Error("Không thể lấy trạng thái thiết bị.");
+  }
+  const durableRecords = stateResult.data?.state?.devices || [];
   
   if (wantedGroup) {
     const ids = [];
     for (const record of durableRecords) {
       if (normalizeDeviceGroup(record?.device_group) === wantedGroup) {
-        const isOnline = now - Number(record?.last_seen || 0) <= ONLINE_WINDOW_MS;
-        if (!isOnline) {
+        if (!record.online) {
            throw new Error(`Thiết bị ${record?.device_id} trong nhóm ${wantedGroup} đang OFFLINE.`);
         }
         ids.push(normalizeDeviceId(record?.device_id));
@@ -4851,8 +4876,7 @@ async function resolveAndValidateTelegramTargets(targetStr, env) {
     const did = normalizeDeviceId(record?.device_id);
     if (!did) continue;
     allIds.add(did);
-    const isOnline = now - Number(record?.last_seen || 0) <= ONLINE_WINDOW_MS;
-    if (isOnline) onlineIds.add(did);
+    if (record.online) onlineIds.add(did);
   }
   
   for (const id of ids) {
@@ -4934,7 +4958,7 @@ async function handleUpdate(update, env) {
       const allocationMap = parseTongHopLink(text, ids, tabs);
       
       const token = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-      await savePendingAllocate(token, { ids, tabs, allocationMap });
+      await savePendingAllocate(token, { ids, tabs, allocationMap }, env);
       
       let textMsg = "<b>PREVIEW PHÂN SERVER</b>\n\n";
       for (const [id, list] of Object.entries(allocationMap)) {
@@ -5830,32 +5854,54 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
 
   if (data.startsWith("allocate_cancel:")) {
     const token = data.slice("allocate_cancel:".length);
-    await clearPendingAllocate(token);
-    await answerCallback(callback.id, env, "Đã hủy PHÂN SERVER.");
+    const cleared = await clearPendingAllocate(token, env);
+    if (cleared) {
+      await answerCallback(callback.id, env, "Đã hủy PHÂN SERVER.");
+    } else {
+      await answerCallback(callback.id, env, "Lệnh đã được xác nhận/đang xử lý, không thể hủy.", true);
+    }
     return;
   }
 
   if (data.startsWith("allocate_ok:")) {
     const token = data.slice("allocate_ok:".length);
-    const pending = await loadPendingAllocate(token);
+    const pending = await loadPendingAllocate(token, env);
     if (!pending) {
-      await answerCallback(callback.id, env, "Xác nhận đã hết hạn.", true);
+      await answerCallback(callback.id, env, "Xác nhận đã hết hạn hoặc đã được xử lý.", true);
       return;
     }
-    await clearPendingAllocate(token);
     await answerCallback(callback.id, env, "Đang chạy phân server...");
     
     try {
+      const stateResult = await fleetStateCall(env, "/aot/hub/state");
+      if (!stateResult.response.ok) {
+        throw new Error("Không thể lấy trạng thái thiết bị để xác nhận lại.");
+      }
+      const durableRecords = stateResult.data?.state?.devices || [];
+      const onlineMap = new Map();
+      for (const r of durableRecords) {
+        onlineMap.set(normalizeDeviceId(r.device_id), r.online);
+      }
+      for (const id of pending.ids) {
+        if (!onlineMap.get(id)) {
+          throw new Error(`Thiết bị ${id} đã ngắt kết nối (OFFLINE). Lệnh bị hủy.`);
+        }
+      }
+
       const result = await fleetStateCall(env, "/aot/hub/control", {
         method: "POST",
         body: {
           protocol: AOT_HUB_PROTOCOL_VERSION,
           kind: "allocate_server",
           target_device_ids: pending.ids,
-          allocationMap: pending.allocationMap
+          allocationMap: pending.allocationMap,
+          telegram_chat_id: chatId
         }
       });
       if (!result.response.ok) {
+        if (result.data?.error === "offline_devices_in_allocate_batch") {
+          throw new Error("Có thiết bị ngắt kết nối trong lúc xác nhận. Lệnh phân server đã bị hủy toàn bộ.");
+        }
         throw new Error(JSON.stringify(result.data));
       }
       const actionId = result.data.batch.action_id;

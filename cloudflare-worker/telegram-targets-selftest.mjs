@@ -7,14 +7,22 @@ const source = await fs.readFile(new URL("./worker.js", import.meta.url), "utf8"
 const context = vm.createContext({
   console,
   ONLINE_WINDOW_MS: 90000,
-  listFleetDeviceRecords: async () => {
-    const now = Date.now();
-    return [
-      { device_id: "m1", device_group: "NOVA", last_seen: now - 1000 },
-      { device_id: "m2", device_group: "NOVA", last_seen: now - 50000 },
-      { device_id: "m3", device_group: "MARMOT", last_seen: now - 100000 }, // stale (offline)
-      { device_id: "m4", device_group: "MARMOT", last_seen: now - 2000 }
-    ];
+  fleetStateCall: async (env, path, opts) => {
+    if (path !== "/aot/hub/state") return { response: { ok: false } };
+    return {
+      response: { ok: true },
+      data: {
+        state: {
+          devices: [
+            { device_id: "m1", device_group: "NOVA", online: true },
+            { device_id: "m2", device_group: "NOVA", online: true },
+            { device_id: "m3", device_group: "MARMOT", online: false }, // offline
+            { device_id: "m4", device_group: "MARMOT", online: true },
+            { device_id: "m5", device_group: "NOVA", online: false } // new: offline NOVA member
+          ]
+        }
+      }
+    };
   },
   normalizeDeviceGroup: (value) => {
     const group = String(value || "").trim().toUpperCase();
@@ -54,9 +62,10 @@ async function runTests() {
   const t2 = await resolve("m1,m2");
   if (t2.join(",") !== "m1,m2") throw new Error("test 2 failed");
 
-  // 3. NOVA (group) -> m1,m2
-  const t3 = await resolve("NOVA");
-  if (t3.join(",") !== "m1,m2") throw new Error("test 3 failed");
+  // 3. NOVA (group) with m5 offline -> should throw
+  await resolve("NOVA").then(() => { throw new Error("test 3 fail - should throw on offline group member") }).catch(e => {
+    if (!e.message.includes("đang OFFLINE")) throw e;
+  });
 
   // 4. empty target
   await resolve("   ").then(() => { throw new Error("test 4 fail - should throw on empty") }).catch(e => {
