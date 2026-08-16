@@ -103,6 +103,12 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "protocol": "github-release-v1",
                 "version": self.RELAY.WORKER_VERSION,
                 "tag": "worker-v" + self.RELAY.WORKER_VERSION.removeprefix("aot-worker-"),
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
             }
         }
         import json
@@ -204,9 +210,12 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "protocol": "github-release-v1",
                 "version": self.RELAY.WORKER_VERSION,
                 "tag": "worker-v" + self.RELAY.WORKER_VERSION.removeprefix("aot-worker-"),
-                "release_id": 12345,
-                "target_commitish": "main",
-                "files": {},
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
             },
         }
         with mock.patch.object(self.RELAY.subprocess, "Popen", side_effect=OSError("process limit reached")), \
@@ -268,6 +277,11 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "version": self.RELAY.WORKER_VERSION,
                 "tag": "worker-v" + self.RELAY.WORKER_VERSION.removeprefix("aot-worker-"),
                 "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
             },
         }
         with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
@@ -291,6 +305,12 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "protocol": "github-release-v1",
                 "version": "bad_version_format",
                 "tag": "worker-vbad",
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
             },
         }
         with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
@@ -314,6 +334,12 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "protocol": "github-release-v1",
                 "version": "aot-worker-2026.08.16.03",
                 "tag": "worker-v2026.08.15.01",  # mismatch tag
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
             },
         }
         with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
@@ -322,6 +348,30 @@ class TestFleetLoopResilience(unittest.TestCase):
             self.assertTrue(res)
             mock_popen.assert_not_called()
             self.assertNotIn("act-tag-mismatch-1", state["processed_action_ids"])
+
+    def test_handle_worker_update_missing_manifest_rejected(self):
+        state = {"processed_action_ids": []}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-no-manifest-1",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": "aot-worker-2026.08.16.03",
+                "tag": "worker-v2026.08.16.03",
+                "commit_sha": "a" * 40,
+            },
+        }
+        with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
+            res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+            self.assertTrue(res)
+            mock_popen.assert_not_called()
+            self.assertNotIn("act-no-manifest-1", state["processed_action_ids"])
 
     def test_handle_worker_update_unauthorized_payload_rejected(self):
         state = {"processed_action_ids": []}
@@ -338,6 +388,12 @@ class TestFleetLoopResilience(unittest.TestCase):
                     "protocol": "github-release-v1",
                     "version": "aot-worker-2026.08.16.03",
                     "tag": "worker-v2026.08.16.03",
+                    "commit_sha": "a" * 40,
+                    "manifest": {
+                        "name": "worker-manifest.json",
+                        "size": 1234,
+                        "sha256": "b" * 64,
+                    },
                     bad_key: "leaked_val",
                 },
             }
@@ -347,6 +403,40 @@ class TestFleetLoopResilience(unittest.TestCase):
                 self.assertTrue(res)
                 mock_popen.assert_not_called()
                 self.assertNotIn(f"act-bad-{bad_key}", state["processed_action_ids"])
+
+    def test_handle_worker_update_nested_secret_rejected(self):
+        state = {"processed_action_ids": []}
+        message = {
+            "protocol": self.RELAY.HUB_PROTOCOL_VERSION,
+            "type": "aot_batch_action",
+            "action": "UPDATE_WORKER",
+            "action_id": "act-nested-secret",
+            "target_device_ids": ["m116"],
+            "channel": "canary",
+            "expires_at": int(time.time() * 1000) + 60000,
+            "release": {
+                "protocol": "github-release-v1",
+                "version": "aot-worker-2026.08.16.03",
+                "tag": "worker-v2026.08.16.03",
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
+                "extra": {
+                    "nested_creds": {
+                        "token": "secret_token_val",
+                    },
+                },
+            },
+        }
+        with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \
+             mock.patch.object(self.RELAY.updater, "normalize_channel", return_value="canary"):
+            res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
+            self.assertTrue(res)
+            mock_popen.assert_not_called()
+            self.assertNotIn("act-nested-secret", state["processed_action_ids"])
 
     def test_handle_worker_update_idempotency_duplicate_skipped(self):
         state = {"processed_action_ids": ["act-dup-1"]}
@@ -362,6 +452,12 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "protocol": "github-release-v1",
                 "version": "aot-worker-2026.08.16.03",
                 "tag": "worker-v2026.08.16.03",
+                "commit_sha": "a" * 40,
+                "manifest": {
+                    "name": "worker-manifest.json",
+                    "size": 1234,
+                    "sha256": "b" * 64,
+                },
             },
         }
         with mock.patch.object(self.RELAY.subprocess, "Popen") as mock_popen, \

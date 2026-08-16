@@ -14,7 +14,7 @@
     {
       "path": "relay.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.16.03/relay.py",
-      "sha256": "58f5027721ad992fd7f1854641c9c487488f016934191f7ce7617b7036b2b5e4"
+      "sha256": "4d3e4f9ce8c61069b1abb5fc7ea5bd6d79226c03c72135c7860d71abf30b1b66"
     },
     {
       "path": "runtime.py",
