@@ -22,27 +22,42 @@ def auto_update_system():
         os.makedirs(DOWNLOAD_DIR)
 
     # 2. Gọi API lấy danh sách file từ Github
-    api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"
-    print(f"[*] Đang quét danh sách file mới nhất trên GitHub...")
+    api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases"
+    print(f"[*] Đang quét danh sách releases trên GitHub...")
 
     try:
         req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read().decode())
-            assets = data.get("assets", [])
+        with urllib.request.urlopen(req, timeout=10) as response:
+            releases = json.loads(response.read().decode())
 
-        if not assets:
-            return print("[!] Không tìm thấy file nào.")
+        target_assets = []
+        for release in releases:
+            tag_name = release.get("tag_name", "")
+            if tag_name.startswith("worker-v"):
+                continue
+            
+            assets = release.get("assets", [])
+            valid_assets = [a for a in assets if a.get("name", "").endswith((".apk", ".zip"))]
+            
+            if valid_assets:
+                print(f"[+] Tìm thấy Delta release hợp lệ: {tag_name}")
+                target_assets = valid_assets
+                break
 
-        print(f"[+] Tìm thấy {len(assets)} file. Bắt đầu tải và tự động cài đặt...")
+        if not target_assets:
+            raise RuntimeError("Không tìm thấy Delta release nào hợp lệ có chứa file .apk hoặc .zip.")
+
+        print(f"[+] Tìm thấy {len(target_assets)} file. Bắt đầu tải và tự động cài đặt...")
+
+        installed_count = 0
 
         # 3. Vòng lặp tải và xử lý từng file
-        for idx, asset in enumerate(assets, 1):
+        for idx, asset in enumerate(target_assets, 1):
             file_name = asset["name"]
             dl_url = asset["browser_download_url"]
             file_path = os.path.join(DOWNLOAD_DIR, file_name)
 
-            print(f"\n[{idx}/{len(assets)}] Đang tải file: {file_name}")
+            print(f"\n[{idx}/{len(target_assets)}] Đang tải file: {file_name}")
             urllib.request.urlretrieve(dl_url, file_path)
             print(f" -> Tải xong.")
 
@@ -74,6 +89,7 @@ def auto_update_system():
                             
                             if "Success" in result.stdout or result.returncode == 0:
                                 print(f"      [+] XONG! Cập nhật thành công {f}")
+                                installed_count += 1
                             else:
                                 print(f"      [!] Lỗi cài đặt: {result.stderr.strip()}")
                             time.sleep(1) # Nghỉ 1s tránh lag máy
@@ -85,12 +101,16 @@ def auto_update_system():
                 result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                 if "Success" in result.stdout or result.returncode == 0:
                     print(f"      [+] XONG! Cập nhật thành công.")
+                    installed_count += 1
                 else:
                     print(f"      [!] Lỗi cài đặt: {result.stderr.strip()}")
 
-        print("\n" + "="*50)
-        print("[+] TOÀN BỘ HỆ THỐNG ĐÃ ĐƯỢC CẬP NHẬT TỰ ĐỘNG 100%")
-        print("="*50)
+        if installed_count > 0:
+            print("\n" + "="*50)
+            print("[+] TOÀN BỘ HỆ THỐNG ĐÃ ĐƯỢC CẬP NHẬT TỰ ĐỘNG 100%")
+            print("="*50)
+        else:
+            raise RuntimeError("Cài đặt thất bại, không có APK nào được cài đặt thành công.")
 
     except Exception as e:
         print(f"\n[!] LỖI CHUNG CỦA HỆ THỐNG: {e}")
