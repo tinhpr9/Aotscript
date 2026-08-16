@@ -3,8 +3,14 @@ import vm from "node:vm";
 
 const context = vm.createContext({ URL, Request, Response, Headers, JSON, Map, Set, Object, Array, String, Number, Boolean, Math, Date, console, crypto, structuredClone });
 const telegramCalls = [];
+const fetchCalls = [];
 context.telegramMockStatus = 200;
 context.fetch = async (url, options) => {
+  fetchCalls.push({ url, options });
+  if (context.customFetchHandler) {
+    const res = await context.customFetchHandler(url, options);
+    if (res !== undefined) return res;
+  }
   if (url.includes("api.telegram.org")) {
     telegramCalls.push({ url, options });
     return { ok: context.telegramMockStatus >= 200 && context.telegramMockStatus < 300, status: context.telegramMockStatus, json: async () => ({}) };
@@ -525,6 +531,73 @@ await fleet.scheduleNextAlarm();
 if (scheduledAlarm !== rec12.last_batch.telegram_retry_time) {
   throw new Error(`Expected scheduledAlarm to be ${rec12.last_batch.telegram_retry_time}, got ${scheduledAlarm}`);
 }
+
+// Test 13: githubJson unauthenticated 403 error throws github_api_403 and does not send Authorization
+const fleetNoAuth = new mod.namespace.FleetState(ctx, {});
+context.customFetchHandler = async (url, options) => {
+  if (url.includes("api.github.com")) {
+    if (!options.headers.Authorization) {
+      return { ok: false, status: 403, json: async () => ({ message: "API rate limit exceeded" }) };
+    }
+  }
+};
+let caughtNoAuth = null;
+try {
+  await fleetNoAuth.githubJson("/releases/tags/test-tag");
+} catch (e) {
+  caughtNoAuth = e;
+}
+if (!caughtNoAuth || caughtNoAuth.message !== "github_api_403") {
+  throw new Error(`Expected github_api_403, got ${caughtNoAuth?.message}`);
+}
+const lastNoAuthCall = fetchCalls[fetchCalls.length - 1];
+if (lastNoAuthCall.options.headers.Authorization) {
+  throw new Error("Expected no Authorization header for unauthenticated fleet");
+}
+
+// Test 14: githubJson authenticated 200 passes Authorization header, version header, and returns JSON
+const mockToken = "ghp_secretTestToken123456789";
+const fleetWithAuth = new mod.namespace.FleetState(ctx, { GITHUB_TOKEN: mockToken });
+context.customFetchHandler = async (url, options) => {
+  if (url.includes("api.github.com")) {
+    if (options.headers.Authorization === `Bearer ${mockToken}`) {
+      return { ok: true, status: 200, json: async () => ({ tag_name: "test-tag", draft: false }) };
+    }
+    return { ok: false, status: 401, json: async () => ({ message: "Bad credentials" }) };
+  }
+};
+const resWithAuth = await fleetWithAuth.githubJson("/releases/tags/test-tag");
+if (resWithAuth.tag_name !== "test-tag") {
+  throw new Error(`Expected authenticated JSON with tag_name test-tag, got ${JSON.stringify(resWithAuth)}`);
+}
+const lastAuthCall = fetchCalls[fetchCalls.length - 1];
+if (lastAuthCall.options.headers.Authorization !== `Bearer ${mockToken}`) {
+  throw new Error("Authorization header mismatch");
+}
+if (lastAuthCall.options.headers["X-GitHub-Api-Version"] !== "2022-11-28") {
+  throw new Error("Missing or incorrect X-GitHub-Api-Version header");
+}
+if (lastAuthCall.options.headers["User-Agent"] !== "Aotscript-AOT-Hub") {
+  throw new Error("User-Agent header was changed");
+}
+
+// Test 15: startWorkerUpdate error handling sanitizes token and never leaks it
+fleetWithAuth.resolveWorkerRelease = async () => {
+  throw new Error(`Failed to download asset with token Bearer ${mockToken} and ghp_secretTestToken123456789`);
+};
+const test15Res = await fleetWithAuth.startWorkerUpdate("fleet", await fleetWithAuth.readFleet(), "canary", ["m201"]);
+const test15Body = await test15Res.json();
+if (test15Body.ok || test15Body.error !== "release_resolution_failed") {
+  throw new Error(`Expected release_resolution_failed, got ${JSON.stringify(test15Body)}`);
+}
+if (JSON.stringify(test15Body).includes(mockToken)) {
+  throw new Error(`SECURITY REGRESSION: Token leaked in startWorkerUpdate error response: ${JSON.stringify(test15Body)}`);
+}
+if (!test15Body.message.includes("[REDACTED]")) {
+  throw new Error(`Expected redacted message in startWorkerUpdate error response: ${JSON.stringify(test15Body)}`);
+}
+
+context.customFetchHandler = null;
 
 console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");
