@@ -1,0 +1,444 @@
+{
+  "schemaVersion": "ecc.install.v1",
+  "installedAt": "2026-08-16T18:25:00.000Z",
+  "target": {
+    "id": "antigravity-project",
+    "target": "antigravity",
+    "kind": "project",
+    "root": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents",
+    "installStatePath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/ecc-install-state.json"
+  },
+  "request": {
+    "profile": "minimal",
+    "modules": [],
+    "includeComponents": [],
+    "excludeComponents": [],
+    "legacyLanguages": [],
+    "legacyMode": false
+  },
+  "resolution": {
+    "selectedModules": [
+      "rules-core",
+      "agents-core",
+      "commands-core",
+      "platform-configs",
+      "skill-unified-memory",
+      "workflow-quality"
+    ],
+    "skippedModules": []
+  },
+  "source": {
+    "repoVersion": "2.2.0",
+    "repoCommit": "50743cec75852e32d6517c9894a3339a2462a713",
+    "manifestVersion": 1
+  },
+  "operations": [
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/architect.md",
+      "sourceRelativePath": "agents/architect.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/architect.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "6b8e1e8bd274995f3949691731f4334820c061d3054eaea3be2ce163386d1f24"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/build-error-resolver.md",
+      "sourceRelativePath": "agents/build-error-resolver.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/build-error-resolver.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "4a28c01b8d47dc377117954a86999f8d0ae3d22374479121f22b3896e6573379"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/code-architect.md",
+      "sourceRelativePath": "agents/code-architect.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/code-architect.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "1a2ce1d231b7427ff863522f6f19e7738cd668279ac60af520aa0c45ac14772b"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/code-reviewer.md",
+      "sourceRelativePath": "agents/code-reviewer.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/code-reviewer.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "9dd23be23d65f18126e10f7680fc1eb2576ec54a427d076ff2f870bd0bafd5d2"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/planner.md",
+      "sourceRelativePath": "agents/planner.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/planner.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "63aba865206bac9cb5887542fb01b97656e7701faff98e091aa77057ba9860bc"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/python-reviewer.md",
+      "sourceRelativePath": "agents/python-reviewer.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/python-reviewer.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "d2180b115f5840383268c13d5d075b0541fe7ef2a1ac8ecd5d835266ca1b27ce"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/security-reviewer.md",
+      "sourceRelativePath": "agents/security-reviewer.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/security-reviewer.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "6db7acdec6e9ff2752ccd81d7ae7a40ccec50a70ab4f7abcf9a8706787b7985f"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/silent-failure-hunter.md",
+      "sourceRelativePath": "agents/silent-failure-hunter.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/silent-failure-hunter.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "e5e2094c6f50cc515a77376331c78e4955d5ff16c7a0e5d8f6edec692b7ebd8d"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/tdd-guide.md",
+      "sourceRelativePath": "agents/tdd-guide.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/tdd-guide.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "979afbb40c42bfdd02fc308c130d7e257f5d6dd5f6531ef2562644862f6b7771"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "agents-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/agents/typescript-reviewer.md",
+      "sourceRelativePath": "agents/typescript-reviewer.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/agents/typescript-reviewer.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "8a3bfb852840bb23770d870347632f047f4aaf32e01e94e1019e342db5e14a1d"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "commands-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/commands/build-fix.md",
+      "sourceRelativePath": "commands/build-fix.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/workflows/build-fix.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "2620e3b8733d227205b0d48c3ac0b68db026c6bb97a3049bf927917d7eb51189"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "commands-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/commands/code-review.md",
+      "sourceRelativePath": "commands/code-review.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/workflows/code-review.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "4505681f2331d05cfba6a11a6cd3a0d6eb67888cd0fcb4d7e55da967356c78fd"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "commands-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/commands/plan.md",
+      "sourceRelativePath": "commands/plan.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/workflows/plan.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "60e14d692b96bd0215a0bcf3aceeba5a71f806a10c5b6ce9c7a1617984e82b09"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "commands-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/commands/python-review.md",
+      "sourceRelativePath": "commands/python-review.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/workflows/python-review.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "7982b50c59cad83941400a436c1d1001d73fe9bdba6cb84a3ac7c6d43f394c99"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "commands-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/commands/santa-loop.md",
+      "sourceRelativePath": "commands/santa-loop.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/workflows/santa-loop.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "f6c6bcd8f3492f1345c9b06f0cd4bd5d2044dbbca88fa1364c3b40f8eab3385f"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "commands-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/commands/test-coverage.md",
+      "sourceRelativePath": "commands/test-coverage.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/workflows/test-coverage.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "f492c2dac27b98118cf965ae3071e044d7292ae9299e661bb01e2e6109d20711"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/README.md",
+      "sourceRelativePath": "rules/README.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/README.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "5bf945823419ef4044e287f02f444f20ffb4f69f1d39bb5a83941fdd6099d968"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/common/agents.md",
+      "sourceRelativePath": "rules/common/agents.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/common-agents.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "8515f77c73d25d98067cea46cfbb2ed315de7b0399e2e561af4a8efb0bd8c2b5"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/common/code-review.md",
+      "sourceRelativePath": "rules/common/code-review.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/common-code-review.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "de1b3d5b484d45f049e1064ecb421f65b02d0c8e2165957a0d50e09bd2a1f5a9"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/common/coding-style.md",
+      "sourceRelativePath": "rules/common/coding-style.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/common-coding-style.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "f16be09179b6d83bec63d3e109a8a9a95c8657985ae36e493b5d5decaf15ae1b"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/common/development-workflow.md",
+      "sourceRelativePath": "rules/common/development-workflow.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/common-development-workflow.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "4ccbaee8d1d8f3c3537ec63dfd65fab4871ab0b4a55780910b83bc7bafc65ceb"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/common/patterns.md",
+      "sourceRelativePath": "rules/common/patterns.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/common-patterns.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "8a32c0552c8b309e961ef3f68a56ae84b0b1d411c17f23675ec26b685dea5e9a"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/common/performance.md",
+      "sourceRelativePath": "rules/common/performance.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/common-performance.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "851cde9e695213b22efb4a4f7952160550b6634a62e62c71deec80bf649da86e"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/common/security.md",
+      "sourceRelativePath": "rules/common/security.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/common-security.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "58f0acc56331b8d554dd036b8a1d5b2305a908e3960ff1e2d7e55223d5918bc3"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/common/testing.md",
+      "sourceRelativePath": "rules/common/testing.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/common-testing.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "09314a247342c12698deb308c2d0ffcf80b58341274bb8f9bba63fa03ce33323"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/python/coding-style.md",
+      "sourceRelativePath": "rules/python/coding-style.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/python-coding-style.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "f9d6d7a39c5f5ea809579fecac591f390fa9264c088c7e209d464d5244747003"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/python/patterns.md",
+      "sourceRelativePath": "rules/python/patterns.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/python-patterns.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "d9cab9b536321ea7efc6180668fd48820deaf571400db732f0ca17bdda92b7d0"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/python/security.md",
+      "sourceRelativePath": "rules/python/security.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/python-security.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "5d507e9d8f1980e15664a508f94ae86d0524e2494202e7ad1a82d1d90f23f520"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/python/testing.md",
+      "sourceRelativePath": "rules/python/testing.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/python-testing.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "92655aa5047ee456501ad6605c428680bac6433965f89ce531fe79627004e8c6"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/typescript/coding-style.md",
+      "sourceRelativePath": "rules/typescript/coding-style.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/typescript-coding-style.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "cb6fbe555d700a65d466fc27377fbb66d6da0e2bcf4411656918f6a45402af1a"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/typescript/patterns.md",
+      "sourceRelativePath": "rules/typescript/patterns.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/typescript-patterns.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "20870f78aa32429fe13f35b415e9f6f8f7809e39c460cf8146d181b7306159fd"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/typescript/security.md",
+      "sourceRelativePath": "rules/typescript/security.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/typescript-security.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "86b14a5a56f4e61750ab30ca50bd264f52f90f5358303f3028d41030a4c50f18"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "rules-core",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/rules/typescript/testing.md",
+      "sourceRelativePath": "rules/typescript/testing.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/rules/typescript-testing.md",
+      "strategy": "flatten-copy",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "1740c0fb0daf1065ce1e8aacd6774b56d6ee3145b6e4a0b6ddc6f685a6b86bd9"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "workflow-quality",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/skills/tdd-workflow/SKILL.md",
+      "sourceRelativePath": "skills/tdd-workflow/SKILL.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/skills/tdd-workflow/SKILL.md",
+      "strategy": "preserve-relative-path",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "e3a0051a99e82f7047b29a2a98c662d8ef8d0ede186acc085436fced7f2591b7"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "workflow-quality",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/skills/verification-loop/SKILL.md",
+      "sourceRelativePath": "skills/verification-loop/SKILL.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/skills/verification-loop/SKILL.md",
+      "strategy": "preserve-relative-path",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "f0d56107f79e607d4de6c5543b8edfb1b58ab9ae4019b39831689cd91116543e"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "workflow-quality",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/skills/santa-method/SKILL.md",
+      "sourceRelativePath": "skills/santa-method/SKILL.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/skills/santa-method/SKILL.md",
+      "strategy": "preserve-relative-path",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "38c3eed1f8a4bc4f840bb0c2b03f7ad87d24b71f89508c3549a94424bfb613be"
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "workflow-quality",
+      "sourcePath": "/data/data/com.termux/files/home/ECC/skills/context-budget/SKILL.md",
+      "sourceRelativePath": "skills/context-budget/SKILL.md",
+      "destinationPath": "/data/data/com.termux/files/home/Aotscript-ecc-production/.agents/skills/context-budget/SKILL.md",
+      "strategy": "preserve-relative-path",
+      "ownership": "managed",
+      "scaffoldOnly": false,
+      "contentSha256": "920c5edde48e495b267fb0d42d8411c8b75ce1d8ab76e793b2eb6d23da01b0f1"
+    }
+  ]
+}
