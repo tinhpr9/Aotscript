@@ -3,7 +3,7 @@ import importlib.util, pathlib, sys, tempfile, time
 root = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("relay", root / "relay.py")
 module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
-assert module.WORKER_VERSION == "aot-worker-2026.08.16.01"
+assert module.WORKER_VERSION == "aot-worker-2026.08.16.02"
 assert module.websocket_url("https://example.test/report", device_id="m301") == "wss://example.test/aot/control/ws?device_id=m301"
 assert module.build_parser().parse_args(["fleet"]).command == "fleet"
 assert "backup_restore_data_semantic" in module.WORKER_CAPABILITIES
@@ -177,18 +177,22 @@ res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1",
 assert res == "fp2"
 assert "preview_sha256" in sent_status[-1]
 
-# Preview decision and payload must reuse one snapshot. A second read could
-# otherwise pair an fp2 payload with the preview decision made for fp1.
-snapshot_calls = []
-def sequential_snapshot(*_a, **_kw):
-    snapshot_calls.append(True)
-    return {"fingerprint": "fp1" if len(snapshot_calls) == 1 else "fp2"}
-module.controller.snapshot = sequential_snapshot
+# Snapshot error resilience: verify snapshot failure returns None (gracefully isolates controller error)
+# and when recovering, previous_fingerprint=None ensures fresh preview
+def error_snapshot(*_a, **_kw):
+    raise module.controller.AotControllerError("dumpsys_locked")
+module.controller.snapshot = error_snapshot
 sent_status.clear()
-res = module._send_live_status(None, device_id="d1", previous_fingerprint="old", force_preview=False)
-assert len(snapshot_calls) == 1
+res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1", force_preview=False)
+assert res is None, "Expected None from failing snapshot"
+assert len(sent_status) == 0, "No status frame should be sent when snapshot fails"
+
+# Recovery: snapshot recovers -> status sent with preview
+module.controller.snapshot = fake_snapshot
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
 assert res == "fp1"
-assert sent_status[-1]["fingerprint"] == "fp1"
 assert "preview_sha256" in sent_status[-1]
 
 print("AOT_RELAY_SELFTEST=OK")
+

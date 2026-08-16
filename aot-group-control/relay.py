@@ -91,7 +91,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.16.01"
+WORKER_VERSION = "aot-worker-2026.08.16.02"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -1012,21 +1012,24 @@ def _handle_worker_update(
         return True
     if action_already_processed(state, action_id):
         return True
-    mark_action_processed(state, action_id)
     command = [
         sys.executable, "-u", str(BOOTSTRAP_LAUNCHER), "update-action",
         "--action-id", action_id, "--channel", channel,
         "--reference-device", local_id,
         "--release-metadata", release_metadata,
     ]
-    subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
+    try:
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError:
+        return True
+    mark_action_processed(state, action_id)
     return True
 
 def _handle_allocate_server(
@@ -1242,7 +1245,7 @@ def _live_status_payload(
     if include_preview:
         try:
             frame = controller.screenshot_bytes()
-        except controller.AotControllerError:
+        except (controller.AotControllerError, OSError):
             frame = b""
         if frame:
             payload["preview_bytes"] = len(frame)
@@ -1265,7 +1268,10 @@ def _send_live_status(
     role: str | None = None,
     session_id: str | None = None,
 ) -> str | None:
-    snap = controller.snapshot(include_nodes=False)
+    try:
+        snap = controller.snapshot(include_nodes=False)
+    except (OSError, controller.AotControllerError):
+        return None
     current_fingerprint = snap.get("fingerprint")
     meaningful_change = (current_fingerprint != previous_fingerprint)
 
@@ -1275,6 +1281,8 @@ def _send_live_status(
         device_id=device_id,
         include_preview=include_preview,
         snapshot=snap,
+        role=role,
+        session_id=session_id,
     )
     _ws_send_json(sock, payload)
     return current_fingerprint
@@ -1619,21 +1627,15 @@ def reference_loop(
             while True:
                 now = time.monotonic()
                 if now >= next_status:
-                    try:
-                        previous_fingerprint = (
-                            _send_live_status(
-                                sock,
-                                role="reference",
-                                session_id=session_id,
-                                device_id=local_id,
-                                previous_fingerprint=previous_fingerprint,
-                            )
+                    previous_fingerprint = (
+                        _send_live_status(
+                            sock,
+                            role="reference",
+                            session_id=session_id,
+                            device_id=local_id,
+                            previous_fingerprint=previous_fingerprint,
                         )
-                    except (
-                        OSError,
-                        controller.AotControllerError,
-                    ):
-                        pass
+                    )
                     next_status = (
                         time.monotonic()
                         + _get_live_status_interval(local_id)
@@ -1694,22 +1696,16 @@ def reference_loop(
                         session_id=session_id,
                         message=message,
                     )
-                    try:
-                        previous_fingerprint = (
-                            _send_live_status(
-                                sock,
-                                role="reference",
-                                session_id=session_id,
-                                device_id=local_id,
-                                previous_fingerprint=previous_fingerprint,
-                                force_preview=True,
-                            )
+                    previous_fingerprint = (
+                        _send_live_status(
+                            sock,
+                            role="reference",
+                            session_id=session_id,
+                            device_id=local_id,
+                            previous_fingerprint=previous_fingerprint,
+                            force_preview=True,
                         )
-                    except (
-                        OSError,
-                        controller.AotControllerError,
-                    ):
-                        pass
+                    )
                 elif (
                     message.get("type")
                     == "aot_ack"
@@ -1738,7 +1734,6 @@ def reference_loop(
             OSError,
             ConnectionError,
             AotRelayError,
-            controller.AotControllerError,
         ) as exc:
             print(
                 "AOT_REFERENCE_CHANNEL=RECONNECT:"
@@ -1812,20 +1807,14 @@ def follower_loop(
             except Exception:
                 pass
             previous_fingerprint = None
-            try:
-                previous_fingerprint = _send_live_status(
-                    sock,
-                    role="follower",
-                    session_id=session_id,
-                    device_id=local_id,
-                    previous_fingerprint=previous_fingerprint,
-                    force_preview=True,
-                )
-            except (
-                OSError,
-                controller.AotControllerError,
-            ):
-                pass
+            previous_fingerprint = _send_live_status(
+                sock,
+                role="follower",
+                session_id=session_id,
+                device_id=local_id,
+                previous_fingerprint=previous_fingerprint,
+                force_preview=True,
+            )
             next_status = (
                 time.monotonic()
                 + _get_live_status_initial_delay(local_id)
@@ -1834,21 +1823,15 @@ def follower_loop(
             while True:
                 now = time.monotonic()
                 if now >= next_status:
-                    try:
-                        previous_fingerprint = (
-                            _send_live_status(
-                                sock,
-                                role="follower",
-                                session_id=session_id,
-                                device_id=local_id,
-                                previous_fingerprint=previous_fingerprint,
-                            )
+                    previous_fingerprint = (
+                        _send_live_status(
+                            sock,
+                            role="follower",
+                            session_id=session_id,
+                            device_id=local_id,
+                            previous_fingerprint=previous_fingerprint,
                         )
-                    except (
-                        OSError,
-                        controller.AotControllerError,
-                    ):
-                        pass
+                    )
                     next_status = (
                         time.monotonic()
                         + _get_live_status_interval(local_id)
@@ -2128,29 +2111,22 @@ def follower_loop(
                     "AOT_ACTION_SUCCESS="
                     + action_id
                 )
-                try:
-                    previous_fingerprint = (
-                        _send_live_status(
-                            sock,
-                            role="follower",
-                            session_id=session_id,
-                            device_id=local_id,
-                            previous_fingerprint=previous_fingerprint,
-                            force_preview=True,
-                        )
+                previous_fingerprint = (
+                    _send_live_status(
+                        sock,
+                        role="follower",
+                        session_id=session_id,
+                        device_id=local_id,
+                        previous_fingerprint=previous_fingerprint,
+                        force_preview=True,
                     )
-                except (
-                    OSError,
-                    controller.AotControllerError,
-                ):
-                    pass
+                )
         except KeyboardInterrupt:
             raise
         except (
             OSError,
             ConnectionError,
             AotRelayError,
-            controller.AotControllerError,
         ) as exc:
             print(
                 "AOT_FOLLOWER_CHANNEL=RECONNECT:"
@@ -2197,19 +2173,18 @@ def fleet_loop(*, open_package: str | None = None) -> int:
                 updater.notify_pending_healthy()
             except Exception:
                 pass
+            previous_fingerprint = None
             previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
             next_status = time.monotonic() + _get_live_status_initial_delay(local_id)
             while True:
                 if time.monotonic() >= next_status:
-                    try:
-                        previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=previous_fingerprint)
-                    except (OSError, controller.AotControllerError):
-                        pass
+                    previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=previous_fingerprint)
                     next_status = time.monotonic() + _get_live_status_interval(local_id)
                 try:
                     opcode, payload = _ws_recv_frame(sock)
                 except socket.timeout:
                     continue
+                reconnect_delay = 2
                 if opcode == 0x8:
                     raise ConnectionError("websocket_closed")
                 if opcode == 0x9:
@@ -2228,7 +2203,7 @@ def fleet_loop(*, open_package: str | None = None) -> int:
                 _handle_batch_action(cfg, state, local_id=local_id, message=message)
         except KeyboardInterrupt:
             raise
-        except (OSError, ConnectionError, AotRelayError, controller.AotControllerError) as exc:
+        except (OSError, ConnectionError, AotRelayError) as exc:
             print("AOT_FLEET_CHANNEL=RECONNECT:" + type(exc).__name__)
             time.sleep(reconnect_delay)
             reconnect_delay = min(30, reconnect_delay * 2)
