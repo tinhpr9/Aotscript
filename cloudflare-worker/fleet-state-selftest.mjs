@@ -13,7 +13,7 @@ await mod.evaluate();
 const store = new Map();
 const sockets = new Map();
 const ctx = {
-  storage: { get: async k => store.get(k), put: async (k, v) => store.set(k, structuredClone(v)), setAlarm: async () => {} },
+  storage: { get: async k => store.get(k), put: async (k, v) => store.set(k, structuredClone(v)), setAlarm: async () => {}, list: async () => new Map() },
   getWebSockets: tag => sockets.get(tag) || [], getTags: () => [], acceptWebSocket() {}, waitUntil() {},
 };
 const fleet = new mod.namespace.FleetState(ctx, {});

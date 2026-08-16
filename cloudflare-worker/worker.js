@@ -5859,32 +5859,11 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
         throw new Error(JSON.stringify(result.data));
       }
       const actionId = result.data.batch.action_id;
-      let finalBatch = result.data.batch;
-      const start = Date.now();
       
-      while (Date.now() - start < 45000) {
-        const stateResult = await fleetStateCall(env, "/aot/hub/state");
-        if (stateResult.response.ok && stateResult.data?.state?.last_batch?.action_id === actionId) {
-          finalBatch = stateResult.data.state.last_batch;
-          const terminalStates = new Set(["OPENED", "FAILED_NOT_INSTALLED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE", "DUPLICATE"]);
-          const allTerminal = finalBatch.devices.every(d => terminalStates.has(d.status));
-          if (allTerminal) break;
-        }
-        await new Promise(r => setTimeout(r, 2000));
-      }
-      
-      const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      let msg = "<b>KẾT QUẢ PHÂN SERVER</b>\n";
-      for (const d of finalBatch.devices) {
-        const safeId = escapeHtml(d.device_id);
-        const safeHistory = d.history.map(escapeHtml).join(' -> ');
-        const safeReason = d.reason ? '— ' + escapeHtml(d.reason) : '';
-        msg += `\n<b>${safeId}</b>: ${safeHistory} ${safeReason}`;
-      }
-      await telegram(env, "sendMessage", {
+      await telegram(env, "editMessageText", {
         chat_id: chatId,
-        text: msg,
-        parse_mode: "HTML"
+        message_id: callback.message.message_id,
+        text: "Đã gửi lệnh phân server, đang chờ thiết bị phản hồi..."
       });
     } catch (e) {
       await telegram(env, "sendMessage", {

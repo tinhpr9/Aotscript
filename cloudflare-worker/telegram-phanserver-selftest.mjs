@@ -19,7 +19,7 @@ const context = vm.createContext({
   crypto,
   env: { TELEGRAM_ADMIN_USER_ID: "123", TELEGRAM_BOT_TOKEN: "tok" },
   telegram: async (env, method, payload) => {
-    if (method === "sendMessage") {
+    if (method === "sendMessage" || method === "editMessageText") {
       sentMessages.push(payload);
     }
   },
@@ -141,8 +141,7 @@ async function runTests() {
   if (clearedTokens[1] !== okCb2.split(":")[1]) throw new Error("confirm clear test failed");
   if (answeredCallbacks[0].text !== "Đang chạy phân server...") throw new Error("confirm response failed");
   if (fleetControlCalls[0].kind !== "allocate_server") throw new Error("fleet control dispatch failed");
-  if (getFleetHubStateCalls < 2) throw new Error("polling failed");
-  if (!sentMessages[0].text.includes("OPENED")) throw new Error("final terminal result message failed");
+  if (!sentMessages[0] || !sentMessages[0].text.includes("đang chờ thiết bị phản hồi")) throw new Error("final intermediate result message failed");
 
   // Duplicate device
   await triggerMessage("/phanserver dup,dup 5");

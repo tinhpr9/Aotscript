@@ -70,6 +70,7 @@ export class FleetState
   constructor(ctx, env) {
     super(ctx, env);
     this.ctx = ctx;
+    this.env = env;
     this.aotLive = new Map();
   }
 
@@ -2883,6 +2884,23 @@ export class FleetState
       await this.writeAotSession(sessionId, record);
       await this.abortUpdateRollout(sessionId, record);
     }
+    
+    const fleetRecord = await this.readFleet();
+    if (fleetRecord.last_batch && fleetRecord.last_batch.action === AOT_ALLOCATE_SERVER_ACTION && fleetRecord.last_batch.telegram_chat_id && !fleetRecord.last_batch.telegram_notified) {
+      if (Date.now() >= fleetRecord.last_batch.expires_at) {
+        for (const d of Object.values(fleetRecord.last_batch.devices)) {
+          if (["SENT", "ACCEPTED", "ALLOCATED"].includes(d.status)) {
+            d.status = "TIMEOUT";
+            d.reason = "telegram_wait_timeout";
+            if (!d.history.includes("TIMEOUT")) d.history.push("TIMEOUT");
+          }
+        }
+        fleetRecord.last_batch.telegram_notified = true;
+        await this.writeFleet(fleetRecord);
+        await this.notifyTelegramPhanserver(fleetRecord.last_batch);
+      }
+    }
+    await this.scheduleNextAlarm();
   }
 
   async setRevocation(
@@ -3037,7 +3055,13 @@ export class FleetState
       if (connected) online.push(id);
     }
     record.last_batch = { action_id: actionId, action, package: AOT_BATCH_PACKAGE, created_at: createdAt, expires_at: expiresAt, devices };
+    if (action === AOT_ALLOCATE_SERVER_ACTION && options.telegram_chat_id) {
+      record.last_batch.telegram_chat_id = options.telegram_chat_id;
+      record.last_batch.telegram_notified = false;
+    }
     await this.writeFleet(record);
+    await this.scheduleNextAlarm();
+    await this.broadcastFleetState();
     const payloadTemplate = { type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: online, action_id: actionId, action, package: AOT_BATCH_PACKAGE, expires_at: expiresAt };
     for (const id of online) {
       const payload = { ...payloadTemplate };
@@ -3063,7 +3087,7 @@ export class FleetState
       return this.dispatchFleetBatch(record, AOT_BACKUP_RESTORE_DATA_ACTION, Array.isArray(body.target_device_ids) ? body.target_device_ids : []);
     }
     if (body.kind === "allocate_server") {
-      return this.dispatchFleetBatch(record, AOT_ALLOCATE_SERVER_ACTION, Array.isArray(body.target_device_ids) ? body.target_device_ids : [], { allocationMap: body.allocationMap });
+      return this.dispatchFleetBatch(record, AOT_ALLOCATE_SERVER_ACTION, Array.isArray(body.target_device_ids) ? body.target_device_ids : [], { allocationMap: body.allocationMap, telegram_chat_id: body.telegram_chat_id });
     }
     if (body.kind === "update_canary" || body.kind === "update_stable") {
       record.followers = Object.fromEntries(this.fleetMembers(record).map((m) => [m.device_id, m]));
@@ -3110,6 +3134,15 @@ export class FleetState
           device.reason = ["FAILED", "FAILED_NOT_INSTALLED", "TIMEOUT"].includes(next) ? String(body.reason || "worker_reported_failure").slice(0, 160) : null;
         }
         device.executed = body.executed === true; device.updated_at = Date.now();
+        
+        if (action === AOT_ALLOCATE_SERVER_ACTION && batch.telegram_chat_id && !batch.telegram_notified) {
+          const allTerminal = Object.values(batch.devices).every(d => terminal.has(d.status) || d.status === "DUPLICATE");
+          if (allTerminal) {
+            batch.telegram_notified = true;
+            await this.writeFleet(record);
+            await this.notifyTelegramPhanserver(batch);
+          }
+        }
         await this.writeFleet(record); await this.broadcastFleetState();
       }
     }
@@ -3137,6 +3170,43 @@ export class FleetState
       return json({ ok: true, device_id: deviceId, online: true, visible_in_hub: true });
     }
     return json({ ok: true, device_id: deviceId });
+  }
+
+  async notifyTelegramPhanserver(batch) {
+    if (!this.env || !this.env.TELEGRAM_BOT_TOKEN || !batch.telegram_chat_id) return;
+    const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let msg = "<b>KẾT QUẢ PHÂN SERVER</b>\n";
+    for (const d of Object.values(batch.devices)) {
+      const safeId = escapeHtml(d.device_id);
+      const safeHistory = d.history.map(escapeHtml).join(' -> ');
+      const safeReason = d.reason ? '— ' + escapeHtml(d.reason) : '';
+      msg += `\n<b>${safeId}</b>: ${safeHistory} ${safeReason}`;
+    }
+    await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: batch.telegram_chat_id, text: msg, parse_mode: "HTML" })
+    });
+  }
+
+  async scheduleNextAlarm() {
+    let nextAlarm = null;
+    const entries = await this.ctx.storage.list({ prefix: "aot_session:" });
+    for (const [key, record] of entries) {
+      const update = record?.last_update;
+      if (update?.active_group && Number(update.group_deadline || 0) > Date.now()) {
+        if (!nextAlarm || update.group_deadline < nextAlarm) nextAlarm = update.group_deadline;
+      }
+    }
+    const fleetRecord = await this.readFleet();
+    if (fleetRecord.last_batch && fleetRecord.last_batch.action === AOT_ALLOCATE_SERVER_ACTION && fleetRecord.last_batch.telegram_chat_id && !fleetRecord.last_batch.telegram_notified) {
+      if (fleetRecord.last_batch.expires_at > Date.now()) {
+        if (!nextAlarm || fleetRecord.last_batch.expires_at < nextAlarm) nextAlarm = fleetRecord.last_batch.expires_at;
+      }
+    }
+    if (nextAlarm) {
+      await this.ctx.storage.setAlarm(nextAlarm);
+    }
   }
 
   async fetch(request) {
