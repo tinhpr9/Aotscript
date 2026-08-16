@@ -1844,6 +1844,14 @@ def reconcile_system_state(
     return not issues
 
 
+def is_delta_asset(name):
+    name = str(name or "").strip().lower()
+    if name.startswith("delta-") and name.endswith(".apk"):
+        return True
+    if name.startswith("download") and name.endswith(".zip"):
+        return True
+    return False
+
 # Hàm 1: Tự động quét Github, tải và cài đặt Delta
 def auto_update_system():
     print("\n[*] BẮT ĐẦU QUY TRÌNH KÉO FILE VÀ CÀI ĐẶT...")
@@ -1863,7 +1871,11 @@ def auto_update_system():
                 continue
             
             assets = release.get("assets", [])
-            valid_assets = [a for a in assets if a.get("name", "").endswith((".apk", ".zip"))]
+            valid_assets = [
+                asset
+                for asset in assets
+                if is_delta_asset(asset.get("name"))
+            ]
             
             if valid_assets:
                 print(f"[+] Tìm thấy Delta release hợp lệ: {tag_name}")
@@ -1899,21 +1911,21 @@ def auto_update_system():
                             apk_path = os.path.join(root, f)
                             print(f"   => Cài đặt đè: {f} ...")
                             result = subprocess.run(f"su -c 'pm install -r \"{apk_path}\"'", shell=True, capture_output=True, text=True)
-                            if "Success" in result.stdout or result.returncode == 0:
+                            if result.returncode == 0 and "Success" in result.stdout:
                                 installed_count += 1
                                 print(f"      [+] XONG! Cập nhật thành công {f}")
                             else:
-                                print(f"      [!] Lỗi cài đặt {f}: {result.stderr.strip()}")
+                                raise RuntimeError(f"pm install failed: {result.stderr.strip() or result.stdout.strip()}")
                             time.sleep(1)
 
             elif file_name.endswith(".apk"):
                 print(f"   => Cài đặt đè: {file_name} ...")
                 result = subprocess.run(f"su -c 'pm install -r \"{file_path}\"'", shell=True, capture_output=True, text=True)
-                if "Success" in result.stdout or result.returncode == 0:
+                if result.returncode == 0 and "Success" in result.stdout:
                     installed_count += 1
                     print(f"      [+] XONG! Cập nhật thành công {file_name}")
                 else:
-                    print(f"      [!] Lỗi cài đặt {file_name}: {result.stderr.strip()}")
+                    raise RuntimeError(f"pm install failed: {result.stderr.strip() or result.stdout.strip()}")
 
         if installed_count > 0:
             print("[+] CẬP NHẬT DELTA HOÀN TẤT CHO THIẾT BỊ NÀY!")
@@ -1922,6 +1934,7 @@ def auto_update_system():
             
     except Exception as e:
         log_error("auto_update_system", e)
+        raise
 
 # Hàm 2: Tự động đổi link Solver API (Đã nâng cấp bóc link Github)
 

@@ -12,6 +12,14 @@ OWNER = "tinhpr9"
 REPO = "Aotscript"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 
+def is_delta_asset(name):
+    name = str(name or "").strip().lower()
+    if name.startswith("delta-") and name.endswith(".apk"):
+        return True
+    if name.startswith("download") and name.endswith(".zip"):
+        return True
+    return False
+
 def auto_update_system():
     print("="*50)
     print("   HỆ THỐNG AUTO DOWNLOAD & UPDATE DELTA CLONE")
@@ -37,7 +45,11 @@ def auto_update_system():
                 continue
             
             assets = release.get("assets", [])
-            valid_assets = [a for a in assets if a.get("name", "").endswith((".apk", ".zip"))]
+            valid_assets = [
+                asset
+                for asset in assets
+                if is_delta_asset(asset.get("name"))
+            ]
             
             if valid_assets:
                 print(f"[+] Tìm thấy Delta release hợp lệ: {tag_name}")
@@ -87,11 +99,11 @@ def auto_update_system():
                             cmd = f"su -c 'pm install -r \"{apk_path}\"'"
                             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                             
-                            if "Success" in result.stdout or result.returncode == 0:
+                            if result.returncode == 0 and "Success" in result.stdout:
                                 print(f"      [+] XONG! Cập nhật thành công {f}")
                                 installed_count += 1
                             else:
-                                print(f"      [!] Lỗi cài đặt: {result.stderr.strip()}")
+                                raise RuntimeError(f"pm install failed: {result.stderr.strip() or result.stdout.strip()}")
                             time.sleep(1) # Nghỉ 1s tránh lag máy
 
             # ---- NẾU LÀ FILE APK LẺ TẢI TRỰC TIẾP ----
@@ -99,11 +111,11 @@ def auto_update_system():
                 print(f" -> Đang tự động cập nhật: {file_name}")
                 cmd = f"su -c 'pm install -r \"{file_path}\"'"
                 result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                if "Success" in result.stdout or result.returncode == 0:
+                if result.returncode == 0 and "Success" in result.stdout:
                     print(f"      [+] XONG! Cập nhật thành công.")
                     installed_count += 1
                 else:
-                    print(f"      [!] Lỗi cài đặt: {result.stderr.strip()}")
+                    raise RuntimeError(f"pm install failed: {result.stderr.strip() or result.stdout.strip()}")
 
         if installed_count > 0:
             print("\n" + "="*50)
@@ -114,6 +126,7 @@ def auto_update_system():
 
     except Exception as e:
         print(f"\n[!] LỖI CHUNG CỦA HỆ THỐNG: {e}")
+        raise
 
 if __name__ == "__main__":
     auto_update_system()
