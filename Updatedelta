@@ -12,88 +12,445 @@ OWNER = "tinhpr9"
 REPO = "Aotscript"
 DOWNLOAD_DIR = "/storage/emulated/0/Download/GitHub_All_Files"
 
-def auto_update_system():
-    print("="*50)
-    print("   HỆ THỐNG AUTO DOWNLOAD & UPDATE DELTA CLONE")
-    print("="*50)
-    
-    # 1. Tạo thư mục nếu chưa có
-    if not os.path.exists(DOWNLOAD_DIR):
-        os.makedirs(DOWNLOAD_DIR)
+# BEGIN DELTA RELEASE SELECTOR
+def _delta_asset_kind(name):
+    value = str(name or "").strip()
+    lower = value.lower()
 
-    # 2. Gọi API lấy danh sách file từ Github
-    api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"
-    print(f"[*] Đang quét danh sách file mới nhất trên GitHub...")
+    if lower.startswith("delta-") and lower.endswith(".apk"):
+        return "apk"
+
+    if lower.startswith("download") and lower.endswith(".zip"):
+        return "zip"
+
+    return ""
+
+
+def _safe_delta_name(name):
+    value = str(name or "").strip()
+    safe = "".join(
+        ch if ch.isalnum() or ch in "._-" else "_"
+        for ch in value
+    )
+    return safe or "delta_asset"
+
+
+def _github_release_pages():
+    headers = {
+        "User-Agent": "Aotscript-Delta-Updater",
+        "Accept": "application/vnd.github+json",
+    }
+
+    for page in range(1, 6):
+        api_url = (
+            f"https://api.github.com/repos/{OWNER}/{REPO}/releases"
+            f"?per_page=100&page={page}"
+        )
+
+        req = urllib.request.Request(
+            api_url,
+            headers=headers,
+        )
+
+        with urllib.request.urlopen(
+            req,
+            timeout=20,
+        ) as response:
+            releases = json.loads(
+                response.read().decode("utf-8")
+            )
+
+        if not isinstance(releases, list):
+            raise RuntimeError(
+                "GitHub releases API trả dữ liệu không hợp lệ"
+            )
+
+        if not releases:
+            break
+
+        for release in releases:
+            if isinstance(release, dict):
+                yield release
+
+        if len(releases) < 100:
+            break
+
+
+def _select_delta_release():
+    zip_fallback = None
+
+    for release in _github_release_pages():
+        tag = str(
+            release.get("tag_name", "")
+        ).strip()
+        title = str(
+            release.get("name", "")
+        ).strip()
+
+        tag_lower = tag.lower()
+        title_lower = title.lower()
+
+        # AOT Worker release tuyệt đối không phải Delta channel.
+        if (
+            tag_lower.startswith("worker-v")
+            or "aot worker" in title_lower
+        ):
+            continue
+
+        direct_apks = []
+        zip_assets = []
+
+        for asset in release.get("assets", []):
+            if not isinstance(asset, dict):
+                continue
+
+            name = str(
+                asset.get("name", "")
+            ).strip()
+            url = str(
+                asset.get(
+                    "browser_download_url",
+                    "",
+                )
+            ).strip()
+
+            kind = _delta_asset_kind(name)
+
+            if not kind or not url:
+                continue
+
+            item = {
+                "name": name,
+                "url": url,
+                "kind": kind,
+            }
+
+            if kind == "apk":
+                direct_apks.append(item)
+            else:
+                zip_assets.append(item)
+
+        # Ưu tiên release có Delta-*.apk trực tiếp.
+        if direct_apks:
+            return release, direct_apks + zip_assets
+
+        # Fallback cho release Delta chỉ đóng gói Download*.zip.
+        if zip_assets and zip_fallback is None:
+            zip_fallback = (
+                release,
+                zip_assets,
+            )
+
+    if zip_fallback is not None:
+        return zip_fallback
+
+    raise RuntimeError(
+        "Không tìm thấy GitHub Release chứa Delta APK/ZIP hợp lệ"
+    )
+
+
+def _download_delta_asset(url, destination):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Aotscript-Delta-Updater",
+        },
+    )
+
+    written = 0
+
+    with urllib.request.urlopen(
+        req,
+        timeout=60,
+    ) as response, open(
+        destination,
+        "wb",
+    ) as output:
+        while True:
+            chunk = response.read(
+                1024 * 1024
+            )
+
+            if not chunk:
+                break
+
+            output.write(chunk)
+            written += len(chunk)
+
+    if written <= 0:
+        raise RuntimeError(
+            f"Asset tải về rỗng: {destination}"
+        )
+
+
+def _install_delta_apk(apk_path):
+    command = (
+        "pm install -r '"
+        + str(apk_path)
+        + "'"
+    )
+
+    result = subprocess.run(
+        ["su", "-c", command],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+    output = (
+        (result.stdout or "")
+        + "\n"
+        + (result.stderr or "")
+    ).strip()
+
+    if (
+        result.returncode != 0
+        or "Success" not in output
+    ):
+        raise RuntimeError(
+            "pm install thất bại cho "
+            f"{apk_path}: {output[:500]}"
+        )
+
+
+def _iter_delta_zip_apks(
+    zip_path,
+    output_dir,
+):
+    os.makedirs(
+        output_dir,
+        exist_ok=True,
+    )
+
+    count = 0
+    total_size = 0
+
+    with zipfile.ZipFile(
+        zip_path,
+        "r",
+    ) as archive:
+        bad = archive.testzip()
+
+        if bad is not None:
+            raise RuntimeError(
+                f"ZIP CRC lỗi tại: {bad}"
+            )
+
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+
+            member_name = (
+                member.filename
+                .replace("\\", "/")
+            )
+
+            if not member_name.lower().endswith(
+                ".apk"
+            ):
+                continue
+
+            # Chống ZIP bất thường/bomb.
+            if member.file_size > 1024 * 1024 * 1024:
+                raise RuntimeError(
+                    "APK trong ZIP vượt 1 GiB"
+                )
+
+            total_size += member.file_size
+
+            if total_size > 8 * 1024 * 1024 * 1024:
+                raise RuntimeError(
+                    "Tổng APK trong ZIP vượt giới hạn"
+                )
+
+            count += 1
+
+            base = _safe_delta_name(
+                os.path.basename(
+                    member_name
+                )
+            )
+
+            destination = os.path.join(
+                output_dir,
+                f"{count:03d}_{base}",
+            )
+
+            with archive.open(
+                member,
+                "r",
+            ) as src, open(
+                destination,
+                "wb",
+            ) as dst:
+                while True:
+                    chunk = src.read(
+                        1024 * 1024
+                    )
+
+                    if not chunk:
+                        break
+
+                    dst.write(chunk)
+
+            yield destination
+
+    if count == 0:
+        raise RuntimeError(
+            f"Delta ZIP không chứa APK: {zip_path}"
+        )
+
+
+def auto_update_system():
+    print("=" * 50)
+    print("   AOTSCRIPT UPDATE DELTA")
+    print("=" * 50)
+
+    os.makedirs(
+        DOWNLOAD_DIR,
+        exist_ok=True,
+    )
 
     try:
-        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read().decode())
-            assets = data.get("assets", [])
+        release, assets = (
+            _select_delta_release()
+        )
 
-        if not assets:
-            return print("[!] Không tìm thấy file nào.")
+        tag = str(
+            release.get(
+                "tag_name",
+                "",
+            )
+        ).strip()
 
-        print(f"[+] Tìm thấy {len(assets)} file. Bắt đầu tải và tự động cài đặt...")
+        title = str(
+            release.get(
+                "name",
+                "",
+            )
+        ).strip()
 
-        # 3. Vòng lặp tải và xử lý từng file
-        for idx, asset in enumerate(assets, 1):
-            file_name = asset["name"]
-            dl_url = asset["browser_download_url"]
-            file_path = os.path.join(DOWNLOAD_DIR, file_name)
+        print(
+            "[+] Delta Release: "
+            f"{title or tag} [{tag}]"
+        )
 
-            print(f"\n[{idx}/{len(assets)}] Đang tải file: {file_name}")
-            urllib.request.urlretrieve(dl_url, file_path)
-            print(f" -> Tải xong.")
+        print(
+            "[+] Delta assets hợp lệ: "
+            f"{len(assets)}"
+        )
 
-            # ---- NẾU LÀ FILE ZIP ----
-            if file_name.endswith(".zip"):
-                print(" -> Đang tự động bung nén file ZIP...")
-                extract_path = os.path.join(DOWNLOAD_DIR, f"extracted_{file_name}")
-                os.makedirs(extract_path, exist_ok=True)
-                
-                # Dùng module zipfile của Python thay vì lệnh unzip của shell
-                try:
-                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                        zip_ref.extractall(extract_path)
-                    print(f" -> Bung nén thành công vào: {extract_path}")
-                except Exception as e:
-                    print(f" [!] Lỗi giải nén ZIP: {e}")
-                    continue
+        installed = 0
 
-                # Quét và cài tự động mọi file APK trong thư mục vừa giải nén
-                print(" -> Bắt đầu quét cài đặt toàn bộ Clone...")
-                for root, dirs, files in os.walk(extract_path):
-                    for f in files:
-                        if f.endswith(".apk"):
-                            apk_path = os.path.join(root, f)
-                            print(f"   => Đang cập nhật: {f} ...")
-                            # Chạy lệnh pm install dưới quyền root
-                            cmd = f"su -c 'pm install -r \"{apk_path}\"'"
-                            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                            
-                            if "Success" in result.stdout or result.returncode == 0:
-                                print(f"      [+] XONG! Cập nhật thành công {f}")
-                            else:
-                                print(f"      [!] Lỗi cài đặt: {result.stderr.strip()}")
-                            time.sleep(1) # Nghỉ 1s tránh lag máy
+        for index, asset in enumerate(
+            assets,
+            1,
+        ):
+            name = asset["name"]
+            kind = asset["kind"]
 
-            # ---- NẾU LÀ FILE APK LẺ TẢI TRỰC TIẾP ----
-            elif file_name.endswith(".apk"):
-                print(f" -> Đang tự động cập nhật: {file_name}")
-                cmd = f"su -c 'pm install -r \"{file_path}\"'"
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                if "Success" in result.stdout or result.returncode == 0:
-                    print(f"      [+] XONG! Cập nhật thành công.")
-                else:
-                    print(f"      [!] Lỗi cài đặt: {result.stderr.strip()}")
+            safe_name = (
+                _safe_delta_name(name)
+            )
 
-        print("\n" + "="*50)
-        print("[+] TOÀN BỘ HỆ THỐNG ĐÃ ĐƯỢC CẬP NHẬT TỰ ĐỘNG 100%")
-        print("="*50)
+            file_path = os.path.join(
+                DOWNLOAD_DIR,
+                f"delta_{index:03d}_{safe_name}",
+            )
 
-    except Exception as e:
-        print(f"\n[!] LỖI CHUNG CỦA HỆ THỐNG: {e}")
+            print(
+                f"[{index}/{len(assets)}] "
+                f"Tải {name}"
+            )
+
+            _download_delta_asset(
+                asset["url"],
+                file_path,
+            )
+
+            if kind == "apk":
+                print(
+                    f"    -> Cài {name}"
+                )
+
+                _install_delta_apk(
+                    file_path
+                )
+
+                installed += 1
+                continue
+
+            apk_dir = os.path.join(
+                DOWNLOAD_DIR,
+                "delta_extract_"
+                f"{index:03d}",
+            )
+
+            zip_installed = 0
+
+            for apk_path in (
+                _iter_delta_zip_apks(
+                    file_path,
+                    apk_dir,
+                )
+            ):
+                print(
+                    "    -> Cài "
+                    + os.path.basename(
+                        apk_path
+                    )
+                )
+
+                _install_delta_apk(
+                    apk_path
+                )
+
+                zip_installed += 1
+                installed += 1
+
+            if zip_installed <= 0:
+                raise RuntimeError(
+                    f"Không cài được APK nào từ {name}"
+                )
+
+        if installed <= 0:
+            raise RuntimeError(
+                "UPDATE_DELTA kết thúc nhưng zero APK installed"
+            )
+
+        print("=" * 50)
+        print(
+            "[+] UPDATE DELTA THÀNH CÔNG: "
+            f"{installed} APK"
+        )
+        print("=" * 50)
+
+        return True
+
+    except Exception as exc:
+        logger = globals().get(
+            "log_error"
+        )
+
+        if callable(logger):
+            try:
+                logger(
+                    "auto_update_system",
+                    exc,
+                )
+            except Exception:
+                pass
+
+        print(
+            "[!] UPDATE_DELTA THẤT BẠI: "
+            f"{exc}"
+        )
+
+        # Quan trọng: đẩy lỗi lên command handler,
+        # không báo success giả.
+        raise
+# END DELTA RELEASE SELECTOR
+
 
 if __name__ == "__main__":
     auto_update_system()
