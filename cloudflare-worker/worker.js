@@ -1795,7 +1795,7 @@ function aotHubHtml() {
 }
 
 
-export function parseTongHopLink(text, target_device_ids, tabs) {
+function parseTongHopLink(text, target_device_ids, tabs) {
   const pkgs = ["com.tinh.vv.hi", "com.tinh.vv.hj", "com.tinh.vv.hk", "com.tinh.vv.hl", "com.tinh.vv.hm", "com.tinh.vv.hn", "com.tinh.vv.ho", "com.tinh.vv.hp", "com.tinh.vv.hq", "com.tinh.vv.hr"];
   const lines = text.split('\n');
   const blocks = [];
@@ -4903,7 +4903,7 @@ async function handleUpdate(update, env) {
   }
 
 
-  if (input.startsWith("/phanserver")) {
+  if (input.match(/^\/phanserver(?:\s|$)/)) {
     const parts = input.split(/\s+/);
     if (parts.length !== 3) {
       await telegram(env, "sendMessage", {
@@ -4924,7 +4924,10 @@ async function handleUpdate(update, env) {
     try {
       const ids = await resolveAndValidateTelegramTargets(targetStr, env);
       
-      const resp = await fetch("https://raw.githubusercontent.com/tinhpr9/Aotscript/main/tong_hop_link.txt");
+      const abortCtrl = new AbortController();
+      const abortTimeout = setTimeout(() => abortCtrl.abort(), 10000);
+      const resp = await fetch("https://raw.githubusercontent.com/tinhpr9/Aotscript/main/tong_hop_link.txt", { signal: abortCtrl.signal });
+      clearTimeout(abortTimeout);
       if (!resp.ok) throw new Error("Fetch tong_hop_link.txt failed");
       const text = await resp.text();
       
@@ -4940,7 +4943,9 @@ async function handleUpdate(update, env) {
       }
       textMsg += "Xác nhận chạy phân server?";
       if (textMsg.length > 4000) {
-         textMsg = textMsg.slice(0, 4000) + "...\n\n(Đã cắt bớt)\nXác nhận chạy phân server?";
+         let cutPoint = textMsg.lastIndexOf("\n", 4000);
+         if (cutPoint === -1) cutPoint = 4000;
+         textMsg = textMsg.slice(0, cutPoint) + "\n\n(Đã cắt bớt)\nXác nhận chạy phân server?";
       }
       
       await telegram(env, "sendMessage", {
@@ -5868,9 +5873,13 @@ async function handleCallback(callback, chatId, messageId, env, fromId) {
         await new Promise(r => setTimeout(r, 2000));
       }
       
+      const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       let msg = "<b>KẾT QUẢ PHÂN SERVER</b>\n";
       for (const d of finalBatch.devices) {
-        msg += `\n<b>${d.device_id}</b>: ${d.history.join(' -> ')} ${d.reason ? '— ' + d.reason : ''}`;
+        const safeId = escapeHtml(d.device_id);
+        const safeHistory = d.history.map(escapeHtml).join(' -> ');
+        const safeReason = d.reason ? '— ' + escapeHtml(d.reason) : '';
+        msg += `\n<b>${safeId}</b>: ${safeHistory} ${safeReason}`;
       }
       await telegram(env, "sendMessage", {
         chat_id: chatId,

@@ -14,6 +14,8 @@ let getFleetHubStateCalls = 0;
 const context = vm.createContext({
   console,
   setTimeout,
+  clearTimeout,
+  AbortController,
   crypto,
   env: { TELEGRAM_ADMIN_USER_ID: "123", TELEGRAM_BOT_TOKEN: "tok" },
   telegram: async (env, method, payload) => {
@@ -47,7 +49,11 @@ com.tinh.vv.hr,https://www.roblox.com/games/975?privateServerLinkCode=0000000000
     };
   },
   parseTongHopLink: (text, ids, tabs) => {
-    return { [ids[0]]: [{ pkg: "com.tinh.vv.hi", url: "https://test" }] };
+    const res = {};
+    for (const id of ids) {
+      res[id] = Array(tabs).fill(null).map((_, i) => ({ pkg: "com.tinh.vv.hi", url: "https://test?t=" + i }));
+    }
+    return res;
   },
   savePendingAllocate: async (token, spec) => {
     pendingAllocates[token] = spec;
@@ -75,17 +81,23 @@ com.tinh.vv.hr,https://www.roblox.com/games/975?privateServerLinkCode=0000000000
 });
 
 // extract handleUpdate and handleCallback
-const updateMatch = source.match(/async function handleUpdate.*?async function handlePendingSessionMessage/s);
-if (!updateMatch) throw new Error("Could not find handleUpdate");
-vm.runInContext(updateMatch[0].replace("async function handlePendingSessionMessage", ""), context);
+const getFuncText = (startStr, endStr) => {
+  const start = source.indexOf(startStr);
+  const end = source.indexOf(endStr, start);
+  return source.substring(start, end);
+};
 
-const callbackMatch = source.match(/async function handleCallback.*?function toggleCommand/s);
-if (!callbackMatch) throw new Error("Could not find handleCallback");
+const handleUpdateSource = getFuncText("async function handleUpdate", "async function handlePendingSessionMessage");
+if (!handleUpdateSource) throw new Error("Could not find handleUpdate");
+vm.runInContext(handleUpdateSource, context);
+
+const handleCallbackSource = getFuncText("async function handleCallback", "\nfunction toggleCommand");
+if (!handleCallbackSource) throw new Error("Could not find handleCallback");
 vm.runInContext(`
 async function handleRolloutCallback() { return false; }
 async function handleRolloutCommand() { return false; }
 async function getRolloutOps() { return false; }
-${callbackMatch[0].replace("function toggleCommand", "")}
+${handleCallbackSource}
 `, context);
 
 async function runTests() {
@@ -109,7 +121,7 @@ async function runTests() {
 
   // 2. preview flow
   await triggerMessage("/phanserver m1 5");
-  if (!sentMessages[0].text.includes("PREVIEW PHÂN SERVER")) throw new Error("preview test failed");
+  if (!sentMessages[0] || !sentMessages[0].text.includes("PREVIEW PHÂN SERVER")) throw new Error("preview test failed");
   const inlineKb = sentMessages[0].reply_markup.inline_keyboard[0];
   const okCallbackData = inlineKb[0].callback_data;
   const cancelCallbackData = inlineKb[1].callback_data;
@@ -129,7 +141,7 @@ async function runTests() {
   if (clearedTokens[1] !== okCb2.split(":")[1]) throw new Error("confirm clear test failed");
   if (answeredCallbacks[0].text !== "Đang chạy phân server...") throw new Error("confirm response failed");
   if (fleetControlCalls[0].kind !== "allocate_server") throw new Error("fleet control dispatch failed");
-  console.log("getFleetHubStateCalls:", getFleetHubStateCalls); if (getFleetHubStateCalls < 2) throw new Error("polling failed");
+  if (getFleetHubStateCalls < 2) throw new Error("polling failed");
   if (!sentMessages[0].text.includes("OPENED")) throw new Error("final terminal result message failed");
 
   // Duplicate device

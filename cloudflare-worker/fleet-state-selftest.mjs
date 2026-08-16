@@ -89,8 +89,11 @@ const dFailedInfo = batchViewAfterInfoFailed.devices.find(d => d.device_id === i
 if (dFailedInfo.status !== "BACKUP_STARTED" || dFailedInfo.reason !== "started_ok") throw new Error("reason overwritten by late ack");
 
 // Allocate Server ACK test
+let lastAllocPayload = null;
+sockets.set(`aot-device:${ids[0]}`, [{ send(msg) { lastAllocPayload = JSON.parse(msg); } }]);
 response = await fleet.dispatchFleetBatch(record, "ALLOCATE_SERVER", [ids[0]], { allocationMap: { [ids[0]]: [{ pkg: "com.tinh.vv.hi", url: "https://test" }] } });
 body = await response.json();
+if (!lastAllocPayload || lastAllocPayload.action !== "ALLOCATE_SERVER" || !lastAllocPayload.allocation || lastAllocPayload.allocation[0].pkg !== "com.tinh.vv.hi") throw new Error("Socket payload missing allocation map for device");
 const allocActionId = body.batch.action_id;
 const allocAck = async (status, executed = false) => fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: ids[0], action_id: allocActionId, batch_action: "ALLOCATE_SERVER", status, executed }) }));
 await allocAck("ACCEPTED");

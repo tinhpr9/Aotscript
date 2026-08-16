@@ -3,11 +3,11 @@ import vm from "node:vm";
 
 const source = await fs.readFile(new URL("./worker.js", import.meta.url), "utf8");
 const context = vm.createContext({ console });
-const funcMatch = source.match(/export function parseTongHopLink[\s\S]*?\n\}/);
+const funcMatch = source.match(/function parseTongHopLink[\s\S]*?\n\}/);
 if (!funcMatch) throw new Error("Could not find parseTongHopLink");
-vm.runInContext(funcMatch[0].replace("export function", "function"), context);
+const parseTongHopLink = vm.runInContext(`(() => { ${funcMatch[0]}; return parseTongHopLink; })()`, context);
 
-const parse = (text, ids, tabs) => vm.runInContext(`parseTongHopLink(\`${text}\`, ${JSON.stringify(ids)}, ${tabs})`, context);
+const parse = (text, ids, tabs) => parseTongHopLink(text, ids, tabs);
 
 const mockText = `
 com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111
