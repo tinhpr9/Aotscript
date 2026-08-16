@@ -258,7 +258,7 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
 // Test explicit targets
 sRecord.last_update = null;
 fleet.resolveWorkerRelease = async () => ({ version: "2026.08.13.1", hash: "mock" });
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.02", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.03", device_ids: [ids[0], ids[1]] };
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};
@@ -272,7 +272,7 @@ if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_
   throw new Error("Explicit canary update did not select exactly the targeted device");
 }
 await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.02", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.03", device_ids: [ids[0], ids[1]] };
 await store.set("aot_session:test_explicit_targets", sRecord);
 
 // Stable with explicit targets (keeps exactly the targets)

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import base64
 import hashlib
 import importlib.util
 import json
@@ -91,7 +90,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.16.02"
+WORKER_VERSION = "aot-worker-2026.08.16.03"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -996,14 +995,31 @@ def _handle_worker_update(
     if updater.normalize_channel(channel) != channel:
         return True
     release = message.get("release")
+    if not isinstance(release, dict):
+        return True
+    rel_version = str(release.get("version") or "")
+    rel_tag = str(release.get("tag") or "")
     if (
-        not isinstance(release, dict)
-        or release.get("protocol") != "github-release-v1"
-        or release.get("version") != WORKER_VERSION
-        or release.get("tag") != "worker-v" + WORKER_VERSION.removeprefix("aot-worker-")
-        or any(key.lower() in {"token", "authorization", "secret"} for key in release)
+        release.get("protocol") != "github-release-v1"
+        or not re.fullmatch(r"aot-worker-[A-Za-z0-9._-]+", rel_version)
+        or rel_tag != "worker-v" + rel_version.removeprefix("aot-worker-")
+        or any(key.lower() in {"token", "authorization", "secret", "password"} for key in release)
     ):
         return True
+    manifest = release.get("manifest")
+    if manifest is not None:
+        if not isinstance(manifest, dict):
+            return True
+        if any(key.lower() in {"token", "authorization", "secret", "password"} for key in manifest):
+            return True
+        if manifest.get("name") != "worker-manifest.json":
+            return True
+        size = manifest.get("size")
+        if not isinstance(size, int) or size <= 0:
+            return True
+        digest = str(manifest.get("sha256") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return True
     try:
         release_metadata = base64.urlsafe_b64encode(
             json.dumps(release, sort_keys=True, separators=(",", ":")).encode()
