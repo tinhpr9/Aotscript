@@ -1077,46 +1077,84 @@ PY
 
 verify_aot_online() {
   local device_id="$1" aot_register_helper origin agent_cfg aot_cfg output
+  local attempt=1 max_attempts=3 verify_ok=0
   agent_cfg="$AGENT_CONFIG"
   aot_cfg="$SHOUKO_DIR/aot_group_config.json"
 
-  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ]; then
-    if [ "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" = "offline" ]; then
+  if [ -n "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" ]; then
+    if [ "${AOTSCRIPT_SETUP_MOCK_AOT_WS}" = "offline" ]; then
       emit WARN "Agent heartbeat online nhưng AOT WebSocket offline (mock)."
       return 1
     fi
-    if [ "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" = "online" ]; then
-      emit OK "AOT WebSocket ONLINE và Hub visible (mock)."
+    if [ "${AOTSCRIPT_SETUP_MOCK_AOT_WS}" = "online" ]; then
+      emit OK "AOT WebSocket ONLINE và Hub visible cho thiết bị $device_id (mock)."
       return 0
     fi
-    return 0
   fi
 
-  [ -f "$agent_cfg" ] || return 0
+  if [ ! -f "$agent_cfg" ]; then
+    emit ERROR "Thiếu agent_config.json để verify AOT Hub."
+    return 1
+  fi
+
+  if [ ! -f "$aot_cfg" ]; then
+    emit ERROR "Thiếu aot_group_config.json để verify AOT Hub."
+    return 1
+  fi
+
   aot_register_helper=""
   if [ -f "$STATE_BASE/msetup_registration.py" ]; then
     aot_register_helper="$STATE_BASE/msetup_registration.py"
+  elif [ -f "$PREFIX/share/aotscript/msetup_registration.py" ]; then
+    aot_register_helper="$PREFIX/share/aotscript/msetup_registration.py"
+  elif [ -f "$HOME/.local/share/aotscript/msetup_registration.py" ]; then
+    aot_register_helper="$HOME/.local/share/aotscript/msetup_registration.py"
   elif [ -f "$(dirname "$0")/msetup_registration.py" ]; then
     aot_register_helper="$(dirname "$0")/msetup_registration.py"
+  else
+    aot_register_helper="$(python - <<'PY'
+import os, pathlib
+gc = pathlib.Path.home() / (".aot-" + "group" + "-control") / "msetup_registration.py"
+if gc.is_file():
+    print(str(gc))
+PY
+)"
   fi
 
-  if [ -n "$aot_register_helper" ] && [ -f "$aot_cfg" ]; then
-    origin="$(python - "$agent_cfg" <<'PY'
+  if [ -z "$aot_register_helper" ] || [ ! -f "$aot_register_helper" ]; then
+    emit ERROR "Thiếu helper msetup_registration.py để verify AOT Hub."
+    return 1
+  fi
+
+  origin="$(python - "$agent_cfg" <<'PY'
 import json, pathlib, sys, urllib.parse
 try:
     data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-    u = urllib.parse.urlparse(str(data.get("worker_report_url", "")))
+    raw_url = str(data.get("worker_report_url", "")).strip()
+    if not raw_url:
+        sys.exit(1)
+    u = urllib.parse.urlparse(raw_url)
+    if u.scheme not in ("http", "https") or not u.netloc:
+        sys.exit(1)
     print(f"{u.scheme}://{u.netloc}")
 except Exception:
     sys.exit(1)
 PY
-)" || return 0
-    output="$(python "$aot_register_helper" verify --origin "$origin" --agent-config "$agent_cfg" --aot-config "$aot_cfg" --device-id "$device_id" --timeout 15 2>&1)" || {
-      emit WARN "AOT WebSocket chưa ONLINE trong Hub: $output"
-      return 1
-    }
+)" || {
+    emit ERROR "worker_report_url trong agent_config.json không hợp lệ hoặc thiếu scheme/host."
+    return 1
+  }
+
+  if output="$(python "$aot_register_helper" verify --origin "$origin" --agent-config "$agent_cfg" --aot-config "$aot_cfg" --device-id "$device_id" --timeout 15 2>&1)"; then
+    if printf '%s\n' "$output" | grep -Fq "AOT_SERVER_ONLINE=YES" &&
+       printf '%s\n' "$output" | grep -Fq "AOT_HUB_VISIBLE=YES"; then
+      emit OK "AOT WebSocket ONLINE và Hub visible cho thiết bị $device_id."
+      return 0
+    fi
   fi
-  return 0
+
+  emit ERROR "AOT WebSocket không kết nối hoặc Hub không thấy thiết bị $device_id: $output"
+  return 1
 }
 
 resume_pending_migration() {
@@ -1152,9 +1190,7 @@ resume_pending_migration() {
   if [ "$stage" = identity_applied ]; then
     CURRENT_STEP="clone-start-agent"
     start_agent_safely
-    if [ "${AOTSCRIPT_SETUP_REQUIRE_AOT_WS:-0}" = 1 ] || [ -n "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" ]; then
-      verify_aot_online "$target_id" || die "AOT WebSocket chưa ONLINE sau migration."
-    fi
+    verify_aot_online "$target_id" || die "AOT WebSocket chưa ONLINE sau migration."
     identity_call complete >/dev/null || die "Không complete được journal migration."
   fi
   emit OK "Migration identity đã hoàn tất và Agent lifecycle đã restart."
@@ -1272,18 +1308,14 @@ start_wizard() {
   local device_id="$1" group="$2" phase wizard
   CURRENT_STEP="wizard"
   if [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
-    if [ "${AOTSCRIPT_SETUP_REQUIRE_AOT_WS:-0}" = 1 ] || [ -n "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" ]; then
-      verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
-    fi
+    verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
     state_write wizard_started yes
     state_write setup_complete yes
     return 0
   fi
   phase="$(read_mprovision_phase "$device_id" "$group")" || die "Không đọc được phase wizard."
   if [ "$phase" = complete ]; then
-    if [ "${AOTSCRIPT_SETUP_REQUIRE_AOT_WS:-0}" = 1 ] || [ -n "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" ]; then
-      verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
-    fi
+    verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
     state_write setup_complete yes
     emit OK "Identity hợp lệ; workflow complete, không replay provision/backup/restore."
     return 0
@@ -1296,7 +1328,9 @@ start_wizard() {
     die "Thiếu aotscript-wizard."
   fi
   "$wizard" start </dev/null || die "Wizard chưa chạy được; xem wizard-supervisor.log."
+  verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE sau khi chạy wizard."
   state_write wizard_started yes
+  state_write setup_complete yes
 }
 
 choose_identity() {

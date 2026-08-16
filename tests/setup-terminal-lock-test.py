@@ -62,6 +62,12 @@ def fixture(root: pathlib.Path, device_id: str = "m88", group: str = "NOVA") -> 
     )
     (shouko / "device_id.txt").write_text(device_id + "\n")
     (shouko / "device_group.txt").write_text(group + "\n")
+    (shouko / "agent_config.json").write_text(
+        '{"worker_report_url":"https://hub.example.invalid/aot/report","agent_report_secret":"sec"}\n'
+    )
+    (shouko / "aot_group_config.json").write_text(
+        '{"version":3,"device_id":"%s","enabled":true}\n' % device_id
+    )
 
 
 def fresh_dirs(root: pathlib.Path) -> None:
@@ -82,6 +88,7 @@ def base_env(root: pathlib.Path, input_mode: str = "env") -> dict[str, str]:
             "AOTSCRIPT_SETUP_STORAGE_ROOT": str(root / "storage"),
             "AOTSCRIPT_SETUP_HOST_ID": "test-host",
             "AOTSCRIPT_SETUP_DRY_RUN": "1",
+            "AOTSCRIPT_SETUP_MOCK_AOT_WS": "online",
             "AOTSCRIPT_SETUP_DEVICE_ID": "m88",
             "AOTSCRIPT_SETUP_GROUP": "NOVA",
             "AOTSCRIPT_SETUP_CONFIRM": "yes",

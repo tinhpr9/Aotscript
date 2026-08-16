@@ -53,6 +53,7 @@ run_setup() {
   XDG_STATE_HOME="$root/state" \
   PREFIX="$root/prefix" \
   AOTSCRIPT_SETUP_TEST_MODE=1 \
+  AOTSCRIPT_SETUP_MOCK_AOT_WS=online \
   AOTSCRIPT_SETUP_INPUT_MODE=env \
   AOTSCRIPT_SETUP_STORAGE_ROOT="$root/storage" \
   AOTSCRIPT_SETUP_HOST_ID="$host" \
@@ -68,6 +69,7 @@ run_setup_clean() {
     XDG_STATE_HOME="$root/state" \
     PREFIX="$root/prefix" \
     AOTSCRIPT_SETUP_TEST_MODE=1 \
+    AOTSCRIPT_SETUP_MOCK_AOT_WS=online \
     AOTSCRIPT_SETUP_INPUT_MODE=env \
     AOTSCRIPT_SETUP_STORAGE_ROOT="$root/storage" \
     AOTSCRIPT_SETUP_HOST_ID="$host" \
