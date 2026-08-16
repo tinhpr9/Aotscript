@@ -13,3 +13,8 @@ UPDATE_SOLVER_SECURE
 # telegram_expires_at=1786972442872
 # telegram_command_id=1786886042872-27350c7e
 UPDATE_SOLVER_SECURE
+
+# telegram_target_ids=m117
+# telegram_expires_at=1786886359314
+# telegram_command_id=1786886059314-9a9cb6fa
+UPDATE_DELTA
