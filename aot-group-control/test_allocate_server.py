@@ -23,8 +23,7 @@ def mock_send_batch_ack(cfg, **kwargs):
     acks.append(kwargs)
 
 relay._send_batch_ack = mock_send_batch_ack
-relay.action_already_processed = lambda state, aid: state.get(f"processed_{aid}", False)
-relay.mark_action_processed = lambda state, aid: state.update({f"processed_{aid}": True})
+relay._save_state = lambda state: None
 
 state: dict[str, Any] = {}
 cfg: dict[str, str] = {}
@@ -39,6 +38,8 @@ for p in (links_path, bak_path):
 def cleanup():
     acks.clear()
     state.clear()
+    mock_ctrl.opened.clear()
+    mock_ctrl.fail = False
     for p in (links_path, bak_path):
         if os.path.exists(p): os.remove(p)
     import glob
@@ -105,15 +106,16 @@ msg_commit["action"] = "COMMIT_ALLOCATE_SERVER"
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg_commit)
 assert acks[-2]["status"] == "ALLOCATED"
 assert acks[-1]["status"] == "OPENED"
-assert state["processed_a5"] == True
+assert "a5" in state.get("processed_action_ids", [])
+assert state.get("allocate_action_results", {}).get("a5", {}).get("status") == "OPENED"
 
-# Replay -> DUPLICATE
+# Replay -> OPENED (from allocate_action_results journal)
 acks.clear()
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg5)
-assert acks[-1]["status"] == "DUPLICATE"
+assert acks[-1]["status"] == "OPENED"
 
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg_commit)
-assert acks[-1]["status"] == "DUPLICATE"
+assert acks[-1]["status"] == "OPENED"
 assert not os.path.exists(links_path + ".prep.a5")
 
 # 6. PREPARE -> ABORT cleanup đúng action
@@ -149,5 +151,40 @@ msg8["allocation"] = [
 msg8["target_device_ids"] = ["m1"]
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg8)
 assert acks[-1]["status"] == "PREPARE_READY"
+
+# 9. Irreversible ACK-loss resilience on COMMIT
+cleanup()
+msg9 = dict(msg5)
+msg9["action_id"] = "a9"
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg9)
+assert acks[-1]["status"] == "PREPARE_READY"
+
+# Simulate network exception on sending OPENED ACK
+def failing_ack(cfg, **kwargs):
+    if kwargs.get("status") == "OPENED":
+        raise RuntimeError("Simulated network drop on OPENED ACK")
+    acks.append(kwargs)
+
+relay._send_batch_ack = failing_ack
+msg9_commit = dict(msg9)
+msg9_commit["action"] = "COMMIT_ALLOCATE_SERVER"
+
+# 1st COMMIT: open_roblox_servers succeeds, OPENED ACK throws, but no rollback occurs
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg9_commit)
+assert len(mock_ctrl.opened) == 1
+assert os.path.exists(links_path)
+assert not os.path.exists(links_path + ".prep.a9")
+
+# Restore normal ACK
+relay._send_batch_ack = mock_send_batch_ack
+acks.clear()
+
+# 2nd COMMIT retry from Hub: replay OPENED from journal, do not call open_roblox_servers again
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg9_commit)
+assert len(mock_ctrl.opened) == 1  # Still 1, NOT reopened!
+assert len(acks) == 1
+assert acks[-1]["status"] == "OPENED"
+assert acks[-1]["executed"] == True
+assert os.path.exists(links_path)
 
 print("AOT_ALLOCATE_SERVER_RELAY_TEST=OK")

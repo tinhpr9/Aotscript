@@ -506,6 +506,25 @@ def mark_action_processed(
     _save_state(state)
 
 
+def mark_allocate_opened(
+    state: dict[str, Any],
+    action_id: str,
+) -> None:
+    results = state.get("allocate_action_results")
+    if not isinstance(results, dict):
+        results = {}
+    results[action_id] = {
+        "status": "OPENED",
+        "executed": True,
+    }
+    valid_ids = set(state.get("processed_action_ids", []))
+    valid_ids.add(action_id)
+    state["allocate_action_results"] = {
+        k: v for k, v in results.items() if k in valid_ids
+    }
+    mark_action_processed(state, action_id)
+
+
 def _launch_package(package: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9._]+", package):
         raise AotRelayError("invalid_package")
@@ -1040,7 +1059,11 @@ def _handle_allocate_server(
         return True
     if action == "PREPARE_ALLOCATE_SERVER":
         if action_already_processed(state, action_id):
-            terminal_ack("DUPLICATE", executed=False)
+            cached = (state.get("allocate_action_results") or {}).get(action_id)
+            if cached and cached.get("status") == "OPENED":
+                terminal_ack("OPENED", executed=True)
+            else:
+                terminal_ack("DUPLICATE", executed=False)
             return True
 
         try:
@@ -1081,7 +1104,11 @@ def _handle_allocate_server(
 
     if action == "COMMIT_ALLOCATE_SERVER":
         if action_already_processed(state, action_id):
-            terminal_ack("DUPLICATE", executed=False)
+            cached = (state.get("allocate_action_results") or {}).get(action_id)
+            if cached and cached.get("status") == "OPENED":
+                terminal_ack("OPENED", executed=True)
+            else:
+                terminal_ack("DUPLICATE", executed=False)
             return True
 
         links_path = "/storage/emulated/0/Download/Shouko/server_links.txt"
@@ -1108,8 +1135,6 @@ def _handle_allocate_server(
             terminal_ack("ALLOCATED", executed=True)
             try:
                 controller.open_roblox_servers(allocation)
-                terminal_ack("OPENED", executed=True)
-                mark_action_processed(state, action_id)
             except Exception as e:
                 if existed_before and os.path.exists(bak_path):
                     try: shutil.copy2(bak_path, links_path)
@@ -1118,6 +1143,17 @@ def _handle_allocate_server(
                     try: os.remove(links_path)
                     except: pass
                 terminal_ack("FAILED", executed=False, reason="open_servers_failed: " + str(e))
+                return True
+
+            # irreversible action succeeded -> journal before ACK
+            mark_allocate_opened(state, action_id)
+
+            try:
+                terminal_ack("OPENED", executed=True)
+            except Exception:
+                # Do not rollback, do not mark FAILED
+                pass
+            return True
         except Exception as e:
             if existed_before and os.path.exists(bak_path):
                 try: shutil.copy2(bak_path, links_path)
@@ -1126,12 +1162,15 @@ def _handle_allocate_server(
                 try: os.remove(links_path)
                 except: pass
             terminal_ack("FAILED", executed=False, reason="commit_failed: " + str(e))
-        finally:
-            pass
+            return True
 
     if action == "ABORT_ALLOCATE_SERVER":
         if action_already_processed(state, action_id):
-            terminal_ack("DUPLICATE", executed=False)
+            cached = (state.get("allocate_action_results") or {}).get(action_id)
+            if cached and cached.get("status") == "OPENED":
+                terminal_ack("OPENED", executed=True)
+            else:
+                terminal_ack("DUPLICATE", executed=False)
             return True
         prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
         try: os.remove(prep_path)

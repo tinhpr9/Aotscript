@@ -773,17 +773,14 @@ export class FleetState
   }
 
 
-    async webSocketClose(socket) {
+  async webSocketClose(socket) {
     const identity = this.parseAotSocketIdentity(socket);
-    console.log("IDENTITY:", identity);
     if (identity) {
       this.aotLive.delete(identity.deviceId);
       await this.broadcastFleetState();
       const record = await this.readFleet();
-      console.log("LAST BATCH:", record.last_batch?.action, record.last_batch?.commit_decided, record.last_batch?.abort_sent);
       if (record.last_batch && record.last_batch.action === AOT_ALLOCATE_SERVER_ACTION && !record.last_batch.commit_decided && !record.last_batch.abort_sent) {
           const device = record.last_batch.devices[identity.deviceId];
-          console.log("DEVICE STATUS:", device?.status);
           if (device && !["FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "ABORT_SENT"].includes(device.status)) {
               device.status = "ABORT_SENT";
               if (!device.history.includes("ABORT_SENT")) device.history.push("ABORT_SENT");
@@ -799,7 +796,6 @@ export class FleetState
                        d.reason = "aborted_due_to_peer_failure";
                    }
               }
-              console.log("WRITING FLEET WITH ABORT_SENT", record.last_batch.devices[identity.deviceId].status);
               await this.writeFleet(record);
           }
       }
@@ -1060,9 +1056,7 @@ export class FleetState
     let tags;
     try {
       tags = this.ctx.getTags(socket);
-      console.log("TAGS:", tags);
     } catch (error) {
-      console.log("TAGS ERROR", error);
       return null;
     }
     const tag = tags.find((value) => String(value).startsWith("aot-device:"));
@@ -2918,7 +2912,7 @@ export class FleetState
       let changed = false;
 
       if (!isExpired && lb.commit_decided) {
-        for (const [did, d] of Object.entries(lb.devices)) {
+        for (const [did, d] of Object.entries(lb.devices || {})) {
           if (d.status === "COMMIT_PENDING" || d.status === "COMMIT_SENT") {
             const canRetry = !d.commit_retry_time || Date.now() >= d.commit_retry_time;
             if (canRetry) {
@@ -2926,7 +2920,7 @@ export class FleetState
                 type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: [did], action_id: lb.action_id, expires_at: lb.expires_at, action: "COMMIT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
               });
               d.commit_retries = (d.commit_retries || 0) + 1;
-              d.commit_retry_time = Date.now() + Math.min(15000 * Math.pow(2, d.commit_retries - 1), 60000);
+              d.commit_retry_time = Date.now() + Math.min(60000, 5000 * Math.pow(2, d.commit_retries - 1));
               changed = true;
               if (sent > 0 && d.status === "COMMIT_PENDING") {
                 d.status = "COMMIT_SENT"; if (!d.history.includes("COMMIT_SENT")) d.history.push("COMMIT_SENT");
@@ -3297,12 +3291,13 @@ export class FleetState
               }
             }
           } else if (isPreparePhase && statuses.every(s => s === "PREPARE_READY" || terminal.has(s) || s === "DUPLICATE") && !batch.commit_decided) {
-            console.log("COMMIT_DECIDED IS NOW TRUE!");
             batch.commit_decided = true;
             batch.commit_sent = true;
             for (const [did, d] of Object.entries(batch.devices)) {
               if (d.status === "PREPARE_READY") {
                 d.status = "COMMIT_PENDING"; if (!d.history.includes("COMMIT_PENDING")) d.history.push("COMMIT_PENDING");
+                d.commit_retries = 0;
+                d.commit_retry_time = Date.now() + 5000;
               }
             }
             await this.writeFleet(record);
@@ -3337,7 +3332,7 @@ export class FleetState
             }
           }
         }
-        await this.writeFleet(record); await this.broadcastFleetState();
+        await this.writeFleet(record); await this.broadcastFleetState(); await this.scheduleNextAlarm();
       }
     }
     return json({ ok: true, action_id: actionId, device_id: id, status: device.status });
@@ -3398,12 +3393,36 @@ export class FleetState
       }
     }
     const fleetRecord = await this.readFleet();
-    if (fleetRecord.last_batch && fleetRecord.last_batch.action === AOT_ALLOCATE_SERVER_ACTION && fleetRecord.last_batch.telegram_chat_id && !fleetRecord.last_batch.telegram_notified) {
-      if (fleetRecord.last_batch.expires_at > Date.now()) {
-        if (!nextAlarm || fleetRecord.last_batch.expires_at < nextAlarm) nextAlarm = fleetRecord.last_batch.expires_at;
+    const lb = fleetRecord?.last_batch;
+    if (
+      lb?.action === AOT_ALLOCATE_SERVER_ACTION &&
+      Number(lb.expires_at || 0) > Date.now()
+    ) {
+      if (!nextAlarm || lb.expires_at < nextAlarm) {
+        nextAlarm = lb.expires_at;
       }
-      if (fleetRecord.last_batch.telegram_retry_time && fleetRecord.last_batch.telegram_retry_time > Date.now()) {
-        if (!nextAlarm || fleetRecord.last_batch.telegram_retry_time < nextAlarm) nextAlarm = fleetRecord.last_batch.telegram_retry_time;
+
+      if (lb.commit_decided) {
+        for (const d of Object.values(lb.devices || {})) {
+          if (
+            ["COMMIT_PENDING", "COMMIT_SENT"].includes(d.status)
+          ) {
+            const retryAt =
+              Number(d.commit_retry_time || 0) > Date.now()
+                ? Number(d.commit_retry_time)
+                : Date.now() + 5000;
+
+            if (!nextAlarm || retryAt < nextAlarm) {
+              nextAlarm = retryAt;
+            }
+          }
+        }
+      }
+
+      if (lb.telegram_chat_id && !lb.telegram_notified && Number(lb.telegram_retry_time || 0) > Date.now()) {
+        if (!nextAlarm || lb.telegram_retry_time < nextAlarm) {
+          nextAlarm = lb.telegram_retry_time;
+        }
       }
     }
     if (nextAlarm) {
