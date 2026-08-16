@@ -889,6 +889,11 @@ async function handleAotControlAck(
             ]
           : batchAction === "ALLOCATE_SERVER"
           ? [
+              "PREPARE_SENT",
+              "PREPARE_READY",
+              "PREPARE_FAILED",
+              "COMMIT_SENT",
+              "ABORT_SENT",
               "ACCEPTED",
               "ALLOCATED",
               "OPENED",
@@ -1105,709 +1110,205 @@ function constantTimeTextEqual(left, right) {
 
 
 
-function aotHubHtml() {
-  return `<!doctype html>
-<html lang="vi">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="color-scheme" content="dark light">
-  <title>AOT Group Control</title>
-  <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
-  <style>
-    :root {
-      color-scheme: dark;
-      font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      background: #101114;
-      color: #f5f7fb;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: #101114;
-      color: #f5f7fb;
-    }
-    button,input {
-      font: inherit;
-    }
-    .app {
-      max-width: 980px;
-      margin: 0 auto;
-      padding: 14px;
-    }
-    .top {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      flex-wrap: wrap;
-      margin-bottom: 12px;
-    }
-    h1 {
-      font-size: 20px;
-      margin: 0;
-      flex: 1;
-    }
-    .session {
-      display: flex;
-      gap: 6px;
-      width: 100%;
-    }
-    .session input {
-      flex: 1;
-      min-width: 0;
-      border: 1px solid #343843;
-      border-radius: 10px;
-      padding: 10px;
-      background: #181a20;
-      color: inherit;
-    }
-    button {
-      border: 1px solid #3a3f4c;
-      border-radius: 10px;
-      background: #20232b;
-      color: inherit;
-      padding: 10px 12px;
-      font-weight: 650;
-    }
-    button:disabled {
-      opacity: .45;
-    }
-    .summary {
-      display: grid;
-      grid-template-columns: repeat(4,minmax(0,1fr));
-      gap: 8px;
-      margin: 10px 0 14px;
-    }
-    .metric,.card {
-      background: #181a20;
-      border: 1px solid #2b2f39;
-      border-radius: 14px;
-    }
-    .metric {
-      padding: 10px;
-      text-align: center;
-    }
-    .metric strong {
-      display: block;
-      font-size: 20px;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit,minmax(240px,1fr));
-      gap: 10px;
-    }
-    .card {
-      overflow: hidden;
-    }
-    .card header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-    }
-    .device {
-      font-weight: 750;
-    }
-    .status {
-      font-size: 12px;
-      font-weight: 800;
-      padding: 4px 7px;
-      border-radius: 999px;
-      background: #30343e;
-    }
-    .status.SYNCED,.status.REFERENCE {
-      background: #173d2a;
-      color: #8df1b8;
-    }
-    .status.OUT_OF_SYNC {
-      background: #4b3214;
-      color: #ffd28a;
-    }
-    .status.OFFLINE {
-      background: #3f2024;
-      color: #ff9ca6;
-    }
-    .status.WAITING {
-      background: #273044;
-      color: #aac3ff;
-    }
-    .preview {
-      width: 100%;
-      display: block;
-      background: #090a0c;
-      min-height: 160px;
-      object-fit: contain;
-      touch-action: manipulation;
-    }
-    .placeholder {
-      min-height: 160px;
-      display: grid;
-      place-items: center;
-      color: #8f96a3;
-      background: #090a0c;
-    }
-    .meta {
-      padding: 9px 12px 12px;
-      color: #aeb4c0;
-      font-size: 12px;
-      word-break: break-word;
-    }
-    .controls {
-      position: sticky;
-      bottom: 0;
-      display: grid;
-      grid-template-columns: repeat(5,minmax(0,1fr));
-      gap: 7px;
-      padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
-      background: linear-gradient(180deg,transparent,#101114 24%);
-    }
-    .error {
-      color: #ff9ca6;
-      min-height: 22px;
-      margin: 8px 0;
-      font-size: 13px;
-    }
-    .hint {
-      color: #9ba3b0;
-      font-size: 12px;
-      margin: 8px 0;
-    }
-    .batch {
-      margin-top: 14px;
-      padding: 12px;
-    }
-    .batch-results {
-      display: grid;
-      gap: 6px;
-      margin-top: 10px;
-      font: 12px ui-monospace,SFMono-Regular,Consolas,monospace;
-    }
-    .batch-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      border-top: 1px solid #2b2f39;
-      padding-top: 6px;
-    }
-    .batch-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-    }
-    .batch-targets {
-      display: grid;
-      grid-template-columns: repeat(auto-fit,minmax(150px,1fr));
-      gap: 6px;
-      margin: 10px 0;
-    }
-    .batch-target {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      padding: 7px;
-      border: 1px solid #2b2f39;
-      border-radius: 9px;
-    }
-    @media (max-width: 560px) {
-      .summary {
-        grid-template-columns: repeat(2,minmax(0,1fr));
-      }
-      .controls {
-        grid-template-columns: repeat(3,minmax(0,1fr));
-      }
-    }
-  </style>
-</head>
-<body>
-  <main class="app">
-    <div class="top">
-      <h1>AOT GROUP CONTROL</h1>
-      <button id="refresh">Làm mới</button>
-    </div>
-    <div class="session">
-      <input id="session" value="" placeholder="Session ID" autocomplete="off" spellcheck="false">
-      <button id="apply">Mở</button>
-    </div>
-    <div class="hint">
-      Chạm trực tiếp lên ảnh REFERENCE để gửi semantic tap. Nếu điểm chạm không ánh xạ được node an toàn, hệ thống sẽ từ chối.
-    </div>
-    <div id="error" class="error"></div>
-    <section class="summary">
-      <div class="metric"><strong id="online">0</strong>ONLINE</div>
-      <div class="metric"><strong id="synced">0</strong>SYNCED</div>
-      <div class="metric"><strong id="out">0</strong>OUT OF SYNC</div>
-      <div class="metric"><strong id="offline">0</strong>OFFLINE</div>
-    </section>
-    <section id="reference"></section>
-    <h2 style="font-size:16px;margin:16px 0 8px">FOLLOWERS</h2>
-    <section id="followers" class="grid"></section>
-    <div id="lastControl" class="hint"></div>
-    <section class="card batch">
-      <div class="batch-actions">
-        <button id="selectOnline">Chọn máy online</button>
-        <button id="clearSelection">Bỏ chọn hết</button>
-        <button id="openSwift">Mở Swift Backup</button>
-      </div>
-      <div class="hint">Chỉ gửi OPEN_SWIFT_BACKUP tới các máy đang kết nối.</div>
-      <div id="batchTargets" class="batch-targets"></div>
-      <div id="batchResults" class="batch-results"></div>
-      <div class="batch-actions" style="margin-top:14px">
-        <button id="updateCanary">Cập nhật 2 máy thử</button>
-        <button id="updateStable">Phát hành cho tất cả</button>
-      </div>
-      <div id="updateError" class="error"></div>
-      <div id="updateHint" class="hint">Hai máy thử được chọn động từ các máy ONLINE. Stable theo nhóm tối đa 5 máy.</div>
-      <div id="updateResults" class="batch-results"></div>
-    </section>
-    <nav class="controls">
-      <button id="pause">PAUSE</button>
-      <button id="resume">RESUME</button>
-      <button id="back">BACK</button>
-      <button id="up">SWIPE ↑</button>
-      <button id="down">SWIPE ↓</button>
-    </nav>
-  </main>
-  <script>
-  (function () {
-    "use strict";
-    var tg = window.Telegram && window.Telegram.WebApp;
-    var auth = tg ? String(tg.initData || "") : "";
-    var currentState = null;
-    var selectedDeviceIds = new Set();
-    var dashboardSocket = null;
-    var reconnectTimer = null;
-    var reconnectAttempt = 0;
-    var socketGeneration = 0;
-    var sessionInput = document.getElementById("session");
-    var sessionStorageKey = "aot-hub-session-id";
-    var errorEl = document.getElementById("error");
-    var referenceEl = document.getElementById("reference");
-    var followersEl = document.getElementById("followers");
-    var lastControlEl = document.getElementById("lastControl");
-    var batchTargetsEl = document.getElementById("batchTargets");
-    var batchResultsEl = document.getElementById("batchResults");
-    var updateResultsEl = document.getElementById("updateResults");
-    var updateErrorEl = document.getElementById("updateError");
-    var updateHintEl = document.getElementById("updateHint");
 
-    if (tg) {
-      tg.ready();
-      tg.expand();
-      try { tg.disableVerticalSwipes(); } catch (e) {}
-    }
 
-    function esc(value) {
-      return String(value == null ? "" : value)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-    }
-
-    function sessionId() {
-      return String(sessionInput.value || "").trim();
-    }
-
-    function isValidSessionId(value) {
-      return /^[A-Za-z0-9_-]{1,64}$/.test(
-        String(value || "").trim()
-      );
-    }
-
-    function restoreSession() {
-      try {
-        var stored = window.localStorage.getItem(
-          sessionStorageKey
-        );
-        if (isValidSessionId(stored)) {
-          sessionInput.value = String(stored).trim();
-        }
-      } catch (error) {}
-    }
-
-    function applySession() {
-      var session = sessionId();
-      if (isValidSessionId(session)) {
-        try {
-          window.localStorage.setItem(
-            sessionStorageKey,
-            session
-          );
-        } catch (error) {}
-      }
-      loadState();
-      connectDashboard();
-    }
-
-    async function api(path, options) {
-      if (!auth) {
-        throw new Error("Hãy mở AOT HUB từ nút trong Telegram.");
-      }
-      var init = options || {};
-      init.headers = Object.assign(
-        {},
-        init.headers || {},
-        {
-          "X-Telegram-Init-Data": auth,
-          "Accept": "application/json"
-        }
-      );
-      if (init.body && typeof init.body !== "string") {
-        init.headers["Content-Type"] = "application/json";
-        init.body = JSON.stringify(init.body);
-      }
-      var response = await fetch(path, init);
-      var data = await response.json().catch(function () {
-        return { ok: false, error: "invalid_response" };
-      });
-      if (!response.ok || data.ok !== true) {
-        throw new Error(String(data.message || data.error || ("HTTP " + response.status)));
-      }
-      return data;
-    }
-
-    function preview(device, isReference) {
-      if (!device || !device.preview_b64) {
-        return '<div class="placeholder">Chưa có preview</div>';
-      }
-      var id = isReference ? ' id="referencePreview"' : "";
-      return '<img' + id + ' class="preview" alt="preview" src="data:image/png;base64,' +
-        device.preview_b64 + '">';
-    }
-
-    function card(device, isReference) {
-      if (!device) {
-        return '<div class="card"><div class="placeholder">REFERENCE chưa kết nối</div></div>';
-      }
-      var state = esc(device.status || "WAITING");
-      var role = isReference ? "REFERENCE" : "FOLLOWER";
-      return '<article class="card">' +
-        '<header><div><div class="device">' + esc(device.device_id) +
-        '</div><div class="hint" style="margin:2px 0 0">' + role +
-        '</div></div><span class="status ' + state + '">' + state +
-        '</span></header>' +
-        preview(device, isReference) +
-        '<div class="meta">' +
-        esc(device.package || "-") + '<br>' +
-        'FP ' + esc(device.fingerprint || "-") +
-        '</div></article>';
-    }
-
-    function renderBatch(batch) {
-      if (!batch || !Array.isArray(batch.devices)) {
-        batchResultsEl.innerHTML = '<div class="hint">Chưa có batch.</div>';
-        return;
-      }
-      batchResultsEl.innerHTML = batch.devices.map(function (item) {
-        var reasons = {
-          swift_backup_not_installed: "Swift Backup chưa được cài",
-          swift_backup_launcher_unavailable: "Không tìm thấy màn hình mở ứng dụng",
-          swift_backup_launch_failed: "Android từ chối lệnh mở ứng dụng",
-          swift_backup_not_foreground: "Android không đưa Swift Backup lên trước",
-          websocket_send_failed: "Không gửi được lệnh tới máy",
-          worker_ack_timeout: "Worker không phản hồi kịp",
-          device_offline: "Máy đã offline"
-        };
-        var rawReason = String(item.reason || "");
-        var visibleReason = rawReason.indexOf("protocol_rejected:") === 0
-          ? ("Protocol bị từ chối — " + rawReason.slice("protocol_rejected:".length))
-          : (reasons[rawReason] || rawReason);
-        var detail = rawReason ? " — " + visibleReason : "";
-        return '<div class="batch-row"><strong>' + esc(item.device_id) +
-          '</strong><span>' + esc(item.display_status || item.status) +
-          esc(detail) + '</span></div>';
-      }).join("");
-    }
-
-    function renderUpdate(update) {
-      if (!update || !Array.isArray(update.devices)) {
-        updateResultsEl.innerHTML = '<div class="hint">Chưa có lần cập nhật worker.</div>';
-        return;
-      }
-      var selected = Array.isArray(update.selected_device_ids)
-        ? update.selected_device_ids.map(String)
-        : [];
-      updateHintEl.textContent = selected.length === 2
-        ? ("Hai máy thử: " + selected.join(" + ") + ". Stable theo nhóm tối đa 5 máy.")
-        : "Hai máy thử được chọn động từ các máy ONLINE. Stable theo nhóm tối đa 5 máy.";
-      updateResultsEl.innerHTML = update.devices.map(function (item) {
-        var reasons = {
-          worker_ack_timeout: "Worker không gửi trạng thái cập nhật kịp thời",
-          websocket_send_failed: "WebSocket ngắt trước khi gửi lệnh",
-          rollout_stopped_after_failure: "Đã dừng vì một máy trong nhóm trước FAILED",
-          worker_version_mismatch: "Worker HEALTHY nhưng sai phiên bản phát hành",
-          worker_reported_failure: "Worker báo cập nhật thất bại",
-          health_ack_timeout: "Worker mới không gửi health ACK trong 60 giây",
-          health_ack_timeout_rolled_back: "Không có health ACK; đã rollback"
-        };
-        var rawReason = String(item.reason || "");
-        var visibleReason = rawReason.indexOf("protocol_rejected:") === 0
-          ? ("Protocol bị từ chối — " + rawReason.slice("protocol_rejected:".length))
-          : (reasons[rawReason] || rawReason);
-        var detail = rawReason ? " — " + visibleReason : "";
-        return '<div class="batch-row"><strong>' + esc(item.device_id) +
-          '</strong><span>' + esc(item.display_status || item.status) +
-          esc(detail) + '</span></div>';
-      }).join("");
-    }
-
-    function sessionDevices(data) {
-      var devices = [];
-      if (data && data.reference) devices.push(data.reference);
-      return devices.concat((data && data.followers) || []);
-    }
-
-    function renderBatchTargets(data) {
-      var devices = sessionDevices(data);
-      var members = new Set(devices.map(function (item) {
-        return String(item.device_id);
-      }));
-      Array.from(selectedDeviceIds).forEach(function (deviceId) {
-        var device = devices.find(function (item) {
-          return String(item.device_id) === deviceId;
-        });
-        if (!members.has(deviceId) || !device || device.online !== true) {
-          selectedDeviceIds.delete(deviceId);
-        }
-      });
-      batchTargetsEl.innerHTML = devices.map(function (item) {
-        var deviceId = String(item.device_id || "");
-        var online = item.online === true;
-        return '<label class="batch-target"><input type="checkbox" data-device-id="' +
-          esc(deviceId) + '"' +
-          (selectedDeviceIds.has(deviceId) ? ' checked' : '') +
-          (online ? '' : ' disabled') + '><span>' + esc(deviceId) +
-          ' — ' + (online ? 'ONLINE' : 'OFFLINE') + '</span></label>';
-      }).join("");
-      Array.from(batchTargetsEl.querySelectorAll("input[data-device-id]")).forEach(
-        function (input) {
-          input.onchange = function () {
-            var deviceId = String(input.getAttribute("data-device-id") || "");
-            if (input.checked && !input.disabled) selectedDeviceIds.add(deviceId);
-            else selectedDeviceIds.delete(deviceId);
-          };
-        }
-      );
-    }
-
-    function render(data) {
-      currentState = data;
-      var summary = data.summary || {};
-      document.getElementById("online").textContent = summary.online || 0;
-      document.getElementById("synced").textContent = summary.synced || 0;
-      document.getElementById("out").textContent = summary.out_of_sync || 0;
-      document.getElementById("offline").textContent = summary.offline || 0;
-      referenceEl.innerHTML = card(data.reference, true);
-      followersEl.innerHTML = (data.followers || [])
-        .map(function (item) { return card(item, false); })
-        .join("");
-      document.getElementById("pause").disabled = !!data.paused;
-      document.getElementById("resume").disabled = !data.paused;
-      var last = data.last_control;
-      lastControlEl.textContent = last
-        ? ("Control: " + String(last.status || "-") +
-           (last.reason ? " — " + String(last.reason) : ""))
-        : "";
-      renderBatchTargets(data);
-      renderBatch(data.last_batch);
-      renderUpdate(data.last_update);
-      var image = document.getElementById("referencePreview");
-      if (image) {
-        image.addEventListener("click", function (event) {
-          if (!currentState || currentState.paused) {
-            return;
-          }
-          var rect = image.getBoundingClientRect();
-          if (!rect.width || !rect.height) {
-            return;
-          }
-          var x = (event.clientX - rect.left) / rect.width;
-          var y = (event.clientY - rect.top) / rect.height;
-          sendControl("tap", {
-            x_norm: Math.max(0, Math.min(1, x)),
-            y_norm: Math.max(0, Math.min(1, y))
-          });
-        });
-      }
-    }
-
-    async function loadState() {
-      var session = sessionId();
-      if (!session) {
-        return;
-      }
-      try {
-        var data = await api(
-          "/aot/hub/api/state?session_id=" +
-          encodeURIComponent(session)
-        );
-        errorEl.textContent = "";
-        render(data);
-      } catch (error) {
-        errorEl.textContent = String(error.message || error);
-      }
-    }
-
-    async function sendControl(kind, extra) {
-      try {
-        errorEl.textContent = "";
-        await api("/aot/hub/api/control", {
-          method: "POST",
-          body: Object.assign(
-            {
-              session_id: sessionId(),
-              kind: kind
-            },
-            extra || {}
-          )
-        });
-        window.setTimeout(loadState, 250);
-      } catch (error) {
-        errorEl.textContent = String(error.message || error);
-      }
-    }
-
-    async function openSwiftBackupBatch() {
-      var button = document.getElementById("openSwift");
-      button.disabled = true;
-      try {
-        errorEl.textContent = "";
-        var onlineSelected = sessionDevices(currentState).filter(function (item) {
-          return item.online === true && selectedDeviceIds.has(String(item.device_id));
-        }).map(function (item) { return String(item.device_id); });
-        if (!onlineSelected.length) {
-          throw new Error("Hãy chọn ít nhất một máy ONLINE.");
-        }
-        var data = await api("/aot/hub/api/control", {
-          method: "POST",
-          body: {
-            session_id: sessionId(),
-            kind: "open_swift_backup",
-            target_device_ids: onlineSelected
-          }
-        });
-        renderBatch(data.batch);
-      } catch (error) {
-        errorEl.textContent = String(error.message || error);
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    async function updateWorkers(kind, buttonId) {
-      var button = document.getElementById(buttonId);
-      button.disabled = true;
-      try {
-        updateErrorEl.textContent = "";
-        var data = await api("/aot/hub/api/control", {
-          method: "POST",
-          body: { session_id: sessionId(), kind: kind }
-        });
-        renderUpdate(data.update);
-      } catch (error) {
-        updateErrorEl.textContent = String(error.message || error);
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    function scheduleDashboardReconnect(generation) {
-      if (generation !== socketGeneration || !auth) return;
-      var base = Math.min(30000, 1000 * Math.pow(2, reconnectAttempt));
-      var delay = Math.round(base * (0.75 + Math.random() * 0.5));
-      reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
-      reconnectTimer = window.setTimeout(function () {
-        if (generation === socketGeneration) connectDashboard(generation);
-      }, delay);
-    }
-
-    function connectDashboard(existingGeneration) {
-      if (!auth || !isValidSessionId(sessionId()) || !window.WebSocket) return;
-      if (reconnectTimer) {
-        window.clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      var generation = existingGeneration || (socketGeneration + 1);
-      socketGeneration = generation;
-      if (dashboardSocket) {
-        dashboardSocket.onclose = null;
-        dashboardSocket.close();
-      }
-      var scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
-      var socket = new window.WebSocket(
-        scheme + "//" + window.location.host + "/aot/hub/api/ws?session_id=" +
-        encodeURIComponent(sessionId()) + "&init_data=" + encodeURIComponent(auth)
-      );
-      dashboardSocket = socket;
-      socket.onopen = function () { reconnectAttempt = 0; };
-      socket.onmessage = function (event) {
-        try {
-          var data = JSON.parse(String(event.data || ""));
-          if (
-            data.type === "aot_hub_state" &&
-            data.session_id === sessionId()
-          ) {
-            errorEl.textContent = "";
-            render(data);
-          }
-        } catch (error) {}
-      };
-      socket.onclose = function () {
-        if (dashboardSocket === socket) dashboardSocket = null;
-        scheduleDashboardReconnect(generation);
-      };
-      socket.onerror = function () { socket.close(); };
-    }
-
-    restoreSession();
-    document.getElementById("refresh").onclick = loadState;
-    document.getElementById("apply").onclick = applySession;
-    document.getElementById("pause").onclick = function () {
-      sendControl("pause");
-    };
-    document.getElementById("resume").onclick = function () {
-      sendControl("resume");
-    };
-    document.getElementById("back").onclick = function () {
-      sendControl("back");
-    };
-    document.getElementById("selectOnline").onclick = function () {
-      sessionDevices(currentState).forEach(function (item) {
-        if (item.online === true) selectedDeviceIds.add(String(item.device_id));
-      });
-      renderBatchTargets(currentState);
-    };
-    document.getElementById("clearSelection").onclick = function () {
-      selectedDeviceIds.clear();
-      renderBatchTargets(currentState);
-    };
-    document.getElementById("openSwift").onclick = openSwiftBackupBatch;
-    document.getElementById("updateCanary").onclick = function () {
-      updateWorkers("update_canary", "updateCanary");
-    };
-    document.getElementById("updateStable").onclick = function () {
-      updateWorkers("update_stable", "updateStable");
-    };
-    document.getElementById("up").onclick = function () {
-      sendControl("swipe", {
-        x1: 0.5, y1: 0.75, x2: 0.5, y2: 0.28, duration_ms: 300
-      });
-    };
-    document.getElementById("down").onclick = function () {
-      sendControl("swipe", {
-        x1: 0.5, y1: 0.28, x2: 0.5, y2: 0.75, duration_ms: 300
-      });
-    };
-
-    loadState();
-    connectDashboard();
-  }());
-  </script>
-</body>
-</html>`;
+function fleetHubHtml() {
+  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AOT Hub</title><script src="https://telegram.org/js/telegram-web-app.js?63"></script><style>body{font:14px system-ui;background:#101114;color:#f5f7fb;margin:0}.app{max-width:900px;margin:auto;padding:16px}button{padding:10px;margin:4px;border:1px solid #555;border-radius:9px;background:#20232b;color:inherit}button:disabled{opacity:0.5;cursor:not-allowed}.device{display:flex;gap:10px;padding:10px;border-bottom:1px solid #333}.OFFLINE,.error{color:#ff9ca6}.ONLINE{color:#8df1b8}.error{min-height:22px}.result{font-family:monospace;padding:4px}.allocate-section{margin-top:10px;padding:10px;border:1px solid #333;border-radius:9px}</style></head><body><main class="app"><h1>AOT HUB</h1><button id="refresh">Làm mới</button><div><button id="selectOnline">Chọn máy online</button><button id="clear">Bỏ chọn hết</button><button id="backup">Mở Swift Backup</button><button id="apps">Mở Apps</button><button id="backupRestoreData">Backup RESTORE_DATA</button></div><div class="allocate-section"><label>Số tab (1-10): <input type="number" id="tabCount" value="5" min="1" max="10" style="width:50px"></label><button id="previewAllocate">Preview PHÂN SERVER</button><button id="allocate" disabled>Chạy PHÂN SERVER</button><div id="allocatePreview"></div></div><div id="error" class="error"></div><section id="devices"></section><section id="results"></section><hr><button id="canary">Cập nhật 2 máy thử</button><button id="stable">Phát hành cho tất cả</button><div id="updateError" class="error"></div></main><script>(()=>{'use strict';const tg=window.Telegram&&window.Telegram.WebApp,auth=tg?String(tg.initData||''):'',selected=new Set();let state=null,ws=null,retry=0,timer=null,allocationCache=null;const el=id=>document.getElementById(id);if(tg){tg.ready();tg.expand()}const api=async(path,init={})=>{init.headers=Object.assign({},init.headers||{}, {'X-Telegram-Init-Data':auth,'Accept':'application/json'});if(init.body&&typeof init.body!=='string'){init.headers['Content-Type']='application/json';init.body=JSON.stringify(init.body)}const r=await fetch(path,init),d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.message||d.error||('HTTP '+r.status));return d},devices=()=>state&&Array.isArray(state.devices)?state.devices:[],render=()=>{el('devices').innerHTML=devices().map(d=>'<label class="device"><input type="checkbox" data-id="'+d.device_id+'" '+(selected.has(d.device_id)?'checked':'')+' '+(d.online?'':'disabled')+'><b>'+d.device_id+'</b><span class="'+(d.online?'ONLINE':'OFFLINE')+'">'+(d.online?'ONLINE':'OFFLINE')+'</span></label>').join('');el('devices').querySelectorAll('input').forEach(n=>n.onchange=()=>n.checked?selected.add(n.dataset.id):selected.delete(n.dataset.id));const b=state&&state.last_batch;el('results').innerHTML=b&&b.devices?b.devices.map(d=>'<div class="result">'+d.device_id+': '+d.history.join(' → ')+(d.reason?' — '+d.reason:'')+(Number.isFinite(d.app_count)?' [Apps: '+d.app_count+']':'')+(Number.isFinite(d.selected_count)?' [Selected: '+d.selected_count+']':'')+'</div>').join(''):''},load=async()=>{try{state=(await api('/aot/hub/api/state')).state;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},control=async(kind,ids,extra={})=>api('/aot/hub/api/control',{method:'POST',body:Object.assign({kind,target_device_ids:ids},extra)}),run=async kind=>{try{const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));if(!ids.length)throw Error('Hãy chọn ít nhất một máy ONLINE.');const d=await control(kind,ids);state.last_batch=d.batch;render();el('error').textContent=''}catch(e){el('error').textContent=e.message}},connect=()=>{if(!auth||!window.WebSocket)return;clearTimeout(timer);ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/aot/hub/api/ws?init_data='+encodeURIComponent(auth));ws.onopen=()=>{retry=0};ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='aot_hub_state'){state=d;render()}};ws.onclose=()=>{const delay=Math.min(30000,1000*Math.pow(2,retry++))*(.75+Math.random()*.5);timer=setTimeout(connect,delay)}};el('refresh').onclick=load;el('selectOnline').onclick=()=>{devices().filter(d=>d.online).forEach(d=>selected.add(d.device_id));render()};el('clear').onclick=()=>{selected.clear();render()};el('backup').onclick=()=>run('open_swift_backup');el('apps').onclick=()=>run('open_swift_apps');el('backupRestoreData').onclick=()=>run('backup_restore_data');el('canary').onclick=()=>control('update_canary').catch(e=>el('updateError').textContent=e.message);el('stable').onclick=()=>control('update_stable').catch(e=>el('updateError').textContent=e.message);el('previewAllocate').onclick=async()=>{try{const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));if(!ids.length)throw Error('Hãy chọn ít nhất một máy ONLINE.');const tabs=parseInt(el('tabCount').value);if(isNaN(tabs)||tabs<1||tabs>10)throw Error('Số tab không hợp lệ.');el('previewAllocate').disabled=true;const d=await control('preview_allocate_server',ids,{tabs});let html='<div style="max-height:300px;overflow-y:auto;background:#000;padding:10px;margin-top:10px">';for(const[id,list]of Object.entries(d.allocationMap)){html+='<div style="margin-bottom:8px"><b>'+id+'</b><br>'+list.map(x=>x.pkg+' : '+x.url).join('<br>')+'</div>';}html+='</div>';el('allocatePreview').innerHTML=html;el('allocate').disabled=false;el('error').textContent='';}catch(e){el('error').textContent=e.message;el('allocate').disabled=true;}finally{el('previewAllocate').disabled=false;}};el('allocate').onclick=async()=>{try{el('allocate').disabled=true;const ids=[...selected].filter(id=>devices().some(d=>d.device_id===id&&d.online));const tabs=parseInt(el('tabCount').value);const d=await control('allocate_server',ids,{tabs});state.last_batch=d.batch;render();el('allocatePreview').innerHTML='';el('error').textContent='';}catch(e){el('error').textContent=e.message;el('allocate').disabled=false;}};load();connect()})();</script></body></html>`;
 }
 
+async function handleAotHubPage() {
+  return new Response(
+    fleetHubHtml(),
+    {
+      status: 200,
+      headers: {
+        "Content-Type":
+          "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy":
+          "default-src 'self'; " +
+          "script-src 'self' https://telegram.org 'unsafe-inline'; " +
+          "img-src 'self' data:; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "connect-src 'self'; " +
+          "frame-ancestors https://web.telegram.org https://*.telegram.org",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+      },
+    }
+  );
+}
+
+async function handleAotHubState(
+  request,
+  env,
+  url
+) {
+  const auth = await requireAotHubAdmin(
+    request,
+    env
+  );
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const result = await fleetStateCall(
+    env,
+    "/aot/hub/state"
+  );
+  return noStoreJson(
+    result.data,
+    result.response.status
+  );
+}
+
+async function handleAotHubDashboardWebSocket(request, env, url) {
+  const user = await validateAotTelegramInitData(
+    url.searchParams.get("init_data"),
+    env
+  );
+  if (!user) {
+    return noStoreJson({ ok: false, error: "hub_unauthorized" }, 401);
+  }
+  if (
+    String(request.headers.get("Upgrade") || "").toLowerCase() !==
+    "websocket"
+  ) {
+    return noStoreJson({ ok: false, error: "upgrade_required" }, 426);
+  }
+  return fleetStateStub(env).fetch(
+    new Request(
+      "https://fleet-state.internal/aot/hub/dashboard-ws",
+      { method: "GET", headers: { Upgrade: "websocket" } }
+    )
+  );
+}
+
+function normalizeAotHubControl(body) {
+  if (
+    !body ||
+    typeof body !== "object"
+  ) {
+    return null;
+  }
+  const kind = String(
+    body.kind || ""
+  ).trim();
+  if (
+    [
+      "open_swift_backup",
+      "open_swift_apps",
+      "backup_restore_data",
+      "update_canary",
+      "update_stable",
+      "preview_allocate_server",
+      "allocate_server"
+    ].includes(kind)
+  ) {
+    const control = {
+      kind,
+    };
+    if (["open_swift_backup", "open_swift_apps", "backup_restore_data", "preview_allocate_server", "allocate_server"].includes(kind)) {
+      if (
+        !Array.isArray(body.target_device_ids) ||
+        body.target_device_ids.length < 1 ||
+        body.target_device_ids.length > AOT_MAX_TARGETS
+      ) {
+        return null;
+      }
+      control.target_device_ids = body.target_device_ids.map(String);
+      if (kind === "preview_allocate_server" || kind === "allocate_server") {
+        control.tabs = Number(body.tabs);
+        if (isNaN(control.tabs) || control.tabs < 1 || control.tabs > 10 || !Number.isInteger(control.tabs)) {
+          return null;
+        }
+      }
+    } else if (["update_canary", "update_stable"].includes(kind)) {
+      if (Array.isArray(body.target_device_ids)) {
+        if (body.target_device_ids.length > AOT_MAX_TARGETS) {
+          return null;
+        }
+        if (body.target_device_ids.length > 0) {
+          control.target_device_ids = body.target_device_ids.map(String);
+        }
+      }
+    }
+    return control;
+  }
+  return null;
+}
+
+
+
+async function handleAotHubControl(
+  request,
+  env
+) {
+  const auth = await requireAotHubAdmin(
+    request,
+    env
+  );
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const parsed = await readAotJson(request);
+  if (parsed.error) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: parsed.error,
+      },
+      400
+    );
+  }
+  const control = normalizeAotHubControl(
+    parsed.value
+  );
+  if (!control) {
+    return noStoreJson(
+      {
+        ok: false,
+        error: "invalid_hub_control",
+      },
+      400
+    );
+  }
+
+  if (control.kind === "preview_allocate_server" || control.kind === "allocate_server") {
+    try {
+      const resp = await fetch("https://raw.githubusercontent.com/tinhpr9/Aotscript/main/tong_hop_link.txt");
+      if (!resp.ok) throw new Error("Fetch tong_hop_link.txt failed");
+      const text = await resp.text();
+      
+      const allocationMap = parseTongHopLink(text, control.target_device_ids, control.tabs);
+      
+      if (control.kind === "preview_allocate_server") {
+        return noStoreJson({ ok: true, allocationMap });
+      } else {
+        // Attach allocationMap to control for allocate_server
+        control.allocationMap = allocationMap;
+      }
+    } catch (e) {
+      return noStoreJson({ ok: false, error: e.message }, 400);
+    }
+  }
+
+  const result = await fleetStateCall(
+    env,
+    "/aot/hub/control",
+    {
+      method: "POST",
+      body: {
+        protocol:
+          AOT_HUB_PROTOCOL_VERSION,
+        ...control,
+      },
+    }
+  );
+  return noStoreJson(
+    result.data,
+    result.response.status
+  );
+}
 
 function parseTongHopLink(text, target_device_ids, tabs) {
   const pkgs = ["com.tinh.vv.hi", "com.tinh.vv.hj", "com.tinh.vv.hk", "com.tinh.vv.hl", "com.tinh.vv.hm", "com.tinh.vv.hn", "com.tinh.vv.ho", "com.tinh.vv.hp", "com.tinh.vv.hq", "com.tinh.vv.hr"];
@@ -4636,6 +4137,19 @@ export default {
   async fetch(request, env, ctx) {
     try {
       const url = new URL(request.url);
+      if (request.method === "GET" && url.pathname === "/aot/hub") {
+        return await handleAotHubPage();
+      }
+      if (request.method === "GET" && url.pathname === "/aot/hub/api/state") {
+        return await handleAotHubState(request, env, url);
+      }
+      if (request.method === "GET" && url.pathname === "/aot/hub/api/ws") {
+        return await handleAotHubDashboardWebSocket(request, env, url);
+      }
+      if (request.method === "POST" && url.pathname === "/aot/hub/api/control") {
+        return await handleAotHubControl(request, env);
+      }
+
 
 
 
