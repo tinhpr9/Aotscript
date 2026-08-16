@@ -1,14 +1,10 @@
 # telegram_target_ids=m74,m88,m116,m117,m118,m153,m154
-# telegram_expires_at=1786879534662
-# telegram_command_id=1786793134662-227cede2
-UPDATE_SOLVER_SECURE
-
-# telegram_target_ids=m154
-# telegram_expires_at=1786815101124
-# telegram_command_id=1786814801124-d181a01e
-UPDATE_SOLVER_SECURE
-
-# telegram_target_ids=m74,m88,m116,m117,m118,m153,m154
 # telegram_expires_at=1786901270797
 # telegram_command_id=1786814870797-5679ae95
+UPDATE_SOLVER_SECURE
+
+# telegram_target_ids=m88,m116,m117,m118,m153,m154
+# telegram_expires_at=1786886328360
+# telegram_command_id=1786886028360-876d2a74
+UPDATE_DELTA
 UPDATE_SOLVER_SECURE
