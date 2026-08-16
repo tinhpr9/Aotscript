@@ -1012,7 +1012,6 @@ def _handle_worker_update(
         return True
     if action_already_processed(state, action_id):
         return True
-    mark_action_processed(state, action_id)
     command = [
         sys.executable, "-u", str(BOOTSTRAP_LAUNCHER), "update-action",
         "--action-id", action_id, "--channel", channel,
@@ -1029,7 +1028,8 @@ def _handle_worker_update(
             close_fds=True,
         )
     except OSError:
-        pass
+        return True
+    mark_action_processed(state, action_id)
     return True
 
 def _handle_allocate_server(
@@ -1245,7 +1245,7 @@ def _live_status_payload(
     if include_preview:
         try:
             frame = controller.screenshot_bytes()
-        except controller.AotControllerError:
+        except (controller.AotControllerError, OSError):
             frame = b""
         if frame:
             payload["preview_bytes"] = len(frame)
@@ -1268,7 +1268,10 @@ def _send_live_status(
     role: str | None = None,
     session_id: str | None = None,
 ) -> str | None:
-    snap = controller.snapshot(include_nodes=False)
+    try:
+        snap = controller.snapshot(include_nodes=False)
+    except (OSError, controller.AotControllerError):
+        return None
     current_fingerprint = snap.get("fingerprint")
     meaningful_change = (current_fingerprint != previous_fingerprint)
 
@@ -1278,6 +1281,8 @@ def _send_live_status(
         device_id=device_id,
         include_preview=include_preview,
         snapshot=snap,
+        role=role,
+        session_id=session_id,
     )
     _ws_send_json(sock, payload)
     return current_fingerprint
@@ -1607,20 +1612,14 @@ def reference_loop(
             except Exception:
                 pass
             previous_fingerprint = None
-            try:
-                previous_fingerprint = _send_live_status(
-                    sock,
-                    role="reference",
-                    session_id=session_id,
-                    device_id=local_id,
-                    previous_fingerprint=previous_fingerprint,
-                    force_preview=True,
-                )
-            except (
-                OSError,
-                controller.AotControllerError,
-            ):
-                previous_fingerprint = None
+            previous_fingerprint = _send_live_status(
+                sock,
+                role="reference",
+                session_id=session_id,
+                device_id=local_id,
+                previous_fingerprint=previous_fingerprint,
+                force_preview=True,
+            )
             next_status = (
                 time.monotonic()
                 + _get_live_status_initial_delay(local_id)
@@ -1628,21 +1627,15 @@ def reference_loop(
             while True:
                 now = time.monotonic()
                 if now >= next_status:
-                    try:
-                        previous_fingerprint = (
-                            _send_live_status(
-                                sock,
-                                role="reference",
-                                session_id=session_id,
-                                device_id=local_id,
-                                previous_fingerprint=previous_fingerprint,
-                            )
+                    previous_fingerprint = (
+                        _send_live_status(
+                            sock,
+                            role="reference",
+                            session_id=session_id,
+                            device_id=local_id,
+                            previous_fingerprint=previous_fingerprint,
                         )
-                    except (
-                        OSError,
-                        controller.AotControllerError,
-                    ):
-                        pass
+                    )
                     next_status = (
                         time.monotonic()
                         + _get_live_status_interval(local_id)
@@ -1703,22 +1696,16 @@ def reference_loop(
                         session_id=session_id,
                         message=message,
                     )
-                    try:
-                        previous_fingerprint = (
-                            _send_live_status(
-                                sock,
-                                role="reference",
-                                session_id=session_id,
-                                device_id=local_id,
-                                previous_fingerprint=previous_fingerprint,
-                                force_preview=True,
-                            )
+                    previous_fingerprint = (
+                        _send_live_status(
+                            sock,
+                            role="reference",
+                            session_id=session_id,
+                            device_id=local_id,
+                            previous_fingerprint=previous_fingerprint,
+                            force_preview=True,
                         )
-                    except (
-                        OSError,
-                        controller.AotControllerError,
-                    ):
-                        pass
+                    )
                 elif (
                     message.get("type")
                     == "aot_ack"
@@ -1820,20 +1807,14 @@ def follower_loop(
             except Exception:
                 pass
             previous_fingerprint = None
-            try:
-                previous_fingerprint = _send_live_status(
-                    sock,
-                    role="follower",
-                    session_id=session_id,
-                    device_id=local_id,
-                    previous_fingerprint=previous_fingerprint,
-                    force_preview=True,
-                )
-            except (
-                OSError,
-                controller.AotControllerError,
-            ):
-                pass
+            previous_fingerprint = _send_live_status(
+                sock,
+                role="follower",
+                session_id=session_id,
+                device_id=local_id,
+                previous_fingerprint=previous_fingerprint,
+                force_preview=True,
+            )
             next_status = (
                 time.monotonic()
                 + _get_live_status_initial_delay(local_id)
@@ -1842,21 +1823,15 @@ def follower_loop(
             while True:
                 now = time.monotonic()
                 if now >= next_status:
-                    try:
-                        previous_fingerprint = (
-                            _send_live_status(
-                                sock,
-                                role="follower",
-                                session_id=session_id,
-                                device_id=local_id,
-                                previous_fingerprint=previous_fingerprint,
-                            )
+                    previous_fingerprint = (
+                        _send_live_status(
+                            sock,
+                            role="follower",
+                            session_id=session_id,
+                            device_id=local_id,
+                            previous_fingerprint=previous_fingerprint,
                         )
-                    except (
-                        OSError,
-                        controller.AotControllerError,
-                    ):
-                        pass
+                    )
                     next_status = (
                         time.monotonic()
                         + _get_live_status_interval(local_id)
@@ -2136,22 +2111,16 @@ def follower_loop(
                     "AOT_ACTION_SUCCESS="
                     + action_id
                 )
-                try:
-                    previous_fingerprint = (
-                        _send_live_status(
-                            sock,
-                            role="follower",
-                            session_id=session_id,
-                            device_id=local_id,
-                            previous_fingerprint=previous_fingerprint,
-                            force_preview=True,
-                        )
+                previous_fingerprint = (
+                    _send_live_status(
+                        sock,
+                        role="follower",
+                        session_id=session_id,
+                        device_id=local_id,
+                        previous_fingerprint=previous_fingerprint,
+                        force_preview=True,
                     )
-                except (
-                    OSError,
-                    controller.AotControllerError,
-                ):
-                    pass
+                )
         except KeyboardInterrupt:
             raise
         except (
@@ -2205,17 +2174,11 @@ def fleet_loop(*, open_package: str | None = None) -> int:
             except Exception:
                 pass
             previous_fingerprint = None
-            try:
-                previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
-            except (OSError, controller.AotControllerError):
-                previous_fingerprint = None
+            previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=None)
             next_status = time.monotonic() + _get_live_status_initial_delay(local_id)
             while True:
                 if time.monotonic() >= next_status:
-                    try:
-                        previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=previous_fingerprint)
-                    except (OSError, controller.AotControllerError):
-                        previous_fingerprint = None
+                    previous_fingerprint = _send_live_status(sock, device_id=local_id, previous_fingerprint=previous_fingerprint)
                     next_status = time.monotonic() + _get_live_status_interval(local_id)
                 try:
                     opcode, payload = _ws_recv_frame(sock)
@@ -2235,12 +2198,9 @@ def fleet_loop(*, open_package: str | None = None) -> int:
                     continue
                 if not isinstance(message, dict):
                     continue
-                try:
-                    if _handle_worker_update(state, local_id=local_id, message=message):
-                        continue
-                    _handle_batch_action(cfg, state, local_id=local_id, message=message)
-                except (OSError, AotRelayError, controller.AotControllerError):
-                    pass
+                if _handle_worker_update(state, local_id=local_id, message=message):
+                    continue
+                _handle_batch_action(cfg, state, local_id=local_id, message=message)
         except KeyboardInterrupt:
             raise
         except (OSError, ConnectionError, AotRelayError) as exc:

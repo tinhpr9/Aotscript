@@ -177,17 +177,15 @@ res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1",
 assert res == "fp2"
 assert "preview_sha256" in sent_status[-1]
 
-# Snapshot error resilience: verify snapshot failure raises AotControllerError
+# Snapshot error resilience: verify snapshot failure returns None (gracefully isolates controller error)
 # and when recovering, previous_fingerprint=None ensures fresh preview
 def error_snapshot(*_a, **_kw):
     raise module.controller.AotControllerError("dumpsys_locked")
 module.controller.snapshot = error_snapshot
-caught_controller_error = False
-try:
-    module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
-except module.controller.AotControllerError:
-    caught_controller_error = True
-assert caught_controller_error, "Expected AotControllerError from failing snapshot"
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1", force_preview=False)
+assert res is None, "Expected None from failing snapshot"
+assert len(sent_status) == 0, "No status frame should be sent when snapshot fails"
 
 # Recovery: snapshot recovers -> status sent with preview
 module.controller.snapshot = fake_snapshot
