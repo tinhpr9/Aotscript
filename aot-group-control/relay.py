@@ -1038,7 +1038,7 @@ def _handle_allocate_server(
             if not isinstance(allocation, list) or not allocation:
                 terminal_ack("PREPARE_FAILED", executed=False, reason="invalid_allocation_format")
                 return True
-            prep_path = "/storage/emulated/0/Download/Shouko/server_links.txt.prep"
+            prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
             os.makedirs(os.path.dirname(prep_path), exist_ok=True)
             with open(prep_path, "w", encoding="utf-8") as f:
                 for item in allocation:
@@ -1055,7 +1055,7 @@ def _handle_allocate_server(
 
         links_path = "/storage/emulated/0/Download/Shouko/server_links.txt"
         bak_path = links_path + ".bak"
-        prep_path = links_path + ".prep"
+        prep_path = links_path + f".prep.{action_id}"
         
         import shutil
         existed_before = os.path.exists(links_path)
@@ -1095,10 +1095,18 @@ def _handle_allocate_server(
                 try: os.remove(links_path)
                 except: pass
             terminal_ack("FAILED", executed=False, reason="commit_failed: " + str(e))
+        finally:
+            import glob
+            try:
+                for old_prep in glob.glob(links_path + ".prep.*"):
+                    if old_prep != prep_path:
+                        try: os.remove(old_prep)
+                        except: pass
+            except: pass
         return True
 
     if action == "ABORT_ALLOCATE_SERVER":
-        prep_path = "/storage/emulated/0/Download/Shouko/server_links.txt.prep"
+        prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
         try: os.remove(prep_path)
         except: pass
         terminal_ack("FAILED", executed=False, reason="aborted_by_hub")

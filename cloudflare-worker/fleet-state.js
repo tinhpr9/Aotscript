@@ -778,7 +778,7 @@ export class FleetState
       this.aotLive.delete(identity.deviceId);
       await this.broadcastFleetState();
       const record = await this.readFleet();
-      if (record.last_batch && record.last_batch.action === "allocate_server" && !record.last_batch.commit_sent && !record.last_batch.abort_sent) {
+      if (record.last_batch && record.last_batch.action === AOT_ALLOCATE_SERVER_ACTION && !record.last_batch.commit_sent && !record.last_batch.abort_sent) {
           const device = record.last_batch.devices[identity.deviceId];
           if (device && !["FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE"].includes(device.status)) {
               device.status = "FAILED";
