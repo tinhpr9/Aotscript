@@ -23,14 +23,15 @@ await mod.evaluate();
 
 const store = new Map();
 const sockets = new Map();
+let scheduledAlarm = null;
 const ctx = {
-  storage: { get: async k => store.get(k), put: async (k, v) => store.set(k, structuredClone(v)), setAlarm: async () => {}, list: async () => new Map() },
-  getWebSockets: tag => sockets.get(tag) || [], getTags: () => [], acceptWebSocket() {}, waitUntil() {},
+  storage: { get: async k => store.get(k), put: async (k, v) => store.set(k, structuredClone(v)), setAlarm: async (t) => { scheduledAlarm = t; }, list: async () => new Map() },
+  getWebSockets: tag => sockets.get(tag) || [], getTags: (socket) => socket.tags || [], acceptWebSocket() {}, waitUntil() {},
 };
 const fleet = new mod.namespace.FleetState(ctx, { TELEGRAM_BOT_TOKEN: "tok" });
 const ids = Array.from({ length: 40 }, (_, i) => `m${i + 201}`);
 const record = await fleet.readFleet();
-for (const id of ids) { record.devices[id] = { device_id: id }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
+for (const id of ids) { record.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
 await fleet.writeFleet(record);
 
 let response = await fleet.dispatchFleetBatch(record, "OPEN_SWIFT_BACKUP", ids.slice(0, 2));
@@ -251,7 +252,7 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
 // Test explicit targets
 sRecord.last_update = null;
 fleet.resolveWorkerRelease = async () => ({ version: "2026.08.13.1", hash: "mock" });
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.15.01", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.01", device_ids: [ids[0], ids[1]] };
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};
@@ -265,7 +266,7 @@ if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_
   throw new Error("Explicit canary update did not select exactly the targeted device");
 }
 await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.15.01", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.01", device_ids: [ids[0], ids[1]] };
 await store.set("aot_session:test_explicit_targets", sRecord);
 
 // Stable with explicit targets (keeps exactly the targets)
@@ -292,7 +293,7 @@ if (invalidTargetBody.ok === true || invalidTargetBody.error !== "invalid_explic
 // Telegram Retry Tests
 const tgIds = ["m901", "m902"];
 let tgRecord = await fleet.readFleet();
-for (const id of tgIds) { tgRecord.devices[id] = { device_id: id }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
+for (const id of tgIds) { tgRecord.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
 await fleet.writeFleet(tgRecord);
 
 // 1. Simulate a batch dispatch for allocate_server
@@ -337,6 +338,193 @@ await fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST
 if (telegramCalls.length !== initialCalls + 3) throw new Error("Duplicate ACK triggered extra notification");
 
 Date.now = oldNow;
+// Reset last_batch
+let resetRecord = await fleet.readFleet();
+resetRecord.last_batch = null;
+await fleet.writeFleet(resetRecord);
+
+// Test 6: webSocketClose disconnect PREPARE logic
+const dcIds = ["m101", "m102"];
+let dcRecord = await fleet.readFleet();
+for (const id of dcIds) { dcRecord.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] }; fleet.aotLive.set(id, { capabilities: ["allocate_server_2pc"] }); sockets.set(`aot-device:${id}`, [{ send() {}, deserializeAttachment: () => ({ deviceId: id, capabilities: ["allocate_server_2pc"] }) }]); }
+await fleet.writeFleet(dcRecord);
+
+const dcRes = await fleet.dispatchFleetBatch(dcRecord, "ALLOCATE_SERVER", dcIds, { allocationMap: {} });
+if (!dcRes.ok) {
+  const data = await dcRes.json();
+  throw new Error(`dispatch failed in Test 6: ${JSON.stringify(data)}`);
+}
+dcRecord = await fleet.readFleet();
+
+// m101 disconnects before commit_decided
+await fleet.webSocketClose({ tags: ["aot-device:m101"] });
+dcRecord = await fleet.readFleet();
+if (!dcRecord.last_batch || !dcRecord.last_batch.devices["m101"]) {
+  console.error(JSON.stringify(dcRecord.last_batch));
+}
+if (dcRecord.last_batch.devices["m101"].status !== "ABORT_SENT") {
+  console.log("m101 status:", dcRecord.last_batch.devices["m101"].status);
+  throw new Error("Expected ABORT_SENT for m101");
+}
+if (dcRecord.last_batch.devices["m102"].status !== "ABORT_SENT") throw new Error("Expected ABORT_SENT for m102");
+if (!dcRecord.last_batch.abort_sent) throw new Error("Expected abort_sent true");
+
+// Test 7: webSocketClose disconnect after commit_decided
+let resetRecord2 = await fleet.readFleet();
+resetRecord2.last_batch = null;
+await fleet.writeFleet(resetRecord2);
+
+const cIds = ["m201", "m202"];
+let cRecord = await fleet.readFleet();
+for (const id of cIds) { cRecord.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] }; fleet.aotLive.set(id, { capabilities: ["allocate_server_2pc"] }); sockets.set(`aot-device:${id}`, [{ send() {}, deserializeAttachment: () => ({ deviceId: id, capabilities: ["allocate_server_2pc"] }) }]); }
+await fleet.writeFleet(cRecord);
+
+await fleet.dispatchFleetBatch(cRecord, "ALLOCATE_SERVER", cIds, { allocationMap: {} });
+cRecord = await fleet.readFleet();
+for (const id of cIds) {
+  await fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: id, action_id: cRecord.last_batch.action_id, batch_action: "ALLOCATE_SERVER", status: "PREPARE_READY", executed: false }) }));
+}
+cRecord = await fleet.readFleet();
+if (!cRecord.last_batch.commit_decided) throw new Error("Expected commit_decided true");
+
+// m201 disconnects
+await fleet.webSocketClose({ tags: ["aot-device:m201"] });
+cRecord = await fleet.readFleet();
+if (cRecord.last_batch.devices["m201"].status === "FAILED") throw new Error("Expected m201 to NOT be FAILED");
+if (cRecord.last_batch.devices["m201"].status === "ABORT_SENT") throw new Error("Expected m201 to NOT be ABORT_SENT");
+
+// Test 8: Capability stale storage test
+let resetRecord3 = await fleet.readFleet();
+resetRecord3.last_batch = null;
+await fleet.writeFleet(resetRecord3);
+
+const staleId = "m301";
+let staleRecord = await fleet.readFleet();
+staleRecord.devices[staleId] = { device_id: staleId, capabilities: ["allocate_server_2pc"] };
+await fleet.writeFleet(staleRecord);
+sockets.set(`aot-device:${staleId}`, [{ send() {}, deserializeAttachment: () => ({ deviceId: staleId, capabilities: [] }) }]);
+fleet.aotLive.set(staleId, { capabilities: [] });
+
+const resStale = await fleet.dispatchFleetBatch(staleRecord, "ALLOCATE_SERVER", [staleId], { allocationMap: {} });
+const dataStale = await resStale.json();
+if (resStale.status !== 409 || dataStale.error !== "worker_missing_allocate_server_2pc_capability") throw new Error("Expected worker_missing_allocate_server_2pc_capability");
+
+// Test 9: ALLOCATE_SERVER commit retry alarm scheduling without Telegram
+let resetRecord4 = await fleet.readFleet();
+resetRecord4.last_batch = null;
+await fleet.writeFleet(resetRecord4);
+
+const retryIds = ["m401", "m402"];
+let retryRecord = await fleet.readFleet();
+let retrySent = [];
+for (const id of retryIds) {
+  retryRecord.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] };
+  fleet.aotLive.set(id, { capabilities: ["allocate_server_2pc"] });
+  sockets.set(`aot-device:${id}`, [{
+    tags: [`aot-device:${id}`],
+    send(payload) { retrySent.push({ id, data: JSON.parse(payload) }); }
+  }]);
+}
+await fleet.writeFleet(retryRecord);
+
+scheduledAlarm = null;
+const retryRes = await fleet.dispatchFleetBatch(retryRecord, "ALLOCATE_SERVER", retryIds, { allocationMap: {} });
+if (!retryRes.ok) throw new Error("dispatch failed in Test 9");
+retryRecord = await fleet.readFleet();
+const retryActionId = retryRecord.last_batch.action_id;
+
+// Both devices ACK PREPARE_READY
+for (const id of retryIds) {
+  await fleet.dispatchFleetAck(new Request("https://test/aot/ack", {
+    method: "POST",
+    body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: id, action_id: retryActionId, batch_action: "ALLOCATE_SERVER", status: "PREPARE_READY", executed: false })
+  }));
+}
+
+retryRecord = await fleet.readFleet();
+if (!retryRecord.last_batch.commit_decided) throw new Error("commit_decided should be true in Test 9");
+if (retryRecord.last_batch.devices["m401"].status !== "COMMIT_SENT") throw new Error("m401 status should be COMMIT_SENT");
+if (!retryRecord.last_batch.devices["m401"].commit_retry_time) throw new Error("commit_retry_time should be set");
+if (!scheduledAlarm) throw new Error("scheduledAlarm should be scheduled on commit decision");
+
+const initialRetryAt = retryRecord.last_batch.devices["m401"].commit_retry_time;
+retrySent.length = 0;
+
+// Advance time to commit_retry_time (still before expires_at)
+const saveDateNow = Date.now;
+try {
+  Date.now = () => initialRetryAt + 100;
+  await fleet.alarm();
+  retryRecord = await fleet.readFleet();
+} finally {
+  Date.now = saveDateNow;
+}
+
+// Verify COMMIT was re-sent via alarm before expiry
+if (retrySent.length !== 2) throw new Error(`Expected 2 COMMIT retries sent via alarm, got ${retrySent.length}`);
+for (const item of retrySent) {
+  if (item.data.action !== "COMMIT_ALLOCATE_SERVER") throw new Error("Action sent on alarm retry is not COMMIT_ALLOCATE_SERVER");
+  if (item.data.action_id !== retryActionId) throw new Error("action_id mismatch on COMMIT retry");
+  if (item.data.expires_at !== retryRecord.last_batch.expires_at) throw new Error("expires_at mismatch on COMMIT retry");
+}
+if (retryRecord.last_batch.devices["m401"].commit_retries !== 1) throw new Error("commit_retries should be incremented to 1");
+if (retryRecord.last_batch.devices["m401"].commit_retry_time <= initialRetryAt) throw new Error("commit_retry_time should be updated with backoff");
+
+// Test 10: Single-flight lock allows new dispatch when previous batch is ABORT_SENT
+let resetRecord5 = await fleet.readFleet();
+resetRecord5.last_batch = {
+  action: "ALLOCATE_SERVER",
+  action_id: "prev-aborted-batch",
+  expires_at: Date.now() + 50000,
+  devices: {
+    m401: { device_id: "m401", status: "ABORT_SENT" },
+    m402: { device_id: "m402", status: "PREPARE_FAILED" }
+  }
+};
+await fleet.writeFleet(resetRecord5);
+
+const dispatchAfterAbort = await fleet.dispatchFleetBatch(resetRecord5, "ALLOCATE_SERVER", retryIds, { allocationMap: {} });
+if (!dispatchAfterAbort.ok) {
+  const errData = await dispatchAfterAbort.json();
+  throw new Error(`Expected dispatch to succeed after aborted batch, got error: ${JSON.stringify(errData)}`);
+}
+
+// Test 11: Monotonic rank — duplicate PREPARE_READY must NOT downgrade COMMIT_PENDING
+let rec11 = await fleet.readFleet();
+const actionId11 = rec11.last_batch.action_id;
+rec11.last_batch.devices["m401"].status = "COMMIT_PENDING";
+await fleet.writeFleet(rec11);
+
+await fleet.dispatchFleetAck(new Request("https://test/aot/ack", {
+  method: "POST",
+  body: JSON.stringify({
+    protocol: "fleet-batch-v1",
+    device_id: "m401",
+    action_id: actionId11,
+    batch_action: "ALLOCATE_SERVER",
+    status: "PREPARE_READY",
+    executed: false
+  })
+}));
+
+rec11 = await fleet.readFleet();
+if (rec11.last_batch.devices["m401"].status !== "COMMIT_PENDING") {
+  throw new Error(`Regression: COMMIT_PENDING was downgraded to ${rec11.last_batch.devices["m401"].status}`);
+}
+
+// Test 12: Telegram retry alarm scheduled even when batch has expired
+let rec12 = await fleet.readFleet();
+rec12.last_batch.expires_at = Date.now() - 5000;
+rec12.last_batch.telegram_chat_id = "123456";
+rec12.last_batch.telegram_notified = false;
+rec12.last_batch.telegram_retry_time = Date.now() + 25000;
+await fleet.writeFleet(rec12);
+
+scheduledAlarm = null;
+await fleet.scheduleNextAlarm();
+if (scheduledAlarm !== rec12.last_batch.telegram_retry_time) {
+  throw new Error(`Expected scheduledAlarm to be ${rec12.last_batch.telegram_retry_time}, got ${scheduledAlarm}`);
+}
 
 console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");

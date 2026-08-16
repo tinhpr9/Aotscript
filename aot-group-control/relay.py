@@ -38,6 +38,12 @@ DEVICE_GROUP_PATH = pathlib.Path(
 STATE_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/aot_group_state.json"
 )
+SERVER_LINKS_PATH = pathlib.Path(
+    "/storage/emulated/0/Download/Shouko/server_links.txt"
+)
+ROBLOX_SERVER_URL_PATTERN = re.compile(
+    r"^https://(www\.)?roblox\.com/games/\d+\?privateServerLinkCode=[0-9a-fA-F]+$"
+)
 PROTOCOL_VERSION = "phase3-1"
 MAX_WS_FRAME_BYTES = 512 * 1024
 MAX_HTTP_JSON_BYTES = 384 * 1024
@@ -85,8 +91,8 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.15.01"
-WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic")
+WORKER_VERSION = "aot-worker-2026.08.16.01"
+WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
 class AotRelayError(RuntimeError):
@@ -506,6 +512,25 @@ def mark_action_processed(
     _save_state(state)
 
 
+def mark_allocate_opened(
+    state: dict[str, Any],
+    action_id: str,
+) -> None:
+    results = state.get("allocate_action_results")
+    if not isinstance(results, dict):
+        results = {}
+    results[action_id] = {
+        "status": "OPENED",
+        "executed": True,
+    }
+    valid_ids = set(state.get("processed_action_ids", []))
+    valid_ids.add(action_id)
+    state["allocate_action_results"] = {
+        k: v for k, v in results.items() if k in valid_ids
+    }
+    mark_action_processed(state, action_id)
+
+
 def _launch_package(package: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9._]+", package):
         raise AotRelayError("invalid_package")
@@ -718,7 +743,7 @@ def _handle_batch_action(
     # Route BACKUP_RESTORE_DATA to its dedicated handler.
     if action == BACKUP_RESTORE_DATA_ACTION:
         return _handle_backup_restore_data(cfg, state, local_id=local_id, message=message)
-    if action == ALLOCATE_SERVER_ACTION:
+    if action in {"PREPARE_ALLOCATE_SERVER", "COMMIT_ALLOCATE_SERVER", "ABORT_ALLOCATE_SERVER"}:
         return _handle_allocate_server(cfg, state, local_id=local_id, message=message)
     if (
         message.get("protocol") not in {HUB_PROTOCOL_VERSION, "phase4-1"}
@@ -1016,6 +1041,14 @@ def _handle_allocate_server(
     action_id = normalize_action_id(message.get("action_id"))
     if not action_id:
         return True
+        
+    action = message.get("action")
+    if action not in {"PREPARE_ALLOCATE_SERVER", "COMMIT_ALLOCATE_SERVER", "ABORT_ALLOCATE_SERVER"}:
+        return True
+
+    targets = normalize_target_ids(message.get("target_device_ids"))
+    if local_id not in targets:
+        return True
 
     def terminal_ack(status: str, reason: str = None, executed: bool = False):
         res = {"status": status, "executed": executed}
@@ -1030,19 +1063,47 @@ def _handle_allocate_server(
     if expires_at <= int(time.time() * 1000):
         terminal_ack("TIMEOUT", executed=False)
         return True
-
-    action = message.get("action")
     if action == "PREPARE_ALLOCATE_SERVER":
+        if action_already_processed(state, action_id):
+            cached = (state.get("allocate_action_results") or {}).get(action_id)
+            if cached and cached.get("status") == "OPENED":
+                terminal_ack("OPENED", executed=True)
+            else:
+                terminal_ack("DUPLICATE", executed=False)
+            return True
+
         try:
             allocation = message.get("allocation")
-            if not isinstance(allocation, list) or not allocation:
+            if not isinstance(allocation, list) or not (1 <= len(allocation) <= 10):
                 terminal_ack("PREPARE_FAILED", executed=False, reason="invalid_allocation_format")
                 return True
-            prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
+                
+            seen_urls = set()
+            pkg_suffixes = ['i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r']
+            for i, item in enumerate(allocation):
+                if not isinstance(item, dict):
+                    terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_allocation_item_at_{i}")
+                    return True
+                pkg = item.get('pkg', '')
+                url = item.get('url', '')
+                if pkg != f"com.tinh.vv.h{pkg_suffixes[i]}":
+                    terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_package_order_at_{i}")
+                    return True
+                if not isinstance(url, str) or not ROBLOX_SERVER_URL_PATTERN.match(url):
+                    terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_roblox_url_at_{i}")
+                    return True
+                if url in seen_urls:
+                    terminal_ack("PREPARE_FAILED", executed=False, reason=f"duplicate_url_at_{i}")
+                    return True
+                seen_urls.add(url)
+
+            prep_path = f"{SERVER_LINKS_PATH}.prep.{action_id}"
+            temp_path = prep_path + ".tmp"
             os.makedirs(os.path.dirname(prep_path), exist_ok=True)
-            with open(prep_path, "w", encoding="utf-8") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 for item in allocation:
                     f.write(f"{item['pkg']},{item['url']}\n")
+            os.replace(temp_path, prep_path)
             terminal_ack("PREPARE_READY", executed=False)
         except Exception as e:
             terminal_ack("PREPARE_FAILED", executed=False, reason="prepare_failed: " + str(e))
@@ -1050,10 +1111,14 @@ def _handle_allocate_server(
 
     if action == "COMMIT_ALLOCATE_SERVER":
         if action_already_processed(state, action_id):
-            terminal_ack("DUPLICATE", executed=False)
+            cached = (state.get("allocate_action_results") or {}).get(action_id)
+            if cached and cached.get("status") == "OPENED":
+                terminal_ack("OPENED", executed=True)
+            else:
+                terminal_ack("DUPLICATE", executed=False)
             return True
 
-        links_path = "/storage/emulated/0/Download/Shouko/server_links.txt"
+        links_path = str(SERVER_LINKS_PATH)
         bak_path = links_path + ".bak"
         prep_path = links_path + f".prep.{action_id}"
         
@@ -1065,7 +1130,7 @@ def _handle_allocate_server(
             if not os.path.exists(prep_path):
                 terminal_ack("FAILED", executed=False, reason="missing_prep_file")
                 return True
-            os.rename(prep_path, links_path)
+            os.replace(prep_path, links_path)
             
             allocation = []
             with open(links_path, "r", encoding="utf-8") as f:
@@ -1077,8 +1142,6 @@ def _handle_allocate_server(
             terminal_ack("ALLOCATED", executed=True)
             try:
                 controller.open_roblox_servers(allocation)
-                terminal_ack("OPENED", executed=True)
-                mark_action_processed(state, action_id)
             except Exception as e:
                 if existed_before and os.path.exists(bak_path):
                     try: shutil.copy2(bak_path, links_path)
@@ -1087,6 +1150,17 @@ def _handle_allocate_server(
                     try: os.remove(links_path)
                     except: pass
                 terminal_ack("FAILED", executed=False, reason="open_servers_failed: " + str(e))
+                return True
+
+            # irreversible action succeeded -> journal before ACK
+            mark_allocate_opened(state, action_id)
+
+            try:
+                terminal_ack("OPENED", executed=True)
+            except Exception:
+                # Do not rollback, do not mark FAILED
+                pass
+            return True
         except Exception as e:
             if existed_before and os.path.exists(bak_path):
                 try: shutil.copy2(bak_path, links_path)
@@ -1095,18 +1169,17 @@ def _handle_allocate_server(
                 try: os.remove(links_path)
                 except: pass
             terminal_ack("FAILED", executed=False, reason="commit_failed: " + str(e))
-        finally:
-            import glob
-            try:
-                for old_prep in glob.glob(links_path + ".prep.*"):
-                    if old_prep != prep_path:
-                        try: os.remove(old_prep)
-                        except: pass
-            except: pass
-        return True
+            return True
 
     if action == "ABORT_ALLOCATE_SERVER":
-        prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
+        if action_already_processed(state, action_id):
+            cached = (state.get("allocate_action_results") or {}).get(action_id)
+            if cached and cached.get("status") == "OPENED":
+                terminal_ack("OPENED", executed=True)
+            else:
+                terminal_ack("DUPLICATE", executed=False)
+            return True
+        prep_path = f"{SERVER_LINKS_PATH}.prep.{action_id}"
         try: os.remove(prep_path)
         except: pass
         terminal_ack("FAILED", executed=False, reason="aborted_by_hub")
