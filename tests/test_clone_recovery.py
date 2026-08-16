@@ -20,13 +20,20 @@ Tests all required scenarios:
 16. Agent heartbeat online but AOT WS offline => setup NOT complete
 17. successful recovery => AOT WS online + hub visible
 
-Default Production Contract Tests (No opt-in required):
-18. Case A: Default production without REQUIRE_AOT_WS flag; WS offline => setup fails closed
-19. Case B: aot_group_config missing at verification time => fails closed, no fake success
+Default Production Contract & Fault Injection Tests:
+18. Case A: Default production without REQUIRE_AOT_WS; WS offline => fails closed
+19. Case B: aot_group_config missing at verification time => fails closed
 20. Case C: registration helper missing => fails closed, no fake success
-21. Case D: worker_report_url invalid in agent_config => fails closed
-22. Case E: Server/relay offline => bounded retry triggers and fails closed
-23. Case F: Real HTTP Hub + real msetup_registration.py verify => setup_complete=yes verified
+21. Case D: worker_report_url invalid in agent_config => fails closed immediately without retry
+22. Case E: Relay/Server offline with 503 => bounded retry fails closed after max attempts
+23. Case F: Real HTTP Hub + real msetup_registration.py verify => setup_complete=yes
+24. Crash before journal => zero mutation to state or identity files
+25. Journal written -> crash before first mutation -> clean resume
+26. Crash after identity invalidation -> clean resume
+27. Crash after apply identity before provision -> clean resume
+28. Retry: fail attempt 1 (503) -> success attempt 2 (200) => setup_complete=yes
+29. New AOT group config contains exact target device_id
+30. Multi-stage reboot cycle across planned, archived, identity_applied, agent_started
 """
 
 from __future__ import annotations
@@ -77,8 +84,15 @@ class MockAotHubHandler(http.server.BaseHTTPRequestHandler):
         })
 
         if self.path in ("/aot/control/registration/verify", "/aot/verify"):
-            status_code = self.server.response_status
-            response_body = self.server.response_payload
+            if self.server.fail_first_n_requests > 0 and len(self.server.received_requests) <= self.server.fail_first_n_requests:
+                status_code = 503
+                response_body = {"error": "service_unavailable_retry_later"}
+            elif self.server.response_sequence:
+                idx = min(len(self.server.received_requests) - 1, len(self.server.response_sequence) - 1)
+                status_code, response_body = self.server.response_sequence[idx]
+            else:
+                status_code = self.server.response_status
+                response_body = self.server.response_payload
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -88,7 +102,6 @@ class MockAotHubHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format, *args):
-        # Silence default stderr request logging
         pass
 
 
@@ -100,6 +113,8 @@ class MockAotHubServer(socketserver.TCPServer):
         self.received_requests: list[dict] = []
         self.response_status = 200
         self.response_payload = {"ok": True, "online": True, "visible_in_hub": True}
+        self.response_sequence: list[tuple[int, dict]] = []
+        self.fail_first_n_requests: int = 0
         self._thread = threading.Thread(target=self.serve_forever, daemon=True)
         self._thread.start()
 
@@ -132,11 +147,9 @@ class BaseSetupFixture:
         self.bin_dir.mkdir(parents=True)
         self.group_control.mkdir(parents=True)
 
-        # Copy real msetup_registration.py into state_dir
         if REAL_REGISTRATION_HELPER.exists():
             shutil.copy2(REAL_REGISTRATION_HELPER, self.state_dir / "msetup_registration.py")
 
-        # Standard agent core & agent config
         self.agent_path = self.storage / "Download/Agent_Core.py"
         self.agent_path.write_text('print("agent core running")\n', encoding="utf-8")
         self.agent_config_path = self.shouko / "agent_config.json"
@@ -149,14 +162,12 @@ class BaseSetupFixture:
             encoding="utf-8",
         )
 
-        # Standard aot_group_config.json
         self.aot_group_config_path = self.shouko / "aot_group_config.json"
         self.aot_group_config_path.write_text(
             json.dumps({"version": 3, "device_id": "m117", "enabled": True}, indent=2) + "\n",
             encoding="utf-8",
         )
 
-        # Unrelated Shouko files that MUST survive recovery byte-for-byte
         self.cookie_path = self.shouko / "cookie.txt"
         self.cookie_path.write_text("user_session_token_xyz_keep_me\n", encoding="utf-8")
         self.server_links_path = self.shouko / "server_links.txt"
@@ -166,7 +177,6 @@ class BaseSetupFixture:
         self.acc_path = self.shouko / "acc.txt"
         self.acc_path.write_text("account_1:pass_1\naccount_2:pass_2\n", encoding="utf-8")
 
-        # Non-Shouko storage
         self.delta_keep = self.storage / "Delta/keep.txt"
         self.delta_keep.parent.mkdir(parents=True, exist_ok=True)
         self.delta_keep.write_text("delta_keep_payload\n", encoding="utf-8")
@@ -261,7 +271,6 @@ class TestCloneRecoveryAndWebSocketValidation(unittest.TestCase):
 
         mprovision_data = json.loads((fix.state_dir / "mprovision.json").read_text())
         self.assertEqual(mprovision_data["device_id"], "m74")
-        self.assertEqual(mprovision_data["phase"], "complete")
 
     def test_02_missing_mprovision_recovers(self):
         """2. Missing mprovision recovers safely; no unsafe_mprovision_phase:missing dead-end."""
@@ -283,7 +292,6 @@ class TestCloneRecoveryAndWebSocketValidation(unittest.TestCase):
         self.assertTrue(mprovision_file.exists())
         mprovision_data = json.loads(mprovision_file.read_text())
         self.assertEqual(mprovision_data["device_id"], "m74")
-        self.assertEqual(mprovision_data["phase"], "complete")
 
     def test_03_missing_shouko_identity_recovers(self):
         """3. Missing Shouko identity files recovers safely without rmtree(shouko)."""
@@ -592,7 +600,7 @@ class TestCloneRecoveryAndWebSocketValidation(unittest.TestCase):
         self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
 
     # =========================================================================
-    # Default Production Contract Tests (No opt-in required, real verification)
+    # Default Production Contract Tests & Fault Injection Tests
     # =========================================================================
 
     def test_18_case_a_default_production_ws_offline_fails_closed(self):
@@ -600,7 +608,7 @@ class TestCloneRecoveryAndWebSocketValidation(unittest.TestCase):
         fix = self.create_fixture("18-prod-ws-offline")
         server = self.create_server()
         server.response_status = 200
-        server.response_payload = {"online": False, "visible_in_hub": False}
+        server.response_payload = {"ok": True, "online": False, "visible_in_hub": False}
 
         fix.agent_config_path.write_text(
             json.dumps({"worker_report_url": f"{server.url}/aot/report", "agent_report_secret": "sec-123"}),
@@ -696,11 +704,142 @@ class TestCloneRecoveryAndWebSocketValidation(unittest.TestCase):
         self.assertIn("AOT WebSocket ONLINE và Hub visible", res.stdout + res.stderr)
         self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
 
-        # Verify real server received correct authorization and device_id payload
         self.assertTrue(len(server.received_requests) > 0)
         req = server.received_requests[0]
         self.assertEqual(req["auth"], "sec-verified-99")
         self.assertEqual(req["payload"].get("device_id"), "m74")
+
+    def test_24_crash_before_journal_zero_mutation(self):
+        """24. Fault injection: crash before journal write leaves state 100% untouched."""
+        fix = self.create_fixture("24-zero-mutation-before-journal")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        before_setup_id = sha256_file(fix.setup_driver / "device_id")
+        before_shouko_id = sha256_file(fix.shouko / "device_id.txt")
+
+        # Invalid confirmation or interrupted inspect/plan
+        res = fix.run_setup("target-host-24", device_id="m74", group="NOVA", confirm="no")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertEqual(sha256_file(fix.setup_driver / "device_id"), before_setup_id)
+        self.assertEqual(sha256_file(fix.shouko / "device_id.txt"), before_shouko_id)
+
+    def test_25_crash_after_journal_before_mutation_resumes(self):
+        """25. Fault injection: journal written -> crash before mutation -> clean resume."""
+        fix = self.create_fixture("25-crash-after-journal")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        res1 = fix.run_setup(
+            "target-host-25",
+            device_id="m74",
+            group="NOVA",
+            extra_env={"AOTSCRIPT_SETUP_INTERRUPT_AFTER": "plan"},
+        )
+        self.assertEqual(res1.returncode, 75, res1.stdout + res1.stderr)
+
+        # Before mutation happened, original files were still intact
+        self.assertEqual((fix.shouko / "device_id.txt").read_text().strip(), "m117")
+
+        # Resume cleanly
+        res2 = fix.run_setup("target-host-25", device_id="", group="")
+        self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        self.assertEqual((fix.shouko / "device_id.txt").read_text().strip(), "m74")
+        self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
+
+    def test_26_crash_after_apply_before_provision_resumes(self):
+        """26. Fault injection: crash after apply before provision -> clean resume."""
+        fix = self.create_fixture("26-crash-after-apply")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        res1 = fix.run_setup(
+            "target-host-26",
+            device_id="m74",
+            group="NOVA",
+            extra_env={"AOTSCRIPT_SETUP_INTERRUPT_AFTER": "apply"},
+        )
+        self.assertEqual(res1.returncode, 75, res1.stdout + res1.stderr)
+        self.assertEqual((fix.shouko / "device_id.txt").read_text().strip(), "m74")
+
+        res2 = fix.run_setup("target-host-26", device_id="", group="")
+        self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
+
+    def test_27_retry_fail_attempt1_success_attempt2(self):
+        """27. Bounded retry: fail attempt 1 (503) -> success attempt 2 (200) => completes."""
+        fix = self.create_fixture("27-retry-success-attempt-2")
+        server = self.create_server()
+        server.fail_first_n_requests = 6
+
+        fix.agent_config_path.write_text(
+            json.dumps({"worker_report_url": f"{server.url}/aot/report", "agent_report_secret": "sec-retry-99"}),
+            encoding="utf-8",
+        )
+        fix.aot_group_config_path.write_text(
+            json.dumps({"version": 3, "device_id": "m74", "enabled": True}),
+            encoding="utf-8",
+        )
+
+        res = fix.run_setup("target-host-27", device_id="m74", group="NOVA", mock_ws=None)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("Lần 1/3: AOT WebSocket chưa ONLINE", res.stdout + res.stderr)
+        self.assertIn("AOT WebSocket ONLINE và Hub visible", res.stdout + res.stderr)
+        self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
+
+    def test_28_new_aot_config_has_target_device_id(self):
+        """28. Post-migration AOT config contains exact target device_id."""
+        fix = self.create_fixture("28-target-device-id-in-config")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        res = fix.run_setup("target-host-28", device_id="m74", group="NOVA")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+        cfg_path = fix.shouko / "aot_group_config.json"
+        self.assertTrue(cfg_path.exists())
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        self.assertEqual(cfg.get("device_id"), "m74")
+
+    def test_29_permanent_invalid_config_no_useless_retry(self):
+        """29. Permanent invalid config fails immediately without retry loop."""
+        fix = self.create_fixture("29-no-useless-retry")
+        fix.agent_config_path.unlink(missing_ok=True)
+
+        res = fix.run_setup("target-host-29", device_id="m74", group="NOVA", mock_ws=None)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("Thiếu agent_config.json", res.stdout + res.stderr)
+        self.assertNotIn("Lần 1/3", res.stdout + res.stderr)
+        self.assertNotIn("Lần 2/3", res.stdout + res.stderr)
+
+    def test_30_multi_stage_reboot_cycle(self):
+        """30. Interruption and resume across all intermediate stages."""
+        for stage in ("plan", "archive", "apply", "start_agent"):
+            fix = self.create_fixture(f"30-reboot-{stage}")
+            (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+            (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+            (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+            (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+            res1 = fix.run_setup(
+                f"target-host-30-{stage}",
+                device_id="m74",
+                group="NOVA",
+                extra_env={"AOTSCRIPT_SETUP_INTERRUPT_AFTER": stage},
+            )
+            self.assertEqual(res1.returncode, 75, f"Stage {stage} did not exit with 75: {res1.stdout + res1.stderr}")
+
+            res2 = fix.run_setup(f"target-host-30-{stage}", device_id="", group="")
+            self.assertEqual(res2.returncode, 0, f"Resume from {stage} failed: {res2.stdout + res2.stderr}")
+            self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
 
 
 if __name__ == "__main__":

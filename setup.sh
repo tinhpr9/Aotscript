@@ -687,80 +687,45 @@ def plan(old_id, new_id, new_group, host_hash):
         backup = pathlib.Path(str(base_backup) + f"-{counter}")
     backup.mkdir(parents=True, mode=0o700)
 
-    if mode == "recovery":
-        # Allowlist backup of existing identity files before any mutation
-        manifest_entries = []
-        sources = [
-            ("setup-device-id", setup_dir / "device_id"),
-            ("setup-device-group", setup_dir / "device_group"),
-            ("setup-host-fingerprint", setup_dir / "host_fingerprint"),
-            ("setup-provision-initialized", setup_dir / "provision_initialized"),
-            ("setup-complete", setup_dir / "setup_complete"),
-            ("setup-bootstrap-ui-done", setup_dir / "bootstrap_ui_done"),
-            ("mprovision", mprovision),
-            ("shouko-device-id", shouko / "device_id.txt"),
-            ("shouko-device-group", shouko / "device_group.txt"),
-            ("shouko-agent-state", shouko / "agent_state.json"),
-            ("shouko-provision-report-json", shouko / "provision_report.json"),
-            ("shouko-provision-report-text", shouko / "provision_report.txt"),
-            ("shouko-aot-group-config", shouko / "aot_group_config.json"),
-        ]
-        for label, source in sources:
-            if not source.exists() or not source.is_file():
-                continue
-            destination = backup / label
-            shutil.copy2(source, destination)
-            digest = hashlib.sha256(destination.read_bytes()).hexdigest()
-            manifest_entries.append({
-                "source_path": str(source),
-                "archive_path": str(destination),
-                "sha256": digest,
-            })
-        manifest = {
-            "schema_version": 1,
-            "mode": "recovery",
-            "source_id": old_id,
-            "target_id": new_id,
-            "target_group": new_group,
-            "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "files": manifest_entries,
-        }
-        atomic_json(backup / "manifest.json", manifest)
-
-        # Allowlist-based invalidation of identity state (NEVER touch agent_config.json, server_links, etc.)
-        for file_to_clean in (
-            shouko / "device_id.txt",
-            shouko / "device_group.txt",
-            shouko / "provision_report.json",
-            shouko / "provision_report.txt",
-            shouko / "aot_group_config.json",
-            setup_dir / "device_id",
-            setup_dir / "device_group",
-            setup_dir / "host_fingerprint",
-            setup_dir / "provision_initialized",
-            setup_dir / "setup_complete",
-            setup_dir / "wizard_started",
-            setup_dir / "bootstrap_ui_done",
-        ):
-            try:
-                file_to_clean.unlink()
-            except FileNotFoundError:
-                pass
-        if mprovision.exists():
-            mprovision.unlink()
-
-        gc_dir = pathlib.Path.home() / (".aot-" + "group" + "-control")
-        if gc_dir.exists():
-            for state_file in (
-                "aot_group_state.json",
-                "aot_worker_update_pending.json",
-                "aot_worker_update_health.json",
-                "aot_worker_version.json",
-            ):
-                try:
-                    (gc_dir / state_file).unlink()
-                except FileNotFoundError:
-                    pass
+    # Create backup and manifest before any mutation
+    manifest_entries = []
+    sources = [
+        ("setup-device-id", setup_dir / "device_id"),
+        ("setup-device-group", setup_dir / "device_group"),
+        ("setup-host-fingerprint", setup_dir / "host_fingerprint"),
+        ("setup-provision-initialized", setup_dir / "provision_initialized"),
+        ("setup-complete", setup_dir / "setup_complete"),
+        ("setup-wizard-started", setup_dir / "wizard_started"),
+        ("setup-bootstrap-ui-done", setup_dir / "bootstrap_ui_done"),
+        ("mprovision", mprovision),
+        ("shouko-device-id", shouko / "device_id.txt"),
+        ("shouko-device-group", shouko / "device_group.txt"),
+        ("shouko-agent-state", shouko / "agent_state.json"),
+        ("shouko-provision-report-json", shouko / "provision_report.json"),
+        ("shouko-provision-report-text", shouko / "provision_report.txt"),
+        ("shouko-aot-group-config", shouko / "aot_group_config.json"),
+    ]
+    for label, source in sources:
+        if not source.exists() or not source.is_file():
+            continue
+        destination = backup / label
+        shutil.copy2(source, destination)
+        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        manifest_entries.append({
+            "source_path": str(source),
+            "archive_path": str(destination),
+            "sha256": digest,
+        })
+    manifest = {
+        "schema_version": 1,
+        "mode": mode,
+        "source_id": old_id,
+        "target_id": new_id,
+        "target_group": new_group,
+        "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "files": manifest_entries,
+    }
+    atomic_json(backup / "manifest.json", manifest)
 
     journal = {
         "schema_version": 1,
@@ -821,13 +786,13 @@ def mark_agent_stopped():
     data = load_journal()
     if data["stage"] == "planned":
         save_journal(data, "agent_stopped")
-    elif data["stage"] not in {"agent_stopped", "archived", "identity_applied", "complete"}:
+    elif data["stage"] not in {"agent_stopped", "archived", "identity_applied", "agent_started", "complete"}:
         fail(f"invalid_migration_stage:{data['stage']}")
 
 
 def archive_old_state():
     data = load_journal()
-    if data["stage"] in {"archived", "identity_applied", "complete"}:
+    if data["stage"] in {"archived", "identity_applied", "agent_started", "complete"}:
         print("MIGRATION_ARCHIVE=ALREADY_DONE")
         return
     if data["stage"] != "agent_stopped":
@@ -844,13 +809,17 @@ def archive_old_state():
         ("setup-device-id", setup_dir / "device_id"),
         ("setup-device-group", setup_dir / "device_group"),
         ("setup-host-fingerprint", setup_dir / "host_fingerprint"),
+        ("setup-provision-initialized", setup_dir / "provision_initialized"),
+        ("setup-complete", setup_dir / "setup_complete"),
+        ("setup-wizard-started", setup_dir / "wizard_started"),
+        ("setup-bootstrap-ui-done", setup_dir / "bootstrap_ui_done"),
         ("mprovision", mprovision),
         ("shouko-device-id", shouko / "device_id.txt"),
         ("shouko-device-group", shouko / "device_group.txt"),
-        ("agent-state", shouko / "agent_state.json"),
-        ("provision-report-json", shouko / "provision_report.json"),
-        ("provision-report-text", shouko / "provision_report.txt"),
-        ("aot-group-config", shouko / "aot_group_config.json"),
+        ("shouko-agent-state", shouko / "agent_state.json"),
+        ("shouko-provision-report-json", shouko / "provision_report.json"),
+        ("shouko-provision-report-text", shouko / "provision_report.txt"),
+        ("shouko-aot-group-config", shouko / "aot_group_config.json"),
     ]
     archived_sources = {item.get("source_path") for item in manifest_entries if isinstance(item, dict)}
     for label, source in sources:
@@ -886,7 +855,7 @@ def archive_old_state():
 
 def apply_identity():
     data = load_journal()
-    if data["stage"] in {"identity_applied", "complete"}:
+    if data["stage"] in {"identity_applied", "agent_started", "complete"}:
         print("MIGRATION_IDENTITY=ALREADY_APPLIED")
         return
     if data["stage"] != "archived":
@@ -917,25 +886,34 @@ def apply_identity():
         except FileNotFoundError:
             pass
 
-    aot_cfg = shouko / "aot_group_config.json"
-    if aot_cfg.exists():
-        try:
-            cfg_data = json.loads(aot_cfg.read_text(encoding="utf-8"))
-            if isinstance(cfg_data, dict):
-                cfg_data["device_id"] = new_id
-                atomic_json(aot_cfg, cfg_data)
-        except Exception:
+    gc_dir = pathlib.Path.home() / (".aot-" + "group" + "-control")
+    if gc_dir.exists():
+        for state_file in (
+            "aot_group_state.json",
+            "aot_worker_update_pending.json",
+            "aot_worker_update_health.json",
+            "aot_worker_version.json",
+        ):
             try:
-                aot_cfg.unlink()
+                (gc_dir / state_file).unlink()
             except FileNotFoundError:
                 pass
+
+    aot_cfg = shouko / "aot_group_config.json"
+    new_aot_config = {
+        "version": 3,
+        "device_id": new_id,
+        "enabled": True,
+        "open_package": None,
+    }
+    atomic_json(aot_cfg, new_aot_config)
 
     new_mprovision = {
         "version": provision_version,
         "provision_ref": provision_ref,
         "device_id": new_id,
         "device_group": new_group,
-        "phase": "complete",
+        "phase": "complete" if data.get("mode") == "full" else "identity_applied",
         "run_id": f"clone-{data['created_at'].replace(':', '').replace('-', '')}-{new_id}",
         "backup_before": "",
         "backup_before_remote": "",
@@ -971,9 +949,18 @@ def apply_identity():
     print("MIGRATION_IDENTITY=OK")
 
 
-def mark_complete():
+def mark_agent_started():
     data = load_journal()
     if data["stage"] == "identity_applied":
+        save_journal(data, "agent_started")
+    elif data["stage"] not in {"agent_started", "complete"}:
+        fail(f"invalid_migration_stage:{data['stage']}")
+    print("MIGRATION_AGENT_STARTED=OK")
+
+
+def mark_complete():
+    data = load_journal()
+    if data["stage"] in {"identity_applied", "agent_started"}:
         save_journal(data, "complete")
     elif data["stage"] != "complete":
         fail(f"invalid_migration_stage:{data['stage']}")
@@ -988,6 +975,7 @@ dispatch = {
     "mark-agent-stopped": mark_agent_stopped,
     "archive": archive_old_state,
     "apply": apply_identity,
+    "mark-agent-started": mark_agent_started,
     "complete": mark_complete,
 }
 if command not in dispatch:
@@ -1145,33 +1133,51 @@ PY
     return 1
   }
 
-  if output="$(python "$aot_register_helper" verify --origin "$origin" --agent-config "$agent_cfg" --aot-config "$aot_cfg" --device-id "$device_id" --timeout 15 2>&1)"; then
-    if printf '%s\n' "$output" | grep -Fq "AOT_SERVER_ONLINE=YES" &&
-       printf '%s\n' "$output" | grep -Fq "AOT_HUB_VISIBLE=YES"; then
-      emit OK "AOT WebSocket ONLINE và Hub visible cho thiết bị $device_id."
-      return 0
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if output="$(python "$aot_register_helper" verify --origin "$origin" --agent-config "$agent_cfg" --aot-config "$aot_cfg" --device-id "$device_id" --timeout 5 2>&1)"; then
+      if printf '%s\n' "$output" | grep -Fq "AOT_SERVER_ONLINE=YES" &&
+         printf '%s\n' "$output" | grep -Fq "AOT_HUB_VISIBLE=YES"; then
+        verify_ok=1
+        break
+      fi
     fi
+    emit WARN "Lần $attempt/$max_attempts: AOT WebSocket chưa ONLINE trong Hub ($output). Đang thử lại..."
+    attempt=$((attempt + 1))
+    [ "$attempt" -le "$max_attempts" ] && sleep 2
+  done
+
+  if [ "$verify_ok" -eq 1 ]; then
+    emit OK "AOT WebSocket ONLINE và Hub visible cho thiết bị $device_id."
+    return 0
   fi
 
-  emit ERROR "AOT WebSocket không kết nối hoặc Hub không thấy thiết bị $device_id: $output"
+  emit ERROR "AOT WebSocket không kết nối hoặc Hub không thấy thiết bị $device_id sau $max_attempts lần thử: $output"
   return 1
 }
 
 resume_pending_migration() {
-  local host_hash="$1" output stage source_id target_id
+  local host_hash="$1" output stage source_id target_id target_group
   output="$(identity_call journal-status "$host_hash")" || die "Journal migration không hợp lệ."
   stage="$(printf '%s\n' "$output" | awk -F= '$1=="MIGRATION_STATUS" {print $2}')"
   [ "$stage" != NONE ] || return 1
   [ "$stage" != complete ] || return 1
   source_id="$(printf '%s\n' "$output" | awk -F= '$1=="MIGRATION_SOURCE_ID" {print $2}')"
   target_id="$(printf '%s\n' "$output" | awk -F= '$1=="MIGRATION_TARGET_ID" {print $2}')"
+  target_group="$(printf '%s\n' "$output" | awk -F= '$1=="MIGRATION_TARGET_GROUP" {print $2}')"
   emit INFO "Resume migration $source_id → $target_id tại stage=$stage"
+
   if [ "$stage" = planned ]; then
+    if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] &&
+       [ "${AOTSCRIPT_SETUP_INTERRUPT_AFTER:-}" = plan ]; then
+      emit WARN "TEST: ngắt có chủ đích sau plan (trước mutation)."
+      return 75
+    fi
     CURRENT_STEP="clone-stop-agent"
     stop_agent_safely
     identity_call mark-agent-stopped >/dev/null || die "Không journal được agent_stopped."
     stage=agent_stopped
   fi
+
   if [ "$stage" = agent_stopped ]; then
     CURRENT_STEP="clone-archive"
     identity_call archive >/dev/null || die "Không archive được foreign state."
@@ -1182,19 +1188,38 @@ resume_pending_migration() {
     fi
     stage=archived
   fi
+
   if [ "$stage" = archived ]; then
     CURRENT_STEP="clone-identity"
     identity_call apply >/dev/null || die "Không apply được identity mới."
+    if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] &&
+       [ "${AOTSCRIPT_SETUP_INTERRUPT_AFTER:-}" = apply ]; then
+      emit WARN "TEST: ngắt có chủ đích sau apply identity."
+      return 75
+    fi
     stage=identity_applied
   fi
+
   if [ "$stage" = identity_applied ]; then
     CURRENT_STEP="clone-start-agent"
     start_agent_safely
-    verify_aot_online "$target_id" || die "AOT WebSocket chưa ONLINE sau migration."
-    identity_call complete >/dev/null || die "Không complete được journal migration."
+    identity_call mark-agent-started >/dev/null || die "Không journal được agent_started."
+    if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] &&
+       [ "${AOTSCRIPT_SETUP_INTERRUPT_AFTER:-}" = start_agent ]; then
+      emit WARN "TEST: ngắt có chủ đích sau start agent."
+      return 75
+    fi
+    stage=agent_started
   fi
-  emit OK "Migration identity đã hoàn tất và Agent lifecycle đã restart."
-  return 0
+
+  if [ "$stage" = agent_started ]; then
+    SELECTED_DEVICE_ID="$target_id"
+    SELECTED_DEVICE_GROUP="$target_group"
+    emit OK "Migration identity $source_id → $target_id đã sẵn sàng; tiếp tục provision & AOT validation."
+    return 0
+  fi
+
+  die "Migration stage không xác định: $stage"
 }
 
 download_provision() {
@@ -1311,12 +1336,14 @@ start_wizard() {
     verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
     state_write wizard_started yes
     state_write setup_complete yes
+    identity_call complete >/dev/null 2>&1 || true
     return 0
   fi
   phase="$(read_mprovision_phase "$device_id" "$group")" || die "Không đọc được phase wizard."
   if [ "$phase" = complete ]; then
     verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
     state_write setup_complete yes
+    identity_call complete >/dev/null 2>&1 || true
     emit OK "Identity hợp lệ; workflow complete, không replay provision/backup/restore."
     return 0
   fi
@@ -1331,6 +1358,7 @@ start_wizard() {
   verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE sau khi chạy wizard."
   state_write wizard_started yes
   state_write setup_complete yes
+  identity_call complete >/dev/null 2>&1 || true
 }
 
 choose_identity() {
