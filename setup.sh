@@ -551,12 +551,14 @@ def source_snapshot():
     entries = []
     setup_id = setup_dir / "device_id"
     setup_group = setup_dir / "device_group"
-    if setup_id.exists() != setup_group.exists():
-        fail(f"incomplete_identity_pair:{setup_dir}")
+    s_id = None
+    s_grp = None
     if setup_id.exists():
-        entries.append(("setup-driver", setup_id, setup_group,
-                        valid_id(read_text(setup_id), setup_id),
-                        valid_group(read_text(setup_group), setup_group)))
+        s_id = valid_id(read_text(setup_id), setup_id)
+    if setup_group.exists():
+        s_grp = valid_group(read_text(setup_group), setup_group)
+    if s_id or s_grp:
+        entries.append(("setup-driver", setup_id, setup_group, s_id or "", s_grp or ""))
 
     phase = ""
     if mprovision.exists():
@@ -571,12 +573,14 @@ def source_snapshot():
 
     shouko_id = shouko / "device_id.txt"
     shouko_group = shouko / "device_group.txt"
-    if shouko_id.exists() != shouko_group.exists():
-        fail(f"incomplete_identity_pair:{shouko}")
+    sh_id = None
+    sh_grp = None
     if shouko_id.exists():
-        entries.append(("shouko", shouko_id, shouko_group,
-                        valid_id(read_text(shouko_id), shouko_id),
-                        valid_group(read_text(shouko_group), shouko_group)))
+        sh_id = valid_id(read_text(shouko_id), shouko_id)
+    if shouko_group.exists():
+        sh_grp = valid_group(read_text(shouko_group), shouko_group)
+    if sh_id or sh_grp:
+        entries.append(("shouko", shouko_id, shouko_group, sh_id or "", sh_grp or ""))
     return entries, phase
 
 
@@ -595,19 +599,21 @@ def inspect(host_hash):
             fail(f"host_binding_without_identity:{binding}")
         print("IDENTITY_STATUS=FRESH")
         return
-    ids = {entry[3] for entry in entries}
-    groups = {entry[4] for entry in entries}
-    if len(ids) != 1 or len(groups) != 1:
+    ids = {entry[3] for entry in entries if entry[3]}
+    groups = {entry[4] for entry in entries if entry[4]}
+    if len(ids) > 1 or len(groups) > 1:
         print("IDENTITY_STATUS=CONFLICT")
         for name, id_path, group_path, device_id, group in entries:
             print(f"IDENTITY_CONFLICT={name}|{id_path}|{device_id}|{group_path}|{group}")
         raise SystemExit(21)
-    device_id = next(iter(ids))
-    group = next(iter(groups))
+    device_id = next(iter(ids)) if ids else ""
+    group = next(iter(groups)) if groups else ""
     for name, id_path, group_path, _, _ in entries:
         print(f"IDENTITY_SOURCE={name}|{id_path}|{group_path}")
-    print(f"SOURCE_ID={device_id}")
-    print(f"SOURCE_GROUP={group}")
+    if device_id:
+        print(f"SOURCE_ID={device_id}")
+    if group:
+        print(f"SOURCE_GROUP={group}")
     print(f"MPROVISION_PHASE={phase}")
     if bound == host_hash:
         print("IDENTITY_STATUS=BOUND_CURRENT")
@@ -640,40 +646,21 @@ def plan(old_id, new_id, new_group, host_hash):
     if old_id == new_id or not hash_re.fullmatch(host_hash):
         fail("invalid_clone_plan")
     entries, phase = source_snapshot()
-    names = {entry[0] for entry in entries}
-    if names != {"setup-driver", "mprovision", "shouko"}:
-        print("Warning: Incomplete identity sources detected (missing from {setup-driver, mprovision, shouko}).")
-        print("Initiating safe clone recovery path...")
-        now = datetime.datetime.now(datetime.timezone.utc)
-        stamp = now.strftime("%Y%m%d-%H%M%S")
-        backup = state_base / "foreign-state" / f"{stamp}-{old_id}-to-{new_id}-recovery"
-        backup.mkdir(parents=True, mode=0o700)
-        import shutil
-        for name in names:
-            if name == "setup-driver":
-                shutil.copytree(state_base / "setup-driver", backup / "setup-driver", dirs_exist_ok=True)
-            elif name == "mprovision":
-                if mprovision_path.exists():
-                    shutil.copy2(mprovision_path, backup / "mprovision.json")
-            elif name == "shouko":
-                shutil.copytree(shouko, backup / "shouko", dirs_exist_ok=True)
-        print(f"Backed up incomplete identity state to {backup}")
-        # Safe reset
-        for name in names:
-            if name == "setup-driver":
-                shutil.rmtree(state_base / "setup-driver", ignore_errors=True)
-            elif name == "mprovision":
-                if mprovision_path.exists():
-                    mprovision_path.unlink()
-            elif name == "shouko":
-                shutil.rmtree(shouko, ignore_errors=True)
-        print("Reset stale identity data. Continuing fresh bind...")
-        # Since we reset, we effectively treat this as fresh, but we still need to write new identity.
-
-    if any(entry[3] != old_id for entry in entries):
+    ids = {entry[3] for entry in entries if entry[3]}
+    groups = {entry[4] for entry in entries if entry[4]}
+    if len(ids) > 1 or len(groups) > 1:
+        fail("clone_source_conflict", code=21)
+    if ids and old_id not in ids:
         fail("clone_source_changed")
-    if phase != "complete":
-        fail(f"unsafe_mprovision_phase:{phase or 'missing'}")
+    if groups and new_group not in valid_groups:
+        fail("invalid_device_group:new_group")
+
+    names = {entry[0] for entry in entries}
+    is_full = (
+        names == {"setup-driver", "mprovision", "shouko"}
+        and all(entry[3] == old_id and entry[4] for entry in entries)
+    )
+
     agent_path = storage / "Download" / "Agent_Core.py"
     config_path = shouko / "agent_config.json"
     if not agent_path.is_file() or agent_path.stat().st_size == 0:
@@ -681,16 +668,103 @@ def plan(old_id, new_id, new_group, host_hash):
     validate_agent_config(config_path)
     if journal_path.exists():
         fail(f"migration_journal_exists:{journal_path}")
+
     now = datetime.datetime.now(datetime.timezone.utc)
     stamp = now.strftime("%Y%m%d-%H%M%S")
-    backup = state_base / "foreign-state" / f"{stamp}-{old_id}-to-{new_id}"
+    mode = "full" if (is_full and phase == "complete") else "recovery"
+
+    if mode == "full":
+        if phase != "complete":
+            fail(f"unsafe_mprovision_phase:{phase or 'missing'}")
+        backup = state_base / "foreign-state" / f"{stamp}-{old_id}-to-{new_id}"
+    else:
+        backup = state_base / "foreign-state" / f"{stamp}-{old_id}-to-{new_id}-recovery"
+
     counter = 0
+    base_backup = backup
     while backup.exists():
         counter += 1
-        backup = state_base / "foreign-state" / f"{stamp}-{old_id}-to-{new_id}-{counter}"
+        backup = pathlib.Path(str(base_backup) + f"-{counter}")
     backup.mkdir(parents=True, mode=0o700)
+
+    if mode == "recovery":
+        # Allowlist backup of existing identity files before any mutation
+        manifest_entries = []
+        sources = [
+            ("setup-device-id", setup_dir / "device_id"),
+            ("setup-device-group", setup_dir / "device_group"),
+            ("setup-host-fingerprint", setup_dir / "host_fingerprint"),
+            ("setup-provision-initialized", setup_dir / "provision_initialized"),
+            ("setup-complete", setup_dir / "setup_complete"),
+            ("setup-bootstrap-ui-done", setup_dir / "bootstrap_ui_done"),
+            ("mprovision", mprovision),
+            ("shouko-device-id", shouko / "device_id.txt"),
+            ("shouko-device-group", shouko / "device_group.txt"),
+            ("shouko-agent-state", shouko / "agent_state.json"),
+            ("shouko-provision-report-json", shouko / "provision_report.json"),
+            ("shouko-provision-report-text", shouko / "provision_report.txt"),
+            ("shouko-aot-group-config", shouko / "aot_group_config.json"),
+        ]
+        for label, source in sources:
+            if not source.exists() or not source.is_file():
+                continue
+            destination = backup / label
+            shutil.copy2(source, destination)
+            digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+            manifest_entries.append({
+                "source_path": str(source),
+                "archive_path": str(destination),
+                "sha256": digest,
+            })
+        manifest = {
+            "schema_version": 1,
+            "mode": "recovery",
+            "source_id": old_id,
+            "target_id": new_id,
+            "target_group": new_group,
+            "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "files": manifest_entries,
+        }
+        atomic_json(backup / "manifest.json", manifest)
+
+        # Allowlist-based invalidation of identity state (NEVER touch agent_config.json, server_links, etc.)
+        for file_to_clean in (
+            shouko / "device_id.txt",
+            shouko / "device_group.txt",
+            shouko / "provision_report.json",
+            shouko / "provision_report.txt",
+            shouko / "aot_group_config.json",
+            setup_dir / "device_id",
+            setup_dir / "device_group",
+            setup_dir / "host_fingerprint",
+            setup_dir / "provision_initialized",
+            setup_dir / "setup_complete",
+            setup_dir / "wizard_started",
+            setup_dir / "bootstrap_ui_done",
+        ):
+            try:
+                file_to_clean.unlink()
+            except FileNotFoundError:
+                pass
+        if mprovision.exists():
+            mprovision.unlink()
+
+        gc_dir = pathlib.Path.home() / (".aot-" + "group" + "-control")
+        if gc_dir.exists():
+            for state_file in (
+                "aot_group_state.json",
+                "aot_worker_update_pending.json",
+                "aot_worker_update_health.json",
+                "aot_worker_version.json",
+            ):
+                try:
+                    (gc_dir / state_file).unlink()
+                except FileNotFoundError:
+                    pass
+
     journal = {
         "schema_version": 1,
+        "mode": mode,
         "stage": "planned",
         "source_id": old_id,
         "target_id": new_id,
@@ -760,6 +834,12 @@ def archive_old_state():
         fail(f"invalid_migration_stage:{data['stage']}")
     backup = pathlib.Path(data["backup_dir"])
     backup.mkdir(parents=True, exist_ok=True)
+    manifest_path = backup / "manifest.json"
+    manifest_entries = []
+    if manifest_path.exists():
+        manifest = read_json(manifest_path)
+        manifest_entries = manifest.get("files", [])
+
     sources = [
         ("setup-device-id", setup_dir / "device_id"),
         ("setup-device-group", setup_dir / "device_group"),
@@ -770,13 +850,16 @@ def archive_old_state():
         ("agent-state", shouko / "agent_state.json"),
         ("provision-report-json", shouko / "provision_report.json"),
         ("provision-report-text", shouko / "provision_report.txt"),
+        ("aot-group-config", shouko / "aot_group_config.json"),
     ]
-    manifest_entries = []
+    archived_sources = {item.get("source_path") for item in manifest_entries if isinstance(item, dict)}
     for label, source in sources:
         if not source.exists():
             continue
         if not source.is_file():
             fail(f"archive_source_not_file:{source}")
+        if str(source) in archived_sources:
+            continue
         destination = backup / label
         shutil.copy2(source, destination)
         digest = hashlib.sha256(destination.read_bytes()).hexdigest()
@@ -789,6 +872,7 @@ def archive_old_state():
         })
     manifest = {
         "schema_version": 1,
+        "mode": data.get("mode", "full"),
         "source_id": data["source_id"],
         "target_id": data["target_id"],
         "target_group": data["target_group"],
@@ -832,6 +916,20 @@ def apply_identity():
             report.unlink()
         except FileNotFoundError:
             pass
+
+    aot_cfg = shouko / "aot_group_config.json"
+    if aot_cfg.exists():
+        try:
+            cfg_data = json.loads(aot_cfg.read_text(encoding="utf-8"))
+            if isinstance(cfg_data, dict):
+                cfg_data["device_id"] = new_id
+                atomic_json(aot_cfg, cfg_data)
+        except Exception:
+            try:
+                aot_cfg.unlink()
+            except FileNotFoundError:
+                pass
+
     new_mprovision = {
         "version": provision_version,
         "provision_ref": provision_ref,
@@ -866,8 +964,6 @@ def apply_identity():
     atomic_text(setup_dir / "device_group", new_group + "\n")
     atomic_text(setup_dir / "host_fingerprint", data["host_fingerprint"] + "\n")
     atomic_text(setup_dir / "provision_initialized", "yes\n")
-    atomic_text(setup_dir / "setup_complete", "yes\n")
-    atomic_text(setup_dir / "wizard_started", "yes\n")
     atomic_text(setup_dir / "bootstrap_ui_done", "yes\n")
     atomic_text(setup_dir / "provision_ref", provision_ref + "\n")
     atomic_text(setup_dir / f"provision-device-{provision_ref}.sh.sha256", provision_sha + "\n")
@@ -979,6 +1075,50 @@ PY
   [ "${#pids[@]}" -eq 1 ] || die "Agent post-migration không đúng một tiến trình."
 }
 
+verify_aot_online() {
+  local device_id="$1" aot_register_helper origin agent_cfg aot_cfg output
+  agent_cfg="$AGENT_CONFIG"
+  aot_cfg="$SHOUKO_DIR/aot_group_config.json"
+
+  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ]; then
+    if [ "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" = "offline" ]; then
+      emit WARN "Agent heartbeat online nhưng AOT WebSocket offline (mock)."
+      return 1
+    fi
+    if [ "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" = "online" ]; then
+      emit OK "AOT WebSocket ONLINE và Hub visible (mock)."
+      return 0
+    fi
+    return 0
+  fi
+
+  [ -f "$agent_cfg" ] || return 0
+  aot_register_helper=""
+  if [ -f "$STATE_BASE/msetup_registration.py" ]; then
+    aot_register_helper="$STATE_BASE/msetup_registration.py"
+  elif [ -f "$(dirname "$0")/msetup_registration.py" ]; then
+    aot_register_helper="$(dirname "$0")/msetup_registration.py"
+  fi
+
+  if [ -n "$aot_register_helper" ] && [ -f "$aot_cfg" ]; then
+    origin="$(python - "$agent_cfg" <<'PY'
+import json, pathlib, sys, urllib.parse
+try:
+    data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+    u = urllib.parse.urlparse(str(data.get("worker_report_url", "")))
+    print(f"{u.scheme}://{u.netloc}")
+except Exception:
+    sys.exit(1)
+PY
+)" || return 0
+    output="$(python "$aot_register_helper" verify --origin "$origin" --agent-config "$agent_cfg" --aot-config "$aot_cfg" --device-id "$device_id" --timeout 15 2>&1)" || {
+      emit WARN "AOT WebSocket chưa ONLINE trong Hub: $output"
+      return 1
+    }
+  fi
+  return 0
+}
+
 resume_pending_migration() {
   local host_hash="$1" output stage source_id target_id
   output="$(identity_call journal-status "$host_hash")" || die "Journal migration không hợp lệ."
@@ -1012,6 +1152,9 @@ resume_pending_migration() {
   if [ "$stage" = identity_applied ]; then
     CURRENT_STEP="clone-start-agent"
     start_agent_safely
+    if [ "${AOTSCRIPT_SETUP_REQUIRE_AOT_WS:-0}" = 1 ] || [ -n "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" ]; then
+      verify_aot_online "$target_id" || die "AOT WebSocket chưa ONLINE sau migration."
+    fi
     identity_call complete >/dev/null || die "Không complete được journal migration."
   fi
   emit OK "Migration identity đã hoàn tất và Agent lifecycle đã restart."
@@ -1129,11 +1272,18 @@ start_wizard() {
   local device_id="$1" group="$2" phase wizard
   CURRENT_STEP="wizard"
   if [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
+    if [ "${AOTSCRIPT_SETUP_REQUIRE_AOT_WS:-0}" = 1 ] || [ -n "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" ]; then
+      verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
+    fi
     state_write wizard_started yes
+    state_write setup_complete yes
     return 0
   fi
   phase="$(read_mprovision_phase "$device_id" "$group")" || die "Không đọc được phase wizard."
   if [ "$phase" = complete ]; then
+    if [ "${AOTSCRIPT_SETUP_REQUIRE_AOT_WS:-0}" = 1 ] || [ -n "${AOTSCRIPT_SETUP_MOCK_AOT_WS:-}" ]; then
+      verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
+    fi
     state_write setup_complete yes
     emit OK "Identity hợp lệ; workflow complete, không replay provision/backup/restore."
     return 0

@@ -244,6 +244,7 @@ def test_interactive_without_tty_fails_cleanly(root: pathlib.Path) -> None:
         ["bash", str(SETUP)],
         env=base_env(case, "tty"),
         stdin=subprocess.DEVNULL,
+        start_new_session=True,
         text=True,
         capture_output=True,
         timeout=TIMEOUT,
