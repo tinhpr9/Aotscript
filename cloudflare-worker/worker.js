@@ -4781,7 +4781,11 @@ async function handleUpdate(update, env) {
       if (result.response.ok) {
         await sendMessage(chatId, env, `Lệnh update_${channel} đã được gửi thành công tới ${resolvedTarget.join(",")}.`);
       } else {
-        await sendMessage(chatId, env, `Lỗi: ${result.data?.error || result.response.status}`);
+        const errorType = result.data?.error || result.response.status;
+        const msg = result.data?.message
+          ? `: ${String(result.data.message).replace(/Bearer\s+[A-Za-z0-9_.-]+/gi, "Bearer [REDACTED]").replace(/ghp_[A-Za-z0-9]+/gi, "[REDACTED]")}`
+          : "";
+        await sendMessage(chatId, env, `Lỗi: ${errorType}${msg}`);
       }
     } catch (e) {
       await sendMessage(chatId, env, `Lỗi: ${e.message}`);

@@ -81,8 +81,16 @@ export class FleetState
   }
 
   async githubJson(path) {
+    const headers = {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "Aotscript-AOT-Hub",
+      "X-GitHub-Api-Version": "2022-11-28",
+    };
+    if (this.env?.GITHUB_TOKEN && typeof this.env.GITHUB_TOKEN === "string" && this.env.GITHUB_TOKEN.trim().length > 0) {
+      headers.Authorization = `Bearer ${this.env.GITHUB_TOKEN.trim()}`;
+    }
     const response = await fetch(`https://api.github.com/repos/${AOT_RELEASE_REPOSITORY}${path}`, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "Aotscript-AOT-Hub" },
+      headers,
     });
     if (!response.ok) throw new Error(`github_api_${response.status}`);
     return response.json();
@@ -1827,7 +1835,12 @@ export class FleetState
     try {
       release = await this.resolveWorkerRelease();
     } catch (error) {
-      return json({ ok: false, error: "release_resolution_failed", message: String(error.message || error).slice(0, 160) }, 503);
+      const sanitized = String(error?.message || error || "unknown_error")
+        .replace(/Bearer\s+[A-Za-z0-9_.-]+/gi, "Bearer [REDACTED]")
+        .replace(/ghp_[A-Za-z0-9]+/gi, "[REDACTED]")
+        .replace(/github_pat_[A-Za-z0-9_]+/gi, "[REDACTED]")
+        .slice(0, 160);
+      return json({ ok: false, error: "release_resolution_failed", message: sanitized }, 503);
     }
     let all = this.aotMembers(record);
     const hasExplicitTargets = Array.isArray(explicitTargets) && explicitTargets.length > 0;
