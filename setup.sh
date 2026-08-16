@@ -959,6 +959,11 @@ def mark_agent_started():
 
 
 def mark_complete():
+    if not journal_path.exists():
+        print("MIGRATION_COMPLETE=NO_JOURNAL")
+        return
+    if os.environ.get("AOTSCRIPT_SETUP_FAULT_JOURNAL_COMPLETE") == "1":
+        fail("fault_injected_journal_complete_fail")
     data = load_journal()
     if data["stage"] in {"identity_applied", "agent_started"}:
         save_journal(data, "complete")
@@ -1334,16 +1339,26 @@ start_wizard() {
   CURRENT_STEP="wizard"
   if [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
+    identity_call complete >/dev/null || die "Không hoàn tất được migration journal."
+    if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] &&
+       [ "${AOTSCRIPT_SETUP_INTERRUPT_AFTER:-}" = journal_complete ]; then
+      emit WARN "TEST: ngắt có chủ đích sau journal complete."
+      return 75
+    fi
     state_write wizard_started yes
     state_write setup_complete yes
-    identity_call complete >/dev/null 2>&1 || true
     return 0
   fi
   phase="$(read_mprovision_phase "$device_id" "$group")" || die "Không đọc được phase wizard."
   if [ "$phase" = complete ]; then
     verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE."
+    identity_call complete >/dev/null || die "Không hoàn tất được migration journal."
+    if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] &&
+       [ "${AOTSCRIPT_SETUP_INTERRUPT_AFTER:-}" = journal_complete ]; then
+      emit WARN "TEST: ngắt có chủ đích sau journal complete."
+      return 75
+    fi
     state_write setup_complete yes
-    identity_call complete >/dev/null 2>&1 || true
     emit OK "Identity hợp lệ; workflow complete, không replay provision/backup/restore."
     return 0
   fi
@@ -1356,9 +1371,14 @@ start_wizard() {
   fi
   "$wizard" start </dev/null || die "Wizard chưa chạy được; xem wizard-supervisor.log."
   verify_aot_online "$device_id" || die "AOT WebSocket chưa ONLINE sau khi chạy wizard."
+  identity_call complete >/dev/null || die "Không hoàn tất được migration journal."
+  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] &&
+     [ "${AOTSCRIPT_SETUP_INTERRUPT_AFTER:-}" = journal_complete ]; then
+    emit WARN "TEST: ngắt có chủ đích sau journal complete."
+    return 75
+  fi
   state_write wizard_started yes
   state_write setup_complete yes
-  identity_call complete >/dev/null 2>&1 || true
 }
 
 choose_identity() {

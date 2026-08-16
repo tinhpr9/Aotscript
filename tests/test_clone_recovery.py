@@ -841,6 +841,93 @@ class TestCloneRecoveryAndWebSocketValidation(unittest.TestCase):
             self.assertEqual(res2.returncode, 0, f"Resume from {stage} failed: {res2.stdout + res2.stderr}")
             self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
 
+    def test_31_aot_verify_pass_journal_complete_fail_fails_closed(self):
+        """31. AOT verify PASS + journal complete FAIL => setup_complete absent, exits error."""
+        fix = self.create_fixture("31-journal-fail-closed")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        res = fix.run_setup(
+            "target-host-31",
+            device_id="m74",
+            group="NOVA",
+            extra_env={"AOTSCRIPT_SETUP_FAULT_JOURNAL_COMPLETE": "1"},
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertFalse((fix.setup_driver / "setup_complete").exists())
+        self.assertIn("Không hoàn tất được migration journal", res.stdout + res.stderr)
+
+    def test_32_retry_after_journal_complete_fail_completes(self):
+        """32. Rerun after journal complete fail retries terminal transition cleanly."""
+        fix = self.create_fixture("32-retry-journal-complete")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        res1 = fix.run_setup(
+            "target-host-32",
+            device_id="m74",
+            group="NOVA",
+            extra_env={"AOTSCRIPT_SETUP_FAULT_JOURNAL_COMPLETE": "1"},
+        )
+        self.assertNotEqual(res1.returncode, 0)
+        self.assertFalse((fix.setup_driver / "setup_complete").exists())
+
+        res2 = fix.run_setup("target-host-32", device_id="", group="")
+        self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
+
+        # Verify journal is terminal complete
+        journal_file = fix.setup_driver / "clone-migration.json"
+        self.assertTrue(journal_file.exists())
+        jdata = json.loads(journal_file.read_text(encoding="utf-8"))
+        self.assertEqual(jdata["stage"], "complete")
+
+    def test_33_crash_after_journal_complete_before_setup_complete_resumes(self):
+        """33. Crash immediately after journal complete but before setup_complete resumes safely."""
+        fix = self.create_fixture("33-crash-after-journal-complete")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        res1 = fix.run_setup(
+            "target-host-33",
+            device_id="m74",
+            group="NOVA",
+            extra_env={"AOTSCRIPT_SETUP_INTERRUPT_AFTER": "journal_complete"},
+        )
+        self.assertEqual(res1.returncode, 75, res1.stdout + res1.stderr)
+        self.assertFalse((fix.setup_driver / "setup_complete").exists())
+
+        journal_file = fix.setup_driver / "clone-migration.json"
+        self.assertTrue(journal_file.exists())
+        jdata = json.loads(journal_file.read_text(encoding="utf-8"))
+        self.assertEqual(jdata["stage"], "complete")
+
+        res2 = fix.run_setup("target-host-33", device_id="", group="")
+        self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
+
+    def test_34_crash_after_setup_complete_rerun_idempotent(self):
+        """34. Rerun after complete is strictly idempotent."""
+        fix = self.create_fixture("34-idempotent-complete")
+        (fix.setup_driver / "device_id").write_text("m117\n", encoding="utf-8")
+        (fix.setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        (fix.shouko / "device_id.txt").write_text("m117\n", encoding="utf-8")
+        (fix.shouko / "device_group.txt").write_text("NOVA\n", encoding="utf-8")
+
+        res1 = fix.run_setup("target-host-34", device_id="m74", group="NOVA")
+        self.assertEqual(res1.returncode, 0, res1.stdout + res1.stderr)
+        self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
+
+        res2 = fix.run_setup("target-host-34", device_id="", group="")
+        self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        self.assertEqual((fix.setup_driver / "setup_complete").read_text().strip(), "yes")
+
 
 if __name__ == "__main__":
     unittest.main()
