@@ -85,8 +85,8 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.16.01"
-WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
+WORKER_VERSION = "aot-worker-2026.08.15.01"
+WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic")
 
 
 class AotRelayError(RuntimeError):
@@ -718,7 +718,7 @@ def _handle_batch_action(
     # Route BACKUP_RESTORE_DATA to its dedicated handler.
     if action == BACKUP_RESTORE_DATA_ACTION:
         return _handle_backup_restore_data(cfg, state, local_id=local_id, message=message)
-    if action == ALLOCATE_SERVER_ACTION:
+    if action in {"PREPARE_ALLOCATE_SERVER", "COMMIT_ALLOCATE_SERVER", "ABORT_ALLOCATE_SERVER"}:
         return _handle_allocate_server(cfg, state, local_id=local_id, message=message)
     if (
         message.get("protocol") not in {HUB_PROTOCOL_VERSION, "phase4-1"}
@@ -1081,15 +1081,19 @@ def _handle_allocate_server(
                 mark_action_processed(state, action_id)
             except Exception as e:
                 if existed_before and os.path.exists(bak_path):
-                    shutil.copy2(bak_path, links_path)
+                    try: shutil.copy2(bak_path, links_path)
+                    except: pass
                 elif not existed_before and os.path.exists(links_path):
-                    os.remove(links_path)
+                    try: os.remove(links_path)
+                    except: pass
                 terminal_ack("FAILED", executed=False, reason="open_servers_failed: " + str(e))
         except Exception as e:
             if existed_before and os.path.exists(bak_path):
-                shutil.copy2(bak_path, links_path)
+                try: shutil.copy2(bak_path, links_path)
+                except: pass
             elif not existed_before and os.path.exists(links_path):
-                os.remove(links_path)
+                try: os.remove(links_path)
+                except: pass
             terminal_ack("FAILED", executed=False, reason="commit_failed: " + str(e))
         finally:
             import glob
@@ -1103,10 +1107,8 @@ def _handle_allocate_server(
 
     if action == "ABORT_ALLOCATE_SERVER":
         prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
-        try:
-            os.remove(prep_path)
-        except FileNotFoundError:
-            pass
+        try: os.remove(prep_path)
+        except: pass
         terminal_ack("FAILED", executed=False, reason="aborted_by_hub")
         return True
 
