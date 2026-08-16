@@ -642,7 +642,34 @@ def plan(old_id, new_id, new_group, host_hash):
     entries, phase = source_snapshot()
     names = {entry[0] for entry in entries}
     if names != {"setup-driver", "mprovision", "shouko"}:
-        print("Warning: clone_requires_all_identity_sources overridden for safe recovery.")
+        print("Warning: Incomplete identity sources detected (missing from {setup-driver, mprovision, shouko}).")
+        print("Initiating safe clone recovery path...")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        stamp = now.strftime("%Y%m%d-%H%M%S")
+        backup = state_base / "foreign-state" / f"{stamp}-{old_id}-to-{new_id}-recovery"
+        backup.mkdir(parents=True, mode=0o700)
+        import shutil
+        for name in names:
+            if name == "setup-driver":
+                shutil.copytree(state_base / "setup-driver", backup / "setup-driver", dirs_exist_ok=True)
+            elif name == "mprovision":
+                if mprovision_path.exists():
+                    shutil.copy2(mprovision_path, backup / "mprovision.json")
+            elif name == "shouko":
+                shutil.copytree(shouko, backup / "shouko", dirs_exist_ok=True)
+        print(f"Backed up incomplete identity state to {backup}")
+        # Safe reset
+        for name in names:
+            if name == "setup-driver":
+                shutil.rmtree(state_base / "setup-driver", ignore_errors=True)
+            elif name == "mprovision":
+                if mprovision_path.exists():
+                    mprovision_path.unlink()
+            elif name == "shouko":
+                shutil.rmtree(shouko, ignore_errors=True)
+        print("Reset stale identity data. Continuing fresh bind...")
+        # Since we reset, we effectively treat this as fresh, but we still need to write new identity.
+
     if any(entry[3] != old_id for entry in entries):
         fail("clone_source_changed")
     if phase != "complete":
