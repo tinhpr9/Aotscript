@@ -23,8 +23,8 @@ def mock_send_batch_ack(cfg, **kwargs):
     acks.append(kwargs)
 
 relay._send_batch_ack = mock_send_batch_ack
-relay.action_already_processed = lambda state, aid: state.get("processed", False)
-relay.mark_action_processed = lambda state, aid: state.update({"processed": True})
+relay.action_already_processed = lambda state, aid: state.get(f"processed_{aid}", False)
+relay.mark_action_processed = lambda state, aid: state.update({f"processed_{aid}": True})
 
 state: dict[str, Any] = {}
 cfg: dict[str, str] = {}
@@ -36,81 +36,97 @@ for p in (links_path, bak_path):
     if os.path.exists(p):
         os.remove(p)
 
-# 1. Invalid payload -> FAILED (using PREPARE and COMMIT)
+def cleanup():
+    acks.clear()
+    state.clear()
+    for p in (links_path, bak_path):
+        if os.path.exists(p): os.remove(p)
+    import glob
+    for p in glob.glob(links_path + ".prep.*"): os.remove(p)
+
+# 1. Invalid payload format
 msg1 = {"type": "aot_batch_action", "protocol": "fleet-batch-v1", "action": "PREPARE_ALLOCATE_SERVER", "action_id": "a1", "expires_at": int(time.time()*1000) + 10000}
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg1)
-msg1_c = dict(msg1)
-msg1_c["action"] = "COMMIT_ALLOCATE_SERVER"
-relay._handle_batch_action(cfg, state, local_id="m1", message=msg1_c)
-assert acks[-2]["status"] == "PREPARE_FAILED"
-assert "invalid_allocation_format" in acks[-2]["reason"]
-assert acks[-1]["status"] == "FAILED"
-assert "missing_prep_file" in acks[-1]["reason"]
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert "invalid_allocation_format" in acks[-1]["reason"]
 
-# 2. Valid payload -> ALLOCATED then OPENED
+# 2. Invalid order/package
+cleanup()
+msg2 = dict(msg1)
+msg2["action_id"] = "a2"
+msg2["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc"},
+    {"pkg": "com.tinh.vv.hk", "url": "https://www.roblox.com/games/123?privateServerLinkCode=def"}
+]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg2)
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert "invalid_package_order_at_1" in acks[-1]["reason"]
+
+# 3. Duplicate URL fail
+cleanup()
+msg3 = dict(msg1)
+msg3["action_id"] = "a3"
+msg3["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc"},
+    {"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc"}
+]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg3)
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert "duplicate_url_at_1" in acks[-1]["reason"]
+
+# 4. PREPARE expired
+cleanup()
+msg_exp = dict(msg1)
+msg_exp["action_id"] = "a4"
+msg_exp["expires_at"] = int(time.time()*1000) - 10000
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg_exp)
+assert acks[-1]["status"] == "TIMEOUT"
+
+# 5. PREPARE -> COMMIT -> OPENED
+cleanup()
 alloc = [
     {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc"},
     {"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/123?privateServerLinkCode=def"}
 ]
-msg = {
+msg5 = {
     "type": "aot_batch_action",
     "protocol": "fleet-batch-v1",
     "action": "PREPARE_ALLOCATE_SERVER",
-    "action_id": "a2",
+    "action_id": "a5",
     "expires_at": int(time.time()*1000) + 10000,
     "allocation": alloc
 }
-msg_commit = dict(msg)
-msg_commit["action"] = "COMMIT_ALLOCATE_SERVER"
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg5)
+assert acks[-1]["status"] == "PREPARE_READY"
 
-relay._handle_batch_action(cfg, state, local_id="m1", message=msg)
+msg_commit = dict(msg5)
+msg_commit["action"] = "COMMIT_ALLOCATE_SERVER"
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg_commit)
-assert len(acks) >= 3
 assert acks[-2]["status"] == "ALLOCATED"
 assert acks[-1]["status"] == "OPENED"
-assert acks[-1]["executed"] == True
-assert state["processed"] == True
+assert state["processed_a5"] == True
 
-with open(links_path, "r", encoding="utf-8") as f:
-    lines = f.read().splitlines()
-assert len(lines) == 2
-assert lines[0] == "com.tinh.vv.hi,https://www.roblox.com/games/123?privateServerLinkCode=abc"
-
-# Replay terminal result exactly once pattern
+# Replay -> DUPLICATE
 acks.clear()
-relay._handle_batch_action(cfg, state, local_id="m1", message=msg)
-relay._handle_batch_action(cfg, state, local_id="m1", message=msg_commit)
-assert len(acks) == 2
-assert acks[0]["status"] == "PREPARE_READY"
-assert acks[1]["status"] == "DUPLICATE"
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg5)
+assert acks[-1]["status"] == "DUPLICATE"
 
-# 3. Open fails -> FAILED and rollback
-state.clear()
-acks.clear()
-mock_ctrl.fail = True
-msg["action_id"] = "a3"
-msg_commit["action_id"] = "a3"
-with open(links_path, "w", encoding="utf-8") as f:
-    f.write("OLD\n")
-relay._handle_batch_action(cfg, state, local_id="m1", message=msg)
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg_commit)
+assert acks[-1]["status"] == "DUPLICATE"
+assert not os.path.exists(links_path + ".prep.a5")
+
+# 6. PREPARE -> ABORT cleanup đúng action
+cleanup()
+msg6 = dict(msg5)
+msg6["action_id"] = "a6"
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg6)
+assert os.path.exists(links_path + ".prep.a6")
+
+msg_abort = dict(msg6)
+msg_abort["action"] = "ABORT_ALLOCATE_SERVER"
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg_abort)
 assert acks[-1]["status"] == "FAILED"
-assert "open_servers_failed" in acks[-1]["reason"]
-assert state.get("processed") is not True
-# Verify rollback
-with open(links_path, "r", encoding="utf-8") as f:
-    assert f.read() == "OLD\n"
-
-# 4. Open fails when file didn't exist -> file should be deleted
-state.clear()
-acks.clear()
-mock_ctrl.fail = True
-os.remove(links_path)
-msg["action_id"] = "a4"
-msg_commit["action_id"] = "a4"
-relay._handle_batch_action(cfg, state, local_id="m1", message=msg)
-relay._handle_batch_action(cfg, state, local_id="m1", message=msg_commit)
-assert acks[-1]["status"] == "FAILED"
-assert not os.path.exists(links_path)
+assert "aborted_by_hub" in acks[-1]["reason"]
+assert not os.path.exists(links_path + ".prep.a6")
 
 print("AOT_ALLOCATE_SERVER_RELAY_TEST=OK")

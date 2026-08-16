@@ -85,8 +85,8 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.15.01"
-WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic")
+WORKER_VERSION = "aot-worker-2026.08.16.01"
+WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
 class AotRelayError(RuntimeError):
@@ -1033,16 +1033,39 @@ def _handle_allocate_server(
 
     action = message.get("action")
     if action == "PREPARE_ALLOCATE_SERVER":
+        if action_already_processed(state, action_id):
+            terminal_ack("DUPLICATE", executed=False)
+            return True
+
         try:
             allocation = message.get("allocation")
-            if not isinstance(allocation, list) or not allocation:
+            if not isinstance(allocation, list) or not (1 <= len(allocation) <= 10):
                 terminal_ack("PREPARE_FAILED", executed=False, reason="invalid_allocation_format")
                 return True
+                
+            seen_urls = set()
+            pkg_suffixes = ['i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r']
+            for i, item in enumerate(allocation):
+                pkg = item.get('pkg', '')
+                url = item.get('url', '')
+                if pkg != f"com.tinh.vv.h{pkg_suffixes[i]}":
+                    terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_package_order_at_{i}")
+                    return True
+                if not url.startswith("https://www.roblox.com/") or "privateServerLinkCode=" not in url:
+                    terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_roblox_url_at_{i}")
+                    return True
+                if url in seen_urls:
+                    terminal_ack("PREPARE_FAILED", executed=False, reason=f"duplicate_url_at_{i}")
+                    return True
+                seen_urls.add(url)
+
             prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
+            temp_path = prep_path + ".tmp"
             os.makedirs(os.path.dirname(prep_path), exist_ok=True)
-            with open(prep_path, "w", encoding="utf-8") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 for item in allocation:
                     f.write(f"{item['pkg']},{item['url']}\n")
+            os.replace(temp_path, prep_path)
             terminal_ack("PREPARE_READY", executed=False)
         except Exception as e:
             terminal_ack("PREPARE_FAILED", executed=False, reason="prepare_failed: " + str(e))
@@ -1065,7 +1088,7 @@ def _handle_allocate_server(
             if not os.path.exists(prep_path):
                 terminal_ack("FAILED", executed=False, reason="missing_prep_file")
                 return True
-            os.rename(prep_path, links_path)
+            os.replace(prep_path, links_path)
             
             allocation = []
             with open(links_path, "r", encoding="utf-8") as f:
@@ -1096,16 +1119,12 @@ def _handle_allocate_server(
                 except: pass
             terminal_ack("FAILED", executed=False, reason="commit_failed: " + str(e))
         finally:
-            import glob
-            try:
-                for old_prep in glob.glob(links_path + ".prep.*"):
-                    if old_prep != prep_path:
-                        try: os.remove(old_prep)
-                        except: pass
-            except: pass
-        return True
+            pass
 
     if action == "ABORT_ALLOCATE_SERVER":
+        if action_already_processed(state, action_id):
+            terminal_ack("DUPLICATE", executed=False)
+            return True
         prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
         try: os.remove(prep_path)
         except: pass

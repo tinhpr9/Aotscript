@@ -26,8 +26,9 @@ const AOT_UPDATE_ACTION = "UPDATE_WORKER";
 const AOT_UPDATE_GROUP_SIZE = 5;
 const AOT_UPDATE_TIMEOUT_MS = 75 * 1000;
 const AOT_UPDATE_TERMINAL = new Set(["HEALTHY", "ROLLED_BACK", "FAILED", "SKIPPED_OFFLINE"]);
-const AOT_WORKER_VERSION = "aot-worker-2026.08.15.01";
-const AOT_WORKER_TAG = "worker-v2026.08.15.01";
+const AOT_WORKER_VERSION = "aot-worker-2026.08.16.01";
+const AOT_WORKER_TAG = "worker-v2026.08.16.01";
+const AOT_ALLOCATE_SERVER_CAPABILITY = "allocate_server_2pc";
 const AOT_RELEASE_PROTOCOL = "github-release-v1";
 const AOT_RELEASE_REPOSITORY = "tinhpr9/Aotscript";
 const AOT_RELEASE_CACHE_MS = 5 * 60 * 1000;
@@ -2905,34 +2906,55 @@ export class FleetState
     }
     
     const fleetRecord = await this.readFleet();
-    if (fleetRecord.last_batch && fleetRecord.last_batch.action === AOT_ALLOCATE_SERVER_ACTION && fleetRecord.last_batch.telegram_chat_id && !fleetRecord.last_batch.telegram_notified) {
-      const isExpired = Date.now() >= fleetRecord.last_batch.expires_at;
-      const isRetry = fleetRecord.last_batch.telegram_retry_time && Date.now() >= fleetRecord.last_batch.telegram_retry_time;
-      if (isExpired || isRetry) {
-        let changed = false;
-        if (isExpired) {
-          for (const d of Object.values(fleetRecord.last_batch.devices)) {
-            if (["SENT", "PREPARE_SENT", "PREPARE_READY", "COMMIT_SENT", "ACCEPTED", "ALLOCATED"].includes(d.status)) {
-              d.status = "TIMEOUT";
-              d.reason = "telegram_wait_timeout";
-              if (!d.history.includes("TIMEOUT")) d.history.push("TIMEOUT");
+    if (fleetRecord.last_batch && fleetRecord.last_batch.action === AOT_ALLOCATE_SERVER_ACTION) {
+      const lb = fleetRecord.last_batch;
+      const isExpired = Date.now() >= lb.expires_at;
+      let changed = false;
+
+      if (!isExpired && lb.commit_decided) {
+        for (const [did, d] of Object.entries(lb.devices)) {
+          if (d.status === "COMMIT_PENDING") {
+            const sent = this.sendAotPayload(this.aotSocketTag("device", "fleet", did), {
+              type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: [did], action_id: lb.action_id, expires_at: lb.expires_at, action: "COMMIT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
+            });
+            if (sent > 0) {
+              d.status = "COMMIT_SENT"; if (!d.history.includes("COMMIT_SENT")) d.history.push("COMMIT_SENT");
               changed = true;
             }
           }
         }
-        if (changed) await this.writeFleet(fleetRecord);
-        const notified = await this.notifyTelegramPhanserver(fleetRecord.last_batch);
-        if (notified) {
-          fleetRecord.last_batch.telegram_notified = true;
-          await this.writeFleet(fleetRecord);
-        } else {
-          fleetRecord.last_batch.telegram_retries = (fleetRecord.last_batch.telegram_retries || 0) + 1;
-          if (fleetRecord.last_batch.telegram_retries < 5) {
-            fleetRecord.last_batch.telegram_retry_time = Date.now() + 30000;
-          } else {
-            fleetRecord.last_batch.telegram_notified = true; // Give up
+      }
+
+      if (isExpired) {
+        for (const d of Object.values(lb.devices)) {
+          if (["SENT", "PREPARE_SENT", "PREPARE_READY", "COMMIT_PENDING", "COMMIT_SENT", "ACCEPTED", "ALLOCATED", "ABORT_SENT"].includes(d.status)) {
+            d.status = "TIMEOUT";
+            d.reason = "batch_timeout";
+            if (!d.history.includes("TIMEOUT")) d.history.push("TIMEOUT");
+            changed = true;
           }
-          await this.writeFleet(fleetRecord);
+        }
+      }
+      
+      if (changed) await this.writeFleet(fleetRecord);
+
+      if (lb.telegram_chat_id && !lb.telegram_notified) {
+        const isRetry = lb.telegram_retry_time && Date.now() >= lb.telegram_retry_time;
+        const allTerminal = Object.values(lb.devices).every(d => ["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "DUPLICATE"].includes(d.status) || isExpired);
+        if (isExpired || isRetry || allTerminal) {
+          const notified = await this.notifyTelegramPhanserver(lb);
+          if (notified) {
+            lb.telegram_notified = true;
+            await this.writeFleet(fleetRecord);
+          } else {
+            lb.telegram_retries = (lb.telegram_retries || 0) + 1;
+            if (lb.telegram_retries < 5) {
+              lb.telegram_retry_time = Date.now() + 30000;
+            } else {
+              lb.telegram_notified = true; // Give up
+            }
+            await this.writeFleet(fleetRecord);
+          }
         }
       }
     }
@@ -3073,13 +3095,41 @@ export class FleetState
   async dispatchFleetBatch(record, action, requestedTargetIds, options = {}) {
     const allowed = new Set([AOT_BATCH_ACTION, AOT_APPS_ACTION, AOT_BACKUP_RESTORE_DATA_ACTION, AOT_ALLOCATE_SERVER_ACTION]);
     if (!allowed.has(action)) return json({ ok: false, error: "invalid_batch_action" }, 400);
+
+    const fresh = await this.readFleet();
+    const previous = fresh.last_batch;
+    const allocateTerminal = new Set(["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE"]);
+    if (
+      action === AOT_ALLOCATE_SERVER_ACTION &&
+      previous?.action === AOT_ALLOCATE_SERVER_ACTION &&
+      Number(previous.expires_at || 0) > Date.now() &&
+      Object.values(previous.devices || {}).some(d => !allocateTerminal.has(String(d.status)))
+    ) {
+      return json({ ok: false, error: "allocation_in_progress", action_id: previous.action_id }, 409);
+    }
+
     const seen = new Set();
     const targets = [];
+    const missingCapabilityIds = [];
     for (const raw of requestedTargetIds) {
       const id = validDeviceId(raw);
       if (!id || seen.has(id) || !record.devices[id]) return json({ ok: false, error: "invalid_batch_target" }, 400);
+      
+      const isOnline = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", id)).length > 0;
+      if (action === AOT_ALLOCATE_SERVER_ACTION) {
+        const caps = record.devices[id].capabilities || [];
+        if (!isOnline || !caps.includes(AOT_ALLOCATE_SERVER_CAPABILITY)) {
+          missingCapabilityIds.push(id);
+        }
+      }
+      
       seen.add(id); targets.push(id);
     }
+    
+    if (action === AOT_ALLOCATE_SERVER_ACTION && missingCapabilityIds.length > 0) {
+      return json({ ok: false, error: "worker_missing_allocate_server_2pc_capability", device_ids: missingCapabilityIds }, 409);
+    }
+
     if (!targets.length || targets.length > AOT_CONTROL_MAX_TARGETS) return json({ ok: false, error: "invalid_batch_targets" }, 400);
     const ttl = action === AOT_BACKUP_RESTORE_DATA_ACTION ? AOT_BACKUP_RESTORE_DATA_TTL_MS : AOT_BATCH_TTL_MS;
     const createdAt = Date.now(), expiresAt = createdAt + ttl;
@@ -3209,28 +3259,39 @@ export class FleetState
         if (action === AOT_ALLOCATE_SERVER_ACTION) {
           const statuses = Object.values(batch.devices).map(d => d.status);
           const hasFailures = statuses.some(s => ["PREPARE_FAILED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE", "FAILED_NOT_INSTALLED"].includes(s));
-          const isPreparePhase = !statuses.some(s => ["COMMIT_SENT", "ALLOCATED", "OPENED"].includes(s));
+          const isPreparePhase = !batch.commit_decided && !statuses.some(s => ["COMMIT_PENDING", "COMMIT_SENT", "ALLOCATED", "OPENED"].includes(s));
           if (hasFailures && isPreparePhase && !batch.abort_sent) {
             batch.abort_sent = true;
             for (const [did, d] of Object.entries(batch.devices)) {
               if (!terminal.has(d.status) && d.status !== "ABORT_SENT" && d.status !== "PREPARE_FAILED") {
                 this.sendAotPayload(this.aotSocketTag("device", "fleet", did), {
-                  type: "aot_batch_action", protocol: "fleet-batch-v1", action_id: batch.action_id, action: "ABORT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
+                  type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: [did], action_id: batch.action_id, expires_at: batch.expires_at, action: "ABORT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
                 });
                 d.status = "ABORT_SENT"; if (!d.history.includes("ABORT_SENT")) d.history.push("ABORT_SENT");
                 d.reason = "aborted_due_to_peer_failure";
                 shouldSave = true;
               }
             }
-          } else if (isPreparePhase && statuses.every(s => s === "PREPARE_READY" || terminal.has(s) || s === "DUPLICATE") && !batch.commit_sent) {
+          } else if (isPreparePhase && statuses.every(s => s === "PREPARE_READY" || terminal.has(s) || s === "DUPLICATE") && !batch.commit_decided) {
+            batch.commit_decided = true;
             batch.commit_sent = true;
             for (const [did, d] of Object.entries(batch.devices)) {
               if (d.status === "PREPARE_READY") {
-                this.sendAotPayload(this.aotSocketTag("device", "fleet", did), {
-                  type: "aot_batch_action", protocol: "fleet-batch-v1", action_id: batch.action_id, action: "COMMIT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
+                d.status = "COMMIT_PENDING"; if (!d.history.includes("COMMIT_PENDING")) d.history.push("COMMIT_PENDING");
+              }
+            }
+            await this.writeFleet(record);
+            shouldSave = false; // Already saved
+            
+            for (const [did, d] of Object.entries(batch.devices)) {
+              if (d.status === "COMMIT_PENDING") {
+                const sent = this.sendAotPayload(this.aotSocketTag("device", "fleet", did), {
+                  type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: [did], action_id: batch.action_id, expires_at: batch.expires_at, action: "COMMIT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
                 });
-                d.status = "COMMIT_SENT"; if (!d.history.includes("COMMIT_SENT")) d.history.push("COMMIT_SENT");
-                shouldSave = true;
+                if (sent > 0) {
+                  d.status = "COMMIT_SENT"; if (!d.history.includes("COMMIT_SENT")) d.history.push("COMMIT_SENT");
+                  shouldSave = true;
+                }
               }
             }
           }

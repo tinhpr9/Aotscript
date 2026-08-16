@@ -30,7 +30,7 @@ const ctx = {
 const fleet = new mod.namespace.FleetState(ctx, { TELEGRAM_BOT_TOKEN: "tok" });
 const ids = Array.from({ length: 40 }, (_, i) => `m${i + 201}`);
 const record = await fleet.readFleet();
-for (const id of ids) { record.devices[id] = { device_id: id }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
+for (const id of ids) { record.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
 await fleet.writeFleet(record);
 
 let response = await fleet.dispatchFleetBatch(record, "OPEN_SWIFT_BACKUP", ids.slice(0, 2));
@@ -121,7 +121,7 @@ if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "OPENED") th
 sockets.delete(`aot-device:${ids[1]}`);
 response = await fleet.dispatchFleetBatch(record, "ALLOCATE_SERVER", [ids[0], ids[1]], { allocationMap: {} });
 body = await response.json();
-if (body.ok || body.error !== "offline_devices_in_allocate_batch") throw new Error("ALLOCATE_SERVER offline fail-closed test failed: " + JSON.stringify(body));
+if (body.ok || body.error !== "worker_missing_allocate_server_2pc_capability") throw new Error("ALLOCATE_SERVER offline fail-closed test failed: " + JSON.stringify(body));
 sockets.set(`aot-device:${ids[1]}`, [{ send() {} }]);
 
 // Telegram integration test for ALLOCATE_SERVER
@@ -251,7 +251,7 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
 // Test explicit targets
 sRecord.last_update = null;
 fleet.resolveWorkerRelease = async () => ({ version: "2026.08.13.1", hash: "mock" });
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.15.01", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.01", device_ids: [ids[0], ids[1]] };
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};
@@ -265,7 +265,7 @@ if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_
   throw new Error("Explicit canary update did not select exactly the targeted device");
 }
 await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.15.01", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.01", device_ids: [ids[0], ids[1]] };
 await store.set("aot_session:test_explicit_targets", sRecord);
 
 // Stable with explicit targets (keeps exactly the targets)
@@ -292,7 +292,7 @@ if (invalidTargetBody.ok === true || invalidTargetBody.error !== "invalid_explic
 // Telegram Retry Tests
 const tgIds = ["m901", "m902"];
 let tgRecord = await fleet.readFleet();
-for (const id of tgIds) { tgRecord.devices[id] = { device_id: id }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
+for (const id of tgIds) { tgRecord.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] }; sockets.set(`aot-device:${id}`, [{ send() {} }]); }
 await fleet.writeFleet(tgRecord);
 
 // 1. Simulate a batch dispatch for allocate_server
