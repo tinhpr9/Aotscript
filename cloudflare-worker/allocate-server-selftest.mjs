@@ -107,5 +107,7 @@ if (new Set(allUrls).size !== allUrls.length) throw new Error("Test 9e: duplicat
 const result9f = parse(mixedText, ["m1", "m2"], 8);
 if (result9f["m1"].length !== 8) throw new Error(`Test 9f: m1 got ${result9f["m1"].length} links, expected 8`);
 if (result9f["m2"].length !== 8) throw new Error(`Test 9g: m2 got ${result9f["m2"].length} links, expected 8`);
+if (!result9f["m1"][0].url.includes("101")) throw new Error("Test 9h: m1 should come from block 1");
+if (!result9f["m2"][0].url.includes("111")) throw new Error("Test 9i: m2 should come from block 2");
 
 console.log("AOT_ALLOCATE_SERVER_SELFTEST=OK");

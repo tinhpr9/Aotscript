@@ -796,7 +796,27 @@ export class FleetState
                        d.reason = "aborted_due_to_peer_failure";
                    }
               }
+              if (record.last_batch.telegram_chat_id && !record.last_batch.telegram_notified) {
+                const allTerminal = Object.values(record.last_batch.devices).every(d =>
+                  ["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "ABORT_SENT", "DUPLICATE"].includes(d.status)
+                );
+                if (allTerminal) {
+                  const notified = await this.notifyTelegramPhanserver(record.last_batch);
+                  if (notified) {
+                    record.last_batch.telegram_notified = true;
+                  } else {
+                    record.last_batch.telegram_retries = (record.last_batch.telegram_retries || 0) + 1;
+                    if (record.last_batch.telegram_retries < 5) {
+                      record.last_batch.telegram_retry_time = Date.now() + 30000;
+                    } else {
+                      record.last_batch.telegram_notified = true;
+                    }
+                  }
+                }
+              }
               await this.writeFleet(record);
+              await this.broadcastFleetState();
+              await this.scheduleNextAlarm();
           }
       }
     }
@@ -2945,7 +2965,7 @@ export class FleetState
 
       if (lb.telegram_chat_id && !lb.telegram_notified) {
         const isRetry = lb.telegram_retry_time && Date.now() >= lb.telegram_retry_time;
-        const allTerminal = Object.values(lb.devices).every(d => ["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "DUPLICATE"].includes(d.status) || isExpired);
+        const allTerminal = Object.values(lb.devices).every(d => ["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "ABORT_SENT", "DUPLICATE"].includes(d.status) || isExpired);
         if (isExpired || isRetry || allTerminal) {
           const notified = await this.notifyTelegramPhanserver(lb);
           if (notified) {
@@ -3103,7 +3123,7 @@ export class FleetState
 
     const fresh = await this.readFleet();
     const previous = fresh.last_batch;
-    const allocateTerminal = new Set(["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE"]);
+    const allocateTerminal = new Set(["OPENED", "FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "ABORT_SENT", "DUPLICATE"]);
     if (
       action === AOT_ALLOCATE_SERVER_ACTION &&
       previous?.action === AOT_ALLOCATE_SERVER_ACTION &&
@@ -3123,7 +3143,7 @@ export class FleetState
           if (st && st.capabilities) return st.capabilities;
         } catch(e) {}
       }
-      return record.devices[id]?.capabilities || [];
+      return fresh.devices[id]?.capabilities || [];
     };
 
     const seen = new Set();
@@ -3131,12 +3151,12 @@ export class FleetState
     const missingCapabilityIds = [];
     for (const raw of requestedTargetIds) {
       const id = validDeviceId(raw);
-      if (!id || seen.has(id) || !record.devices[id]) return json({ ok: false, error: "invalid_batch_target" }, 400);
+      if (!id || seen.has(id) || !fresh.devices[id]) return json({ ok: false, error: "invalid_batch_target" }, 400);
       
       const isOnline = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", id)).length > 0;
-      if (action === AOT_ALLOCATE_SERVER_ACTION) {
+      if (action === AOT_ALLOCATE_SERVER_ACTION && isOnline) {
         const caps = getLiveCaps(id);
-        if (!isOnline || !caps.includes(AOT_ALLOCATE_SERVER_CAPABILITY)) {
+        if (!caps.includes(AOT_ALLOCATE_SERVER_CAPABILITY)) {
           missingCapabilityIds.push(id);
         }
       }
@@ -3162,12 +3182,12 @@ export class FleetState
     if (action === AOT_ALLOCATE_SERVER_ACTION && online.length !== targets.length) {
       return json({ ok: false, error: "offline_devices_in_allocate_batch" }, 400);
     }
-    record.last_batch = { action_id: actionId, action, package: AOT_BATCH_PACKAGE, created_at: createdAt, expires_at: expiresAt, devices };
+    fresh.last_batch = { action_id: actionId, action, package: AOT_BATCH_PACKAGE, created_at: createdAt, expires_at: expiresAt, devices };
     if (action === AOT_ALLOCATE_SERVER_ACTION && options.telegram_chat_id) {
-      record.last_batch.telegram_chat_id = options.telegram_chat_id;
-      record.last_batch.telegram_notified = false;
+      fresh.last_batch.telegram_chat_id = options.telegram_chat_id;
+      fresh.last_batch.telegram_notified = false;
     }
-    await this.writeFleet(record);
+    await this.writeFleet(fresh);
     await this.scheduleNextAlarm();
     await this.broadcastFleetState();
     
@@ -3182,8 +3202,11 @@ export class FleetState
         devices[id].status = "FAILED"; devices[id].history.push("FAILED"); devices[id].reason = "websocket_send_failed";
       }
     }
-    await this.writeFleet(record);
-    return json({ ok: true, batch: this.aotBatchView(record.last_batch, createdAt) });
+    if (record && typeof record === "object") {
+      record.last_batch = fresh.last_batch;
+    }
+    await this.writeFleet(fresh);
+    return json({ ok: true, batch: this.aotBatchView(fresh.last_batch, createdAt) });
   }
 
   async controlFleetHub(request) {
@@ -3259,7 +3282,7 @@ export class FleetState
     if (action === AOT_APPS_ACTION) terminal.add("APPS_OPENED");
     if (action === AOT_BACKUP_RESTORE_DATA_ACTION) terminal.add("BACKUP_STARTED");
     if (action === AOT_ALLOCATE_SERVER_ACTION) terminal.add("OPENED");
-    const ranks = { "SENT": 0, "PREPARE_SENT": 0, "PREPARE_READY": 0.5, "PREPARE_FAILED": 8, "COMMIT_SENT": 0.8, "ABORT_SENT": 0.8, "ACCEPTED": 1, "ALLOCATED": 1.5, "OPENED": 2, "SWIFT_OPENED": 2, "APPS_OPENED": 3, "FILTERED": 4, "SELECTED": 5, "OPTIONS_VERIFIED": 6, "BACKUP_STARTED": 7, "FAILED_NOT_INSTALLED": 8, "FAILED": 8, "TIMEOUT": 8, "SKIPPED_OFFLINE": 8 };
+    const ranks = { "SENT": 0, "PREPARE_SENT": 0, "PREPARE_READY": 0.5, "COMMIT_PENDING": 0.7, "COMMIT_SENT": 0.8, "ABORT_SENT": 0.8, "ACCEPTED": 1, "ALLOCATED": 1.5, "OPENED": 2, "SWIFT_OPENED": 2, "APPS_OPENED": 3, "FILTERED": 4, "SELECTED": 5, "OPTIONS_VERIFIED": 6, "BACKUP_STARTED": 7, "PREPARE_FAILED": 8, "FAILED_NOT_INSTALLED": 8, "FAILED": 8, "TIMEOUT": 8, "SKIPPED_OFFLINE": 8 };
     if (!terminal.has(device.status) && body.status !== "DUPLICATE") {
       const next = Date.now() >= batch.expires_at ? "TIMEOUT" : body.status;
       if ((ranks[next] || 0) > (ranks[device.status] || 0)) {
@@ -3273,7 +3296,6 @@ export class FleetState
         }
         device.executed = body.executed === true; device.updated_at = Date.now();
         
-        let shouldSave = false;
         if (action === AOT_ALLOCATE_SERVER_ACTION) {
           const statuses = Object.values(batch.devices).map(d => d.status);
           const hasFailures = statuses.some(s => ["PREPARE_FAILED", "FAILED", "TIMEOUT", "SKIPPED_OFFLINE", "FAILED_NOT_INSTALLED"].includes(s));
@@ -3287,7 +3309,6 @@ export class FleetState
                 });
                 d.status = "ABORT_SENT"; if (!d.history.includes("ABORT_SENT")) d.history.push("ABORT_SENT");
                 d.reason = "aborted_due_to_peer_failure";
-                shouldSave = true;
               }
             }
           } else if (isPreparePhase && statuses.every(s => s === "PREPARE_READY" || terminal.has(s) || s === "DUPLICATE") && !batch.commit_decided) {
@@ -3301,7 +3322,6 @@ export class FleetState
               }
             }
             await this.writeFleet(record);
-            shouldSave = false; // Already saved
             
             for (const [did, d] of Object.entries(batch.devices)) {
               if (d.status === "COMMIT_PENDING") {
@@ -3310,7 +3330,6 @@ export class FleetState
                 });
                 if (sent > 0) {
                   d.status = "COMMIT_SENT"; if (!d.history.includes("COMMIT_SENT")) d.history.push("COMMIT_SENT");
-                  shouldSave = true;
                 }
               }
             }
@@ -3394,26 +3413,25 @@ export class FleetState
     }
     const fleetRecord = await this.readFleet();
     const lb = fleetRecord?.last_batch;
-    if (
-      lb?.action === AOT_ALLOCATE_SERVER_ACTION &&
-      Number(lb.expires_at || 0) > Date.now()
-    ) {
-      if (!nextAlarm || lb.expires_at < nextAlarm) {
-        nextAlarm = lb.expires_at;
-      }
+    if (lb?.action === AOT_ALLOCATE_SERVER_ACTION) {
+      if (Number(lb.expires_at || 0) > Date.now()) {
+        if (!nextAlarm || lb.expires_at < nextAlarm) {
+          nextAlarm = lb.expires_at;
+        }
 
-      if (lb.commit_decided) {
-        for (const d of Object.values(lb.devices || {})) {
-          if (
-            ["COMMIT_PENDING", "COMMIT_SENT"].includes(d.status)
-          ) {
-            const retryAt =
-              Number(d.commit_retry_time || 0) > Date.now()
-                ? Number(d.commit_retry_time)
-                : Date.now() + 5000;
+        if (lb.commit_decided) {
+          for (const d of Object.values(lb.devices || {})) {
+            if (
+              ["COMMIT_PENDING", "COMMIT_SENT"].includes(d.status)
+            ) {
+              const retryAt =
+                Number(d.commit_retry_time || 0) > Date.now()
+                  ? Number(d.commit_retry_time)
+                  : Date.now() + 5000;
 
-            if (!nextAlarm || retryAt < nextAlarm) {
-              nextAlarm = retryAt;
+              if (!nextAlarm || retryAt < nextAlarm) {
+                nextAlarm = retryAt;
+              }
             }
           }
         }

@@ -38,6 +38,12 @@ DEVICE_GROUP_PATH = pathlib.Path(
 STATE_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/aot_group_state.json"
 )
+SERVER_LINKS_PATH = pathlib.Path(
+    "/storage/emulated/0/Download/Shouko/server_links.txt"
+)
+ROBLOX_SERVER_URL_PATTERN = re.compile(
+    r"^https://(www\.)?roblox\.com/games/\d+\?privateServerLinkCode=[0-9a-fA-F]+$"
+)
 PROTOCOL_VERSION = "phase3-1"
 MAX_WS_FRAME_BYTES = 512 * 1024
 MAX_HTTP_JSON_BYTES = 384 * 1024
@@ -1074,15 +1080,16 @@ def _handle_allocate_server(
                 
             seen_urls = set()
             pkg_suffixes = ['i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r']
-            import re
-            url_pattern = re.compile(r"^https://(www\.)?roblox\.com/games/\d+\?privateServerLinkCode=[0-9a-fA-F]+$")
             for i, item in enumerate(allocation):
+                if not isinstance(item, dict):
+                    terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_allocation_item_at_{i}")
+                    return True
                 pkg = item.get('pkg', '')
                 url = item.get('url', '')
                 if pkg != f"com.tinh.vv.h{pkg_suffixes[i]}":
                     terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_package_order_at_{i}")
                     return True
-                if not url_pattern.match(url):
+                if not isinstance(url, str) or not ROBLOX_SERVER_URL_PATTERN.match(url):
                     terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_roblox_url_at_{i}")
                     return True
                 if url in seen_urls:
@@ -1090,7 +1097,7 @@ def _handle_allocate_server(
                     return True
                 seen_urls.add(url)
 
-            prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
+            prep_path = f"{SERVER_LINKS_PATH}.prep.{action_id}"
             temp_path = prep_path + ".tmp"
             os.makedirs(os.path.dirname(prep_path), exist_ok=True)
             with open(temp_path, "w", encoding="utf-8") as f:
@@ -1111,7 +1118,7 @@ def _handle_allocate_server(
                 terminal_ack("DUPLICATE", executed=False)
             return True
 
-        links_path = "/storage/emulated/0/Download/Shouko/server_links.txt"
+        links_path = str(SERVER_LINKS_PATH)
         bak_path = links_path + ".bak"
         prep_path = links_path + f".prep.{action_id}"
         
@@ -1172,7 +1179,7 @@ def _handle_allocate_server(
             else:
                 terminal_ack("DUPLICATE", executed=False)
             return True
-        prep_path = f"/storage/emulated/0/Download/Shouko/server_links.txt.prep.{action_id}"
+        prep_path = f"{SERVER_LINKS_PATH}.prep.{action_id}"
         try: os.remove(prep_path)
         except: pass
         terminal_ack("FAILED", executed=False, reason="aborted_by_hub")

@@ -122,7 +122,7 @@ if ((await fleet.readFleet()).last_batch.devices[ids[0]].status !== "OPENED") th
 sockets.delete(`aot-device:${ids[1]}`);
 response = await fleet.dispatchFleetBatch(record, "ALLOCATE_SERVER", [ids[0], ids[1]], { allocationMap: {} });
 body = await response.json();
-if (body.ok || body.error !== "worker_missing_allocate_server_2pc_capability") throw new Error("ALLOCATE_SERVER offline fail-closed test failed: " + JSON.stringify(body));
+if (body.ok || body.error !== "offline_devices_in_allocate_batch") throw new Error("ALLOCATE_SERVER offline fail-closed test failed: " + JSON.stringify(body));
 sockets.set(`aot-device:${ids[1]}`, [{ send() {} }]);
 
 // Telegram integration test for ALLOCATE_SERVER
@@ -352,7 +352,7 @@ await fleet.writeFleet(dcRecord);
 const dcRes = await fleet.dispatchFleetBatch(dcRecord, "ALLOCATE_SERVER", dcIds, { allocationMap: {} });
 if (!dcRes.ok) {
   const data = await dcRes.json();
-  console.error("dispatch failed:", data);
+  throw new Error(`dispatch failed in Test 6: ${JSON.stringify(data)}`);
 }
 dcRecord = await fleet.readFleet();
 
@@ -452,12 +452,13 @@ retrySent.length = 0;
 
 // Advance time to commit_retry_time (still before expires_at)
 const saveDateNow = Date.now;
-Date.now = () => initialRetryAt + 100;
-
-await fleet.alarm();
-
-retryRecord = await fleet.readFleet();
-Date.now = saveDateNow;
+try {
+  Date.now = () => initialRetryAt + 100;
+  await fleet.alarm();
+  retryRecord = await fleet.readFleet();
+} finally {
+  Date.now = saveDateNow;
+}
 
 // Verify COMMIT was re-sent via alarm before expiry
 if (retrySent.length !== 2) throw new Error(`Expected 2 COMMIT retries sent via alarm, got ${retrySent.length}`);
@@ -468,6 +469,62 @@ for (const item of retrySent) {
 }
 if (retryRecord.last_batch.devices["m401"].commit_retries !== 1) throw new Error("commit_retries should be incremented to 1");
 if (retryRecord.last_batch.devices["m401"].commit_retry_time <= initialRetryAt) throw new Error("commit_retry_time should be updated with backoff");
+
+// Test 10: Single-flight lock allows new dispatch when previous batch is ABORT_SENT
+let resetRecord5 = await fleet.readFleet();
+resetRecord5.last_batch = {
+  action: "ALLOCATE_SERVER",
+  action_id: "prev-aborted-batch",
+  expires_at: Date.now() + 50000,
+  devices: {
+    m401: { device_id: "m401", status: "ABORT_SENT" },
+    m402: { device_id: "m402", status: "PREPARE_FAILED" }
+  }
+};
+await fleet.writeFleet(resetRecord5);
+
+const dispatchAfterAbort = await fleet.dispatchFleetBatch(resetRecord5, "ALLOCATE_SERVER", retryIds, { allocationMap: {} });
+if (!dispatchAfterAbort.ok) {
+  const errData = await dispatchAfterAbort.json();
+  throw new Error(`Expected dispatch to succeed after aborted batch, got error: ${JSON.stringify(errData)}`);
+}
+
+// Test 11: Monotonic rank — duplicate PREPARE_READY must NOT downgrade COMMIT_PENDING
+let rec11 = await fleet.readFleet();
+const actionId11 = rec11.last_batch.action_id;
+rec11.last_batch.devices["m401"].status = "COMMIT_PENDING";
+await fleet.writeFleet(rec11);
+
+await fleet.dispatchFleetAck(new Request("https://test/aot/ack", {
+  method: "POST",
+  body: JSON.stringify({
+    protocol: "fleet-batch-v1",
+    device_id: "m401",
+    action_id: actionId11,
+    batch_action: "ALLOCATE_SERVER",
+    status: "PREPARE_READY",
+    executed: false
+  })
+}));
+
+rec11 = await fleet.readFleet();
+if (rec11.last_batch.devices["m401"].status !== "COMMIT_PENDING") {
+  throw new Error(`Regression: COMMIT_PENDING was downgraded to ${rec11.last_batch.devices["m401"].status}`);
+}
+
+// Test 12: Telegram retry alarm scheduled even when batch has expired
+let rec12 = await fleet.readFleet();
+rec12.last_batch.expires_at = Date.now() - 5000;
+rec12.last_batch.telegram_chat_id = "123456";
+rec12.last_batch.telegram_notified = false;
+rec12.last_batch.telegram_retry_time = Date.now() + 25000;
+await fleet.writeFleet(rec12);
+
+scheduledAlarm = null;
+await fleet.scheduleNextAlarm();
+if (scheduledAlarm !== rec12.last_batch.telegram_retry_time) {
+  throw new Error(`Expected scheduledAlarm to be ${rec12.last_batch.telegram_retry_time}, got ${scheduledAlarm}`);
+}
 
 console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");
