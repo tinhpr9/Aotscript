@@ -1016,6 +1016,14 @@ def _handle_allocate_server(
     action_id = normalize_action_id(message.get("action_id"))
     if not action_id:
         return True
+        
+    action = message.get("action")
+    if action not in {"PREPARE_ALLOCATE_SERVER", "COMMIT_ALLOCATE_SERVER", "ABORT_ALLOCATE_SERVER"}:
+        return True
+
+    targets = normalize_target_ids(message.get("target_device_ids"))
+    if local_id not in targets:
+        return True
 
     def terminal_ack(status: str, reason: str = None, executed: bool = False):
         res = {"status": status, "executed": executed}
@@ -1030,8 +1038,6 @@ def _handle_allocate_server(
     if expires_at <= int(time.time() * 1000):
         terminal_ack("TIMEOUT", executed=False)
         return True
-
-    action = message.get("action")
     if action == "PREPARE_ALLOCATE_SERVER":
         if action_already_processed(state, action_id):
             terminal_ack("DUPLICATE", executed=False)
@@ -1045,13 +1051,15 @@ def _handle_allocate_server(
                 
             seen_urls = set()
             pkg_suffixes = ['i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r']
+            import re
+            url_pattern = re.compile(r"^https://(www\.)?roblox\.com/games/\d+\?privateServerLinkCode=[0-9a-fA-F]+$")
             for i, item in enumerate(allocation):
                 pkg = item.get('pkg', '')
                 url = item.get('url', '')
                 if pkg != f"com.tinh.vv.h{pkg_suffixes[i]}":
                     terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_package_order_at_{i}")
                     return True
-                if not url.startswith("https://www.roblox.com/") or "privateServerLinkCode=" not in url:
+                if not url_pattern.match(url):
                     terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_roblox_url_at_{i}")
                     return True
                 if url in seen_urls:

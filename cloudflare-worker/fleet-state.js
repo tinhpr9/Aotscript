@@ -775,27 +775,31 @@ export class FleetState
 
     async webSocketClose(socket) {
     const identity = this.parseAotSocketIdentity(socket);
+    console.log("IDENTITY:", identity);
     if (identity) {
       this.aotLive.delete(identity.deviceId);
       await this.broadcastFleetState();
       const record = await this.readFleet();
-      if (record.last_batch && record.last_batch.action === AOT_ALLOCATE_SERVER_ACTION && !record.last_batch.commit_sent && !record.last_batch.abort_sent) {
+      console.log("LAST BATCH:", record.last_batch?.action, record.last_batch?.commit_decided, record.last_batch?.abort_sent);
+      if (record.last_batch && record.last_batch.action === AOT_ALLOCATE_SERVER_ACTION && !record.last_batch.commit_decided && !record.last_batch.abort_sent) {
           const device = record.last_batch.devices[identity.deviceId];
-          if (device && !["FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE"].includes(device.status)) {
-              device.status = "FAILED";
-              if (!device.history.includes("FAILED")) device.history.push("FAILED");
+          console.log("DEVICE STATUS:", device?.status);
+          if (device && !["FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "ABORT_SENT"].includes(device.status)) {
+              device.status = "ABORT_SENT";
+              if (!device.history.includes("ABORT_SENT")) device.history.push("ABORT_SENT");
               device.reason = "websocket_dropped_during_prepare";
               record.last_batch.abort_sent = true;
               
               for (const [did, d] of Object.entries(record.last_batch.devices)) {
-                   if (!["FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE"].includes(d.status) && did !== identity.deviceId) {
+                   if (!["FAILED", "TIMEOUT", "PREPARE_FAILED", "SKIPPED_OFFLINE", "ABORT_SENT"].includes(d.status) && did !== identity.deviceId) {
                        this.sendAotPayload(this.aotSocketTag("device", "fleet", did), {
-                           type: "aot_batch_action", protocol: "fleet-batch-v1", action_id: record.last_batch.action_id, action: "ABORT_ALLOCATE_SERVER", package: "aot.batch"
+                           type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: [did], action_id: record.last_batch.action_id, expires_at: record.last_batch.expires_at, action: "ABORT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
                        });
-                       d.status = "FAILED"; if (!d.history.includes("FAILED")) d.history.push("FAILED");
+                       d.status = "ABORT_SENT"; if (!d.history.includes("ABORT_SENT")) d.history.push("ABORT_SENT");
                        d.reason = "aborted_due_to_peer_failure";
                    }
               }
+              console.log("WRITING FLEET WITH ABORT_SENT", record.last_batch.devices[identity.deviceId].status);
               await this.writeFleet(record);
           }
       }
@@ -1056,7 +1060,9 @@ export class FleetState
     let tags;
     try {
       tags = this.ctx.getTags(socket);
+      console.log("TAGS:", tags);
     } catch (error) {
+      console.log("TAGS ERROR", error);
       return null;
     }
     const tag = tags.find((value) => String(value).startsWith("aot-device:"));
@@ -2913,13 +2919,18 @@ export class FleetState
 
       if (!isExpired && lb.commit_decided) {
         for (const [did, d] of Object.entries(lb.devices)) {
-          if (d.status === "COMMIT_PENDING") {
-            const sent = this.sendAotPayload(this.aotSocketTag("device", "fleet", did), {
-              type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: [did], action_id: lb.action_id, expires_at: lb.expires_at, action: "COMMIT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
-            });
-            if (sent > 0) {
-              d.status = "COMMIT_SENT"; if (!d.history.includes("COMMIT_SENT")) d.history.push("COMMIT_SENT");
+          if (d.status === "COMMIT_PENDING" || d.status === "COMMIT_SENT") {
+            const canRetry = !d.commit_retry_time || Date.now() >= d.commit_retry_time;
+            if (canRetry) {
+              const sent = this.sendAotPayload(this.aotSocketTag("device", "fleet", did), {
+                type: "aot_batch_action", protocol: "fleet-batch-v1", target_device_ids: [did], action_id: lb.action_id, expires_at: lb.expires_at, action: "COMMIT_ALLOCATE_SERVER", package: AOT_BATCH_PACKAGE
+              });
+              d.commit_retries = (d.commit_retries || 0) + 1;
+              d.commit_retry_time = Date.now() + Math.min(15000 * Math.pow(2, d.commit_retries - 1), 60000);
               changed = true;
+              if (sent > 0 && d.status === "COMMIT_PENDING") {
+                d.status = "COMMIT_SENT"; if (!d.history.includes("COMMIT_SENT")) d.history.push("COMMIT_SENT");
+              }
             }
           }
         }
@@ -3108,6 +3119,19 @@ export class FleetState
       return json({ ok: false, error: "allocation_in_progress", action_id: previous.action_id }, 409);
     }
 
+    const getLiveCaps = (id) => {
+      const live = this.aotLive.get(id);
+      if (live && live.capabilities) return live.capabilities;
+      const socks = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", id));
+      if (socks.length > 0) {
+        try {
+          const st = socks[0].deserializeAttachment();
+          if (st && st.capabilities) return st.capabilities;
+        } catch(e) {}
+      }
+      return record.devices[id]?.capabilities || [];
+    };
+
     const seen = new Set();
     const targets = [];
     const missingCapabilityIds = [];
@@ -3117,7 +3141,7 @@ export class FleetState
       
       const isOnline = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", id)).length > 0;
       if (action === AOT_ALLOCATE_SERVER_ACTION) {
-        const caps = record.devices[id].capabilities || [];
+        const caps = getLiveCaps(id);
         if (!isOnline || !caps.includes(AOT_ALLOCATE_SERVER_CAPABILITY)) {
           missingCapabilityIds.push(id);
         }
@@ -3273,6 +3297,7 @@ export class FleetState
               }
             }
           } else if (isPreparePhase && statuses.every(s => s === "PREPARE_READY" || terminal.has(s) || s === "DUPLICATE") && !batch.commit_decided) {
+            console.log("COMMIT_DECIDED IS NOW TRUE!");
             batch.commit_decided = true;
             batch.commit_sent = true;
             for (const [did, d] of Object.entries(batch.devices)) {

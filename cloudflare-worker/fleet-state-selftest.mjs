@@ -25,7 +25,7 @@ const store = new Map();
 const sockets = new Map();
 const ctx = {
   storage: { get: async k => store.get(k), put: async (k, v) => store.set(k, structuredClone(v)), setAlarm: async () => {}, list: async () => new Map() },
-  getWebSockets: tag => sockets.get(tag) || [], getTags: () => [], acceptWebSocket() {}, waitUntil() {},
+  getWebSockets: tag => sockets.get(tag) || [], getTags: (socket) => socket.tags || [], acceptWebSocket() {}, waitUntil() {},
 };
 const fleet = new mod.namespace.FleetState(ctx, { TELEGRAM_BOT_TOKEN: "tok" });
 const ids = Array.from({ length: 40 }, (_, i) => `m${i + 201}`);
@@ -337,6 +337,78 @@ await fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST
 if (telegramCalls.length !== initialCalls + 3) throw new Error("Duplicate ACK triggered extra notification");
 
 Date.now = oldNow;
+// Reset last_batch
+let resetRecord = await fleet.readFleet();
+resetRecord.last_batch = null;
+await fleet.writeFleet(resetRecord);
+
+// Test 6: webSocketClose disconnect PREPARE logic
+const dcIds = ["m101", "m102"];
+let dcRecord = await fleet.readFleet();
+for (const id of dcIds) { dcRecord.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] }; fleet.aotLive.set(id, { capabilities: ["allocate_server_2pc"] }); sockets.set(`aot-device:${id}`, [{ send() {}, deserializeAttachment: () => ({ deviceId: id, capabilities: ["allocate_server_2pc"] }) }]); }
+await fleet.writeFleet(dcRecord);
+
+const dcRes = await fleet.dispatchFleetBatch(dcRecord, "ALLOCATE_SERVER", dcIds, { allocationMap: {} });
+if (!dcRes.ok) {
+  const data = await dcRes.json();
+  console.error("dispatch failed:", data);
+}
+dcRecord = await fleet.readFleet();
+
+// m101 disconnects before commit_decided
+await fleet.webSocketClose({ tags: ["aot-device:m101"] });
+dcRecord = await fleet.readFleet();
+if (!dcRecord.last_batch || !dcRecord.last_batch.devices["m101"]) {
+  console.error(JSON.stringify(dcRecord.last_batch));
+}
+if (dcRecord.last_batch.devices["m101"].status !== "ABORT_SENT") {
+  console.log("m101 status:", dcRecord.last_batch.devices["m101"].status);
+  throw new Error("Expected ABORT_SENT for m101");
+}
+if (dcRecord.last_batch.devices["m102"].status !== "ABORT_SENT") throw new Error("Expected ABORT_SENT for m102");
+if (!dcRecord.last_batch.abort_sent) throw new Error("Expected abort_sent true");
+
+// Test 7: webSocketClose disconnect after commit_decided
+let resetRecord2 = await fleet.readFleet();
+resetRecord2.last_batch = null;
+await fleet.writeFleet(resetRecord2);
+
+const cIds = ["m201", "m202"];
+let cRecord = await fleet.readFleet();
+for (const id of cIds) { cRecord.devices[id] = { device_id: id, capabilities: ["allocate_server_2pc"] }; fleet.aotLive.set(id, { capabilities: ["allocate_server_2pc"] }); sockets.set(`aot-device:${id}`, [{ send() {}, deserializeAttachment: () => ({ deviceId: id, capabilities: ["allocate_server_2pc"] }) }]); }
+await fleet.writeFleet(cRecord);
+
+await fleet.dispatchFleetBatch(cRecord, "ALLOCATE_SERVER", cIds, { allocationMap: {} });
+cRecord = await fleet.readFleet();
+for (const id of cIds) {
+  const ackRes = await fleet.dispatchFleetAck(new Request("https://test/aot/ack", { method: "POST", body: JSON.stringify({ protocol: "fleet-batch-v1", device_id: id, action_id: cRecord.last_batch.action_id, batch_action: "ALLOCATE_SERVER", status: "PREPARE_READY", executed: false }) }));
+  console.log("ACK RES:", await ackRes.text());
+}
+cRecord = await fleet.readFleet();
+console.log("AFTER ACKS, BATCH:", cRecord.last_batch?.commit_decided, Object.values(cRecord.last_batch.devices).map(d => d.status));
+if (!cRecord.last_batch.commit_decided) throw new Error("Expected commit_decided true");
+
+// m201 disconnects
+await fleet.webSocketClose({ tags: ["aot-device:m201"] });
+cRecord = await fleet.readFleet();
+if (cRecord.last_batch.devices["m201"].status === "FAILED") throw new Error("Expected m201 to NOT be FAILED");
+if (cRecord.last_batch.devices["m201"].status === "ABORT_SENT") throw new Error("Expected m201 to NOT be ABORT_SENT");
+
+// Test 8: Capability stale storage test
+let resetRecord3 = await fleet.readFleet();
+resetRecord3.last_batch = null;
+await fleet.writeFleet(resetRecord3);
+
+const staleId = "m301";
+let staleRecord = await fleet.readFleet();
+staleRecord.devices[staleId] = { device_id: staleId, capabilities: ["allocate_server_2pc"] };
+await fleet.writeFleet(staleRecord);
+sockets.set(`aot-device:${staleId}`, [{ send() {}, deserializeAttachment: () => ({ deviceId: staleId, capabilities: [] }) }]);
+fleet.aotLive.set(staleId, { capabilities: [] });
+
+const resStale = await fleet.dispatchFleetBatch(staleRecord, "ALLOCATE_SERVER", [staleId], { allocationMap: {} });
+const dataStale = await resStale.json();
+if (resStale.status !== 409 || dataStale.error !== "worker_missing_allocate_server_2pc_capability") throw new Error("Expected worker_missing_allocate_server_2pc_capability");
 
 console.log("AOT_AUTO_HEAL_TESTS=OK");
 console.log("AOT_FLEET_STATE_SELFTEST=OK");

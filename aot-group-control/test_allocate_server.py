@@ -45,7 +45,7 @@ def cleanup():
     for p in glob.glob(links_path + ".prep.*"): os.remove(p)
 
 # 1. Invalid payload format
-msg1 = {"type": "aot_batch_action", "protocol": "fleet-batch-v1", "action": "PREPARE_ALLOCATE_SERVER", "action_id": "a1", "expires_at": int(time.time()*1000) + 10000}
+msg1 = {"type": "aot_batch_action", "protocol": "fleet-batch-v1", "action": "PREPARE_ALLOCATE_SERVER", "action_id": "a1", "expires_at": int(time.time()*1000) + 10000, "target_device_ids": ["m1"]}
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg1)
 assert acks[-1]["status"] == "PREPARE_FAILED"
 assert "invalid_allocation_format" in acks[-1]["reason"]
@@ -94,7 +94,8 @@ msg5 = {
     "action": "PREPARE_ALLOCATE_SERVER",
     "action_id": "a5",
     "expires_at": int(time.time()*1000) + 10000,
-    "allocation": alloc
+    "allocation": alloc,
+    "target_device_ids": ["m1"]
 }
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg5)
 assert acks[-1]["status"] == "PREPARE_READY"
@@ -128,5 +129,25 @@ relay._handle_batch_action(cfg, state, local_id="m1", message=msg_abort)
 assert acks[-1]["status"] == "FAILED"
 assert "aborted_by_hub" in acks[-1]["reason"]
 assert not os.path.exists(links_path + ".prep.a6")
+
+# 7. target_device_ids validation
+cleanup()
+msg7 = dict(msg1)
+msg7["action_id"] = "a7"
+msg7["target_device_ids"] = ["m2"]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg7)
+assert len(acks) == 0
+
+# 8. URL validation with/without www
+cleanup()
+msg8 = dict(msg5)
+msg8["action_id"] = "a8"
+msg8["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://roblox.com/games/123?privateServerLinkCode=abcdef"},
+    {"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abcdef"}
+]
+msg8["target_device_ids"] = ["m1"]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg8)
+assert acks[-1]["status"] == "PREPARE_READY"
 
 print("AOT_ALLOCATE_SERVER_RELAY_TEST=OK")
