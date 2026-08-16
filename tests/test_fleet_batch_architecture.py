@@ -1,5 +1,5 @@
 from __future__ import annotations
-import importlib.util, pathlib, sys, unittest
+import importlib.util, pathlib, sys, tempfile, unittest
 import json
 import time
 from unittest import mock
@@ -65,10 +65,15 @@ class FleetArchitectureTests(unittest.TestCase):
 
 class TestFleetLoopResilience(unittest.TestCase):
     def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
         self.SPEC_RELAY = importlib.util.spec_from_file_location("fleet_relay", ROOT / "aot-group-control/relay.py")
         self.RELAY = importlib.util.module_from_spec(self.SPEC_RELAY)
         sys.modules[self.SPEC_RELAY.name] = self.RELAY
         self.SPEC_RELAY.loader.exec_module(self.RELAY)
+        self.RELAY.STATE_PATH = pathlib.Path(self.td.name) / "state.json"
+
+    def tearDown(self):
+        self.td.cleanup()
 
     @mock.patch("fleet_relay.load_agent_config")
     @mock.patch("fleet_relay._read_small")
