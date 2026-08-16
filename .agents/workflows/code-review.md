@@ -149,20 +149,6 @@ npm test                                                        # Tests
 npm run build                                                   # Build
 ```
 
-**Rust** (has `Cargo.toml`):
-```bash
-cargo clippy -- -D warnings  # Lint
-cargo test                   # Tests
-cargo build                  # Build
-```
-
-**Go** (has `go.mod`):
-```bash
-go vet ./...    # Lint
-go test ./...   # Tests
-go build ./...  # Build
-```
-
 **Python** (has `pyproject.toml` / `setup.py`):
 ```bash
 pytest  # Tests

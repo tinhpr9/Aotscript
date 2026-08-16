@@ -2,51 +2,34 @@
 
 ## Purpose
 
-Code review ensures quality, security, and maintainability before code is merged. This rule defines when and how to conduct code reviews.
+Code review ensures quality, security, and maintainability before code is integrated. This rule defines the code review standards for Aotscript.
+Project-level release rules in `AGENTS.md` take absolute precedence over this document.
 
 ## When to Review
 
-**MANDATORY review triggers:**
-
+**Mandatory review triggers:**
 - After writing or modifying code
-- Before any commit to shared branches
-- When security-sensitive code is changed (auth, payments, user data)
-- When architectural changes are made
-- Before merging pull requests
-
-**Pre-Review Requirements:**
-
-Before requesting review, ensure:
-
-- All automated checks (CI/CD) are passing
-- Merge conflicts are resolved
-- Branch is up to date with target branch
+- When security-sensitive code is changed (auth, WebSocket actions, IPC, intents)
+- When architectural changes or protocol modifications are made
+- Before creating a pull request
 
 ## Review Checklist
 
 Before marking code complete:
-
-- [ ] Code is readable and well-named
-- [ ] Functions are focused (<50 lines)
-- [ ] Files are cohesive (<800 lines)
-- [ ] No deep nesting (>4 levels)
-- [ ] Errors are handled explicitly
-- [ ] No hardcoded secrets or credentials
-- [ ] No console.log or debug statements
-- [ ] Tests exist for new functionality
-- [ ] Test coverage meets 80% minimum
+- [ ] Code is readable, idiomatic, and well-named
+- [ ] Functions are focused and maintainable
+- [ ] Errors are handled explicitly; no silent exception swallowing
+- [ ] No hardcoded secrets, credentials, or private URLs
+- [ ] Tests exist for new functionality and regression paths
+- [ ] Conforms to fail-closed and rollback requirements in `AGENTS.md`
 
 ## Security Review Triggers
 
-**STOP and use security-reviewer agent when:**
-
-- Authentication or authorization code
-- User input handling
-- Database queries
-- File system operations
-- External API calls
-- Cryptographic operations
-- Payment or financial code
+**Engage security review when:**
+- Handling remote inputs or WebSocket batch actions
+- Intent actions or root command executions
+- File system and staging operations
+- Cryptographic checks, hash verification, or token parsing
 
 ## Review Severity Levels
 
@@ -59,66 +42,34 @@ Before marking code complete:
 
 ## Agent Usage
 
-Use these agents for code review:
+Use these subagents for code review:
 
 | Agent | Purpose |
 |-------|---------|
 | **code-reviewer** | General code quality, patterns, best practices |
-| **security-reviewer** | Security vulnerabilities, OWASP Top 10 |
-| **typescript-reviewer** | TypeScript/JavaScript specific issues |
-| **python-reviewer** | Python specific issues |
-| **go-reviewer** | Go specific issues |
-| **rust-reviewer** | Rust specific issues |
+| **security-reviewer** | Security vulnerabilities, OWASP Top 10, secret scanning |
+| **typescript-reviewer** | Cloudflare Worker JavaScript/TypeScript review |
+| **python-reviewer** | AOT Python worker and supervisor review |
+| **silent-failure-hunter** | Detection of swallowed errors and unhandled fallbacks |
 
 ## Review Workflow
 
-```
-1. Run git diff to understand changes
-2. Check security checklist first
-3. Review code quality checklist
-4. Run relevant tests
-5. Verify coverage >= 80%
-6. Use appropriate agent for detailed review
-```
+1. Run `git diff` to understand changes.
+2. Review security checklist.
+3. Review code quality checklist.
+4. Run relevant tests.
+5. Use appropriate reviewer subagents for detailed analysis.
 
 ## Common Issues to Catch
 
 ### Security
-
-- Hardcoded credentials (API keys, passwords, tokens)
-- SQL injection (string concatenation in queries)
-- XSS vulnerabilities (unescaped user input)
-- Path traversal (unsanitized file paths)
-- CSRF protection missing
-- Authentication bypasses
+- Hardcoded credentials or tokens
+- Command injection in shell executions
+- Path traversal in file operations
+- Missing parameter sanitization
 
 ### Code Quality
-
-- Large functions (>50 lines) - split into smaller
-- Large files (>800 lines) - extract modules
-- Deep nesting (>4 levels) - use early returns
-- Missing error handling - handle explicitly
-- Mutation patterns - prefer immutable operations
-- Missing tests - add test coverage
-
-### Performance
-
-- N+1 queries - use JOINs or batching
-- Missing pagination - add LIMIT to queries
-- Unbounded queries - add constraints
-- Missing caching - cache expensive operations
-
-## Approval Criteria
-
-- **Approve**: No CRITICAL or HIGH issues
-- **Warning**: Only HIGH issues (merge with caution)
-- **Block**: CRITICAL issues found
-
-## Integration with Other Rules
-
-This rule works with:
-
-- [testing.md](testing.md) - Test coverage requirements
-- [security.md](security.md) - Security checklist
-- [git-workflow.md](git-workflow.md) - Commit standards
-- [agents.md](agents.md) - Agent delegation
+- Deep nesting (use early returns)
+- Missing error handling (handle explicitly)
+- Missing unit or integration tests
+- Silent fallbacks without logging
