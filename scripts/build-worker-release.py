@@ -47,7 +47,7 @@ def main() -> int:
     parser.add_argument("--source-root", type=pathlib.Path, default=ROOT)
     parser.add_argument("--reproduce-metadata-from", type=pathlib.Path)
     args = parser.parse_args()
-    if not re.fullmatch(r"2026\.08\.16\.03", args.version):
+    if not re.fullmatch(r"2026\.08\.16\.05", args.version):
         raise SystemExit("release_version_mismatch")
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
         raise SystemExit("release_commit_invalid")
@@ -104,7 +104,7 @@ def main() -> int:
         "minimum_bootstrap_version": 2,
         "built_at": built_at or datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "files": [item for item in assets if item["path"] in FILES],
-        "bootstrap": next(item for item in assets if item["path"] == "bootstrap.py") | {"version": 6},
+        "bootstrap": next(item for item in assets if item["path"] == "bootstrap.py") | {"version": 7},
     }
     manifest_path = output / "worker-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

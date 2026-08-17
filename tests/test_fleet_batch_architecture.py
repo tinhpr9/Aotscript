@@ -225,7 +225,7 @@ class TestFleetLoopResilience(unittest.TestCase):
             self.assertNotIn("act-test-upd-1", state["processed_action_ids"])
 
     def test_handle_worker_update_cross_version_spawns_bootstrap(self):
-        # Worker running older version .15.01 receiving target .16.03
+        # Worker running older version .15.01 receiving target .16.04
         self.RELAY.WORKER_VERSION = "aot-worker-2026.08.15.01"
         state = {"processed_action_ids": []}
         message = {
@@ -238,8 +238,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.03",
-                "tag": "worker-v2026.08.16.03",
+                "version": "aot-worker-2026.08.16.05",
+                "tag": "worker-v2026.08.16.05",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -332,7 +332,7 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.03",
+                "version": "aot-worker-2026.08.16.05",
                 "tag": "worker-v2026.08.15.01",  # mismatch tag
                 "commit_sha": "a" * 40,
                 "manifest": {
@@ -361,8 +361,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.03",
-                "tag": "worker-v2026.08.16.03",
+                "version": "aot-worker-2026.08.16.05",
+                "tag": "worker-v2026.08.16.05",
                 "commit_sha": "a" * 40,
             },
         }
@@ -386,8 +386,8 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "expires_at": int(time.time() * 1000) + 60000,
                 "release": {
                     "protocol": "github-release-v1",
-                    "version": "aot-worker-2026.08.16.03",
-                    "tag": "worker-v2026.08.16.03",
+                    "version": "aot-worker-2026.08.16.05",
+                    "tag": "worker-v2026.08.16.05",
                     "commit_sha": "a" * 40,
                     "manifest": {
                         "name": "worker-manifest.json",
@@ -416,8 +416,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.03",
-                "tag": "worker-v2026.08.16.03",
+                "version": "aot-worker-2026.08.16.05",
+                "tag": "worker-v2026.08.16.05",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -450,8 +450,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.03",
-                "tag": "worker-v2026.08.16.03",
+                "version": "aot-worker-2026.08.16.05",
+                "tag": "worker-v2026.08.16.05",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -465,6 +465,130 @@ class TestFleetLoopResilience(unittest.TestCase):
             res = self.RELAY._handle_worker_update(state, local_id="m116", message=message)
             self.assertTrue(res)
             mock_popen.assert_not_called()
+
+    def test_initial_snapshot_error_sends_fallback_status_with_capabilities_and_version(self):
+        sent_payloads = []
+        mock_sock = mock.MagicMock()
+
+        def fake_send(sock, payload):
+            sent_payloads.append(payload)
+
+        with mock.patch.object(self.RELAY.controller, "snapshot", side_effect=self.RELAY.controller.AotControllerError("dump_failed")), \
+             mock.patch.object(self.RELAY, "_ws_send_json", side_effect=fake_send):
+            fp = self.RELAY._send_live_status(mock_sock, device_id="m116", previous_fingerprint=None)
+            self.assertIsNone(fp)
+            self.assertEqual(len(sent_payloads), 1)
+            payload = sent_payloads[0]
+            self.assertEqual(payload.get("type"), "aot_status")
+            self.assertEqual(payload.get("device_id"), "m116")
+            self.assertEqual(payload.get("worker_version"), self.RELAY.WORKER_VERSION)
+            self.assertTrue(payload.get("fallback"))
+            self.assertIn("allocate_server_2pc", payload.get("capabilities", []))
+
+    def test_subsequent_snapshot_error_does_not_send_status(self):
+        sent_payloads = []
+        mock_sock = mock.MagicMock()
+
+        def fake_send(sock, payload):
+            sent_payloads.append(payload)
+
+        with mock.patch.object(self.RELAY.controller, "snapshot", side_effect=self.RELAY.controller.AotControllerError("dump_failed")), \
+             mock.patch.object(self.RELAY, "_ws_send_json", side_effect=fake_send):
+            fp = self.RELAY._send_live_status(mock_sock, device_id="m116", previous_fingerprint="existing_fp")
+            self.assertIsNone(fp)
+            self.assertEqual(len(sent_payloads), 0)
+
+    def test_live_status_transport_errors_propagate_unsuppressed(self):
+        mock_sock = mock.MagicMock()
+        for err in [
+            ConnectionError("connection_reset"),
+            BrokenPipeError("broken_pipe"),
+            OSError(104, "Connection reset by peer"),
+            OSError(32, "Broken pipe"),
+        ]:
+            with mock.patch.object(self.RELAY.controller, "snapshot", return_value={"fingerprint": "fp1"}), \
+                 mock.patch.object(self.RELAY, "_ws_send_json", side_effect=err):
+                with self.assertRaises(type(err)):
+                    self.RELAY._send_live_status(mock_sock, device_id="m116", previous_fingerprint=None)
+
+    def test_runtime_requires_canonical_current_symlink(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("runtime_test", ROOT / "aot-group-control" / "runtime.py")
+        rt_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rt_module)
+        self.assertEqual(rt_module.RELAY_PATH, rt_module.ROOT / "current" / "relay.py")
+
+    def test_notify_pending_healthy_rejects_version_mismatch(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            pending_file = pathlib.Path(tmp) / "update_pending.json"
+            pending_file.write_text(json.dumps({"action_id": "act-1", "version": "aot-worker-2026.08.16.05"}))
+            with mock.patch.object(self.RELAY.updater, "PENDING_PATH", pending_file), \
+                 mock.patch.object(self.RELAY.updater, "notify_healthy") as mock_nh:
+                # Mismatching running version should not notify healthy
+                res = self.RELAY.updater.notify_pending_healthy("aot-worker-2026.08.11.5")
+                self.assertFalse(res)
+                mock_nh.assert_not_called()
+
+                # Matching running version should notify healthy
+                mock_nh.return_value = True
+                res2 = self.RELAY.updater.notify_pending_healthy("aot-worker-2026.08.16.05")
+                self.assertTrue(res2)
+                mock_nh.assert_called_once_with("act-1", "aot-worker-2026.08.16.05")
+
+    @mock.patch("fleet_relay.load_agent_config")
+    @mock.patch("fleet_relay._read_small")
+    @mock.patch("fleet_relay.controller.root_available", return_value=True)
+    @mock.patch("fleet_relay.ws_connect")
+    @mock.patch("fleet_relay.time.sleep")
+    def test_send_transport_plain_oserror_triggers_reconnect(
+        self, mock_sleep, mock_ws_connect, mock_root, mock_read, mock_cfg
+    ):
+        mock_read.side_effect = lambda p: "m116" if "device_id" in str(p) else "NOVA"
+        mock_cfg.return_value = {
+            "worker_report_url": "https://hub.example.com/report",
+            "agent_report_secret": "sec",
+        }
+        mock_sock = mock.MagicMock()
+        mock_ws_connect.return_value = mock_sock
+
+        calls = [0]
+        def fake_send_json(s, payload):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise OSError(104, "Connection reset by peer")
+            raise KeyboardInterrupt()
+
+        with mock.patch.object(self.RELAY.controller, "snapshot", return_value={"fingerprint": "fp1"}), \
+             mock.patch.object(self.RELAY, "_ws_send_json", side_effect=fake_send_json):
+            with self.assertRaises(KeyboardInterrupt):
+                self.RELAY.fleet_loop()
+
+        self.assertEqual(mock_ws_connect.call_count, 2)
+        self.assertIn(mock.call(2), mock_sleep.call_args_list)
+
+    def test_runtime_resolve_relay_path_from_release_dir(self):
+        import importlib.util
+        runtime_path = ROOT / "aot-group-control" / "runtime.py"
+        spec = importlib.util.spec_from_file_location("runtime_test_mod", runtime_path)
+        runtime_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runtime_mod)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            supervisor_root = pathlib.Path(tmp)
+            releases_dir = supervisor_root / "releases" / "aot-worker-2026.08.16.04"
+            releases_dir.mkdir(parents=True)
+            (releases_dir / "relay.py").write_text("print('release')")
+            (releases_dir / "runtime.py").write_text("print('runtime')")
+
+            current_symlink = supervisor_root / "current"
+            current_symlink.symlink_to(releases_dir, target_is_directory=True)
+
+            # Test resolver from release directory
+            with mock.patch.object(runtime_mod, "ROOT", releases_dir):
+                resolved = runtime_mod._resolve_relay_path()
+                self.assertEqual(resolved, supervisor_root / "current" / "relay.py")
+                self.assertEqual(resolved.resolve(), (releases_dir / "relay.py").resolve())
 
 
 if __name__ == "__main__": unittest.main()

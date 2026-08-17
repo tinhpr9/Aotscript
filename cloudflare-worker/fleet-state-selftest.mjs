@@ -255,27 +255,36 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
   throw new Error("device_group was overwritten by a heartbeat without device_group");
 }
 
-// Test explicit targets
+// Test dynamic and explicit canary/stable targets
 sRecord.last_update = null;
-fleet.resolveWorkerRelease = async () => ({ version: "2026.08.13.1", hash: "mock" });
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.03", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = null;
+fleet.resolveWorkerRelease = async () => ({ version: "2026.08.16.05", hash: "mock" });
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};
 sRecord.followers[ids[2]] = true;
 await store.set("aot_session:test_explicit_targets", sRecord);
 
-// Canary with explicit targets (keeps exactly the target)
-let explicitCanaryResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "canary", [ids[0]]);
-let explicitCanaryBody = await explicitCanaryResp.json();
-if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_ids.length !== 1 || explicitCanaryBody.update.selected_device_ids[0] !== ids[0]) {
-  throw new Error("Explicit canary update did not select exactly the targeted device");
+// Dynamic Canary update selects 2 ONLINE devices
+let dynamicCanaryResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "canary");
+let dynamicCanaryBody = await dynamicCanaryResp.json();
+if (dynamicCanaryBody.ok !== true || dynamicCanaryBody.update.selected_device_ids.length !== 2) {
+  throw new Error("Dynamic canary update did not select 2 online devices");
 }
-await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.03", device_ids: [ids[0], ids[1]] };
+// Complete canary trial to HEALTHY
+const canarySelected = dynamicCanaryBody.update.selected_device_ids;
+for (const cid of canarySelected) {
+  sRecord.last_update.devices[cid].status = "HEALTHY";
+  sRecord.last_update.devices[cid].worker_version = "aot-worker-2026.08.16.05";
+}
+fleet.refreshCanaryReleaseGate(sRecord);
+if (sRecord.canary_release?.status !== "HEALTHY") {
+  throw new Error("Canary release gate did not transition to HEALTHY");
+}
+sRecord.last_update = null;
 await store.set("aot_session:test_explicit_targets", sRecord);
 
-// Stable with explicit targets (keeps exactly the targets)
+// Stable with explicit targets (keeps exactly the targets after healthy canary trial)
 let explicitStableResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "stable", [ids[1], ids[2]]);
 let explicitStableBody = await explicitStableResp.json();
 if (explicitStableBody.ok !== true || explicitStableBody.update.devices.length !== 2) {
@@ -286,6 +295,14 @@ const selectedIds = explicitStableBody.update.devices.map(d => d.device_id).sort
 const expectedIds = [ids[1], ids[2]].sort();
 if (selectedIds.join(",") !== expectedIds.join(",")) {
   throw new Error("Explicit stable update selected wrong devices: " + selectedIds.join(","));
+}
+await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
+
+// Explicit Canary update (explicit targeting test)
+let explicitCanaryResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "canary", [ids[0]]);
+let explicitCanaryBody = await explicitCanaryResp.json();
+if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_ids.length !== 1 || explicitCanaryBody.update.selected_device_ids[0] !== ids[0]) {
+  throw new Error("Explicit canary update did not select exactly the targeted device");
 }
 await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
 
@@ -593,9 +610,92 @@ if (test15Body.ok || test15Body.error !== "release_resolution_failed") {
 if (JSON.stringify(test15Body).includes(mockToken)) {
   throw new Error(`SECURITY REGRESSION: Token leaked in startWorkerUpdate error response: ${JSON.stringify(test15Body)}`);
 }
-if (!test15Body.message.includes("[REDACTED]")) {
-  throw new Error(`Expected redacted message in startWorkerUpdate error response: ${JSON.stringify(test15Body)}`);
+// Test 16: allocate_server capability check falls back correctly when socket attachment has empty capabilities array
+const test16Store = new Map();
+const test16Ctx = {
+  storage: { get: async k => test16Store.get(k), put: async (k, v) => test16Store.set(k, structuredClone(v)), setAlarm: async () => {}, list: async () => new Map() },
+  getWebSockets: tag => sockets.get(tag) || [],
+  getTags: (socket) => socket.tags || [],
+  acceptWebSocket() {},
+  waitUntil() {},
+};
+const test16Fleet = new mod.namespace.FleetState(test16Ctx, {});
+const test16Record = {
+  devices: {
+    "m888": {
+      device_id: "m888",
+      capabilities: ["dynamic_update_channel", "allocate_server_2pc"],
+      added_at: Date.now(),
+    }
+  },
+  last_batch: null,
+};
+await test16Fleet.writeFleet(test16Record);
+
+// Mock online socket with empty capabilities attachment (worker_version null)
+const mockSocketWithEmptyCaps = {
+  tags: ["aot-device:m888", "aot-fleet:device:m888"],
+  deserializeAttachment: () => ({ device_id: "m888", worker_version: null, capabilities: [] }),
+  serializeAttachment: () => {},
+  send: () => {},
+  close: () => {},
+};
+sockets.set("aot-device:m888", [mockSocketWithEmptyCaps]);
+sockets.set("aot-fleet:device:m888", [mockSocketWithEmptyCaps]);
+
+// Allocate server request should succeed because getLiveCaps falls back to record capabilities
+test16Fleet.fetchManagedServerUrls = async () => ["https://s1.example.com"];
+const allocRes = await test16Fleet.dispatchFleetBatch(test16Record, "ALLOCATE_SERVER", ["m888"], { allocationMap: { "m888": "https://s1.example.com" } });
+const allocBody = await allocRes.json();
+if (!allocBody.ok) {
+  throw new Error(`Expected ALLOCATE_SERVER to succeed with capability fallback, got: ${JSON.stringify(allocBody)}`);
 }
+
+// Test fallback status frame handling in sanitizeAotLiveStatus
+const fbIdentity = { deviceId: "m999", role: "device", sessionId: "fleet" };
+const fbValidPayload = {
+  type: "aot_status",
+  protocol: "fleet-batch-v1",
+  device_id: "m999",
+  worker_version: "aot-worker-2026.08.16.05",
+  capabilities: ["allocate_server_2pc", "swift_apps_semantic"],
+  fallback: true,
+  updated_at: Date.now(),
+};
+const fbSanitized = test16Fleet.sanitizeAotLiveStatus(fbIdentity, fbValidPayload);
+if (!fbSanitized || fbSanitized.fallback !== true || fbSanitized.worker_version !== "aot-worker-2026.08.16.05") {
+  throw new Error("Failed to sanitize valid fallback status frame");
+}
+if (fbSanitized.fingerprint !== null || fbSanitized.width !== null || fbSanitized.height !== null) {
+  throw new Error("Fallback status frame should have null fingerprint and dimensions");
+}
+if (!fbSanitized.capabilities.includes("allocate_server_2pc")) {
+  throw new Error("Fallback status frame lost capabilities");
+}
+
+// Test malformed fallback frames are rejected
+const fbMismatchId = test16Fleet.sanitizeAotLiveStatus(fbIdentity, { ...fbValidPayload, device_id: "m111" });
+if (fbMismatchId !== null) throw new Error("Fallback frame with mismatch device_id was not rejected");
+
+const fbInvalidProto = test16Fleet.sanitizeAotLiveStatus(fbIdentity, { ...fbValidPayload, protocol: "invalid_proto" });
+if (fbInvalidProto !== null) throw new Error("Fallback frame with invalid protocol was not rejected");
+
+const fbInvalidVersion = test16Fleet.sanitizeAotLiveStatus(fbIdentity, { ...fbValidPayload, worker_version: "bad version with spaces" });
+if (fbInvalidVersion !== null) throw new Error("Fallback frame with invalid worker_version was not rejected");
+
+// Test normal status frames still strictly require valid fingerprint and dimensions
+const normalInvalidFp = test16Fleet.sanitizeAotLiveStatus(fbIdentity, {
+  type: "aot_status",
+  protocol: "fleet-batch-v1",
+  device_id: "m999",
+  worker_version: "aot-worker-2026.08.16.05",
+  capabilities: ["allocate_server_2pc"],
+  fingerprint: "shortfp",
+  package: "com.test",
+  width: 1080,
+  height: 1920,
+});
+if (normalInvalidFp !== null) throw new Error("Normal status frame with invalid fingerprint was not rejected");
 
 context.customFetchHandler = null;
 

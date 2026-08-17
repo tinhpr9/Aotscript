@@ -3,7 +3,7 @@ import importlib.util, pathlib, sys, tempfile, time
 root = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("relay", root / "relay.py")
 module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
-assert module.WORKER_VERSION == "aot-worker-2026.08.16.03"
+assert module.WORKER_VERSION == "aot-worker-2026.08.16.05"
 assert module.websocket_url("https://example.test/report", device_id="m301") == "wss://example.test/aot/control/ws?device_id=m301"
 assert module.build_parser().parse_args(["fleet"]).command == "fleet"
 assert "backup_restore_data_semantic" in module.WORKER_CAPABILITIES
@@ -178,17 +178,37 @@ assert res == "fp2"
 assert "preview_sha256" in sent_status[-1]
 
 # Snapshot error resilience: verify snapshot failure returns None (gracefully isolates controller error)
-# and when recovering, previous_fingerprint=None ensures fresh preview
+# When previous_fingerprint is not None: no frame is sent
 def error_snapshot(*_a, **_kw):
     raise module.controller.AotControllerError("dumpsys_locked")
 module.controller.snapshot = error_snapshot
 sent_status.clear()
 res = module._send_live_status(None, device_id="d1", previous_fingerprint="fp1", force_preview=False)
 assert res is None, "Expected None from failing snapshot"
-assert len(sent_status) == 0, "No status frame should be sent when snapshot fails"
+assert len(sent_status) == 0, "No status frame should be sent when snapshot fails during periodic check"
 
-# Recovery: snapshot recovers -> status sent with preview
+# When previous_fingerprint is None (initial connect): sends fallback frame with worker_version & capabilities
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
+assert res is None
+assert len(sent_status) == 1
+assert sent_status[0]["fallback"] is True
+assert sent_status[0]["worker_version"] == "aot-worker-2026.08.16.05"
+assert "allocate_server_2pc" in sent_status[0]["capabilities"]
+
+# Transport error propagation: any OSError from _ws_send_json must propagate unsuppressed
+def failing_send(sock, payload):
+    raise OSError(104, "Connection reset by peer")
+module._ws_send_json = failing_send
 module.controller.snapshot = fake_snapshot
+try:
+    module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
+    assert False, "Expected OSError from _ws_send_json to propagate"
+except OSError as exc:
+    assert exc.errno == 104
+
+# Recovery: restore working send and snapshot -> status sent with preview
+module._ws_send_json = lambda sock, p: sent_status.append(p)
 sent_status.clear()
 res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
 assert res == "fp1"

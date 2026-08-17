@@ -23,7 +23,7 @@ import urllib.request
 from typing import Any, Iterator
 
 BOOTSTRAP_VERSION = 2
-BOOTSTRAP_RELEASE_VERSION = 6
+BOOTSTRAP_RELEASE_VERSION = 7
 ROOT = pathlib.Path(__file__).resolve().parent
 RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
@@ -382,7 +382,7 @@ def relay_command(config: dict[str, Any]) -> list[str]:
 
 def _relay_pids() -> list[int]:
     result = []
-    root = str(RELEASES.resolve()) + os.sep
+    roots = (str(RELEASES.resolve()) + os.sep, str(ROOT.resolve()) + os.sep)
     for entry in pathlib.Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
@@ -390,7 +390,7 @@ def _relay_pids() -> list[int]:
             parts = [p.decode(errors="replace") for p in (entry / "cmdline").read_bytes().split(b"\0") if p]
         except OSError:
             continue
-        if any(pathlib.Path(part).name == "relay.py" and str(pathlib.Path(part).resolve()).startswith(root) for part in parts):
+        if any(pathlib.Path(part).name == "relay.py" and any(str(pathlib.Path(part).resolve()).startswith(r) for r in roots) for part in parts):
             result.append(int(entry.name))
     return sorted(set(result))
 
