@@ -2,30 +2,33 @@
 
 export PATH="/data/data/com.termux/files/usr/bin:$PATH"
 
-PYTHON="/data/data/com.termux/files/usr/bin/python"
-CURL="/data/data/com.termux/files/usr/bin/curl"
-AGENT="/sdcard/Download/Agent_Core.py"
-TEMP="/sdcard/Download/Agent_Core.py.tmp"
-LOG="/sdcard/Download/Agent_Log.txt"
-ID_FILE="/sdcard/Download/Shouko/device_id.txt"
-GROUP_FILE="/sdcard/Download/Shouko/device_group.txt"
-CONFIG_FILE="/sdcard/Download/Shouko/agent_config.json"
+PYTHON="${AOTSCRIPT_PYTHON:-/data/data/com.termux/files/usr/bin/python}"
+CURL="${AOTSCRIPT_CURL:-/data/data/com.termux/files/usr/bin/curl}"
+AGENT="${AOTSCRIPT_AGENT:-/sdcard/Download/Agent_Core.py}"
+TEMP="${AOTSCRIPT_AGENT_TEMP:-${AGENT}.tmp}"
+LOG="${AOTSCRIPT_LOG:-/sdcard/Download/Agent_Log.txt}"
+ID_FILE="${AOTSCRIPT_ID_FILE:-/sdcard/Download/Shouko/device_id.txt}"
+GROUP_FILE="${AOTSCRIPT_GROUP_FILE:-/sdcard/Download/Shouko/device_group.txt}"
+CONFIG_FILE="${AOTSCRIPT_CONFIG_FILE:-/sdcard/Download/Shouko/agent_config.json}"
 STATE_FILE="${AOTSCRIPT_STATE_FILE:-$HOME/.local/state/aotscript/mprovision.json}"
-MPROVISION="/data/data/com.termux/files/usr/bin/mprovision"
-LOCK_DIR="$HOME/.cache/aotscript-agent-start.lock"
-AOT_CONFIG_FILE="/sdcard/Download/Shouko/aot_group_config.json"
-AOT_RUNTIME_DIR="$HOME/.aot-group-control"
-AOT_LOG="/sdcard/Download/AOT_Group_Control.log"
+MPROVISION="${AOTSCRIPT_MPROVISION:-/data/data/com.termux/files/usr/bin/mprovision}"
+LOCK_DIR="${AOTSCRIPT_LOCK_DIR:-$HOME/.cache/aotscript-agent-start.lock}"
+AOT_CONFIG_FILE="${AOTSCRIPT_AOT_CONFIG_FILE:-/sdcard/Download/Shouko/aot_group_config.json}"
+AOT_RUNTIME_DIR="${AOTSCRIPT_AOT_RUNTIME_DIR:-$HOME/.aot-group-control}"
+AOT_LOG="${AOTSCRIPT_AOT_LOG:-/sdcard/Download/AOT_Group_Control.log}"
 AOT_REF="${AOTSCRIPT_AOT_REF:-main}"
 
-mkdir -p "/sdcard/Download/Shouko" "$HOME/.cache"
+mkdir -p "$(dirname "$ID_FILE")" "$HOME/.cache"
 
 list_agent_pids() {
-  "$PYTHON" - <<'__AOTSCRIPT_AGENT_PID_SCAN_V2_PY__'
+  "$PYTHON" - "$AGENT" <<'__AOTSCRIPT_AGENT_PID_SCAN_V2_PY__'
 import os
 import pathlib
+import sys
 
 pids = []
+agent_target = sys.argv[1] if len(sys.argv) > 1 else "/sdcard/Download/Agent_Core.py"
+agent_name = pathlib.Path(agent_target).name
 
 for entry in os.listdir("/proc"):
     if not entry.isdigit():
@@ -46,12 +49,13 @@ for entry in os.listdir("/proc"):
         continue
 
     if any(
-        argument.endswith(
-            "/Download/Agent_Core.py"
-        )
+        argument.endswith("/Download/Agent_Core.py")
+        or argument == agent_target
+        or argument.endswith(f"/{agent_name}")
         for argument in arguments
     ):
-        pids.append(int(entry))
+        if int(entry) != os.getpid():
+            pids.append(int(entry))
 
 for pid in sorted(set(pids)):
     print(pid)
@@ -147,6 +151,7 @@ PY_AOT_BOOT_CONFIG
     return 1
   }
 
+  local download_ok=true
   for name in bootstrap_launcher.py bootstrap.py; do
     if ! "$CURL" -fsSL \
       --retry 3 \
@@ -154,13 +159,14 @@ PY_AOT_BOOT_CONFIG
       "https://raw.githubusercontent.com/tinhpr9/Aotscript/$AOT_REF/aot-group-control/$name?t=$(date +%s)" \
       -o "$stage/$name"
     then
-      echo "[LỖI] Không tải được AOT runtime: $name"
-      rm -rf "$stage"
-      return 1
+      echo "[WARN] Không tải được AOT runtime: $name"
+      download_ok=false
+      break
     fi
   done
 
-  if ! "$PYTHON" - "$stage" <<'PY_AOT_BOOT_COMPILE'
+  if [ "$download_ok" = true ]; then
+    if ! "$PYTHON" - "$stage" <<'PY_AOT_BOOT_COMPILE'
 import pathlib
 import sys
 
@@ -170,19 +176,17 @@ for name in ("bootstrap_launcher.py", "bootstrap.py"):
     source = path.read_text(encoding="utf-8")
     compile(source, str(path), "exec")
 PY_AOT_BOOT_COMPILE
-  then
-    echo "[LỖI] AOT runtime tải về sai cú pháp."
-    rm -rf "$stage"
-    return 1
+    then
+      echo "[WARN] AOT runtime tải về sai cú pháp."
+      download_ok=false
+    elif ! "$PYTHON" "$stage/bootstrap.py" self-test >/dev/null 2>&1; then
+      echo "[WARN] AOT bootstrap không vượt qua self-test."
+      download_ok=false
+    fi
   fi
 
-  if ! "$PYTHON" "$stage/bootstrap.py" self-test >/dev/null 2>&1; then
-    echo "[LỖI] AOT bootstrap không vượt qua self-test."
-    rm -rf "$stage"
-    return 1
-  fi
-
-  if ! "$PYTHON" - "$stage" "$AOT_RUNTIME_DIR" <<'PY_AOT_BOOT_REPLACE'
+  if [ "$download_ok" = true ]; then
+    if ! "$PYTHON" - "$stage" "$AOT_RUNTIME_DIR" <<'PY_AOT_BOOT_REPLACE'
 import os
 import pathlib
 import sys
@@ -203,13 +207,48 @@ for name in ("bootstrap_launcher.py", "bootstrap.py"):
             compile(backup.read_text(encoding="utf-8"), str(backup), "exec")
     os.replace(temp, dst / name)
 PY_AOT_BOOT_REPLACE
-  then
-    echo "[LỖI] Không cài được AOT runtime."
-    rm -rf "$stage"
-    return 1
+    then
+      echo "[WARN] Không cài được AOT runtime mới."
+      download_ok=false
+    fi
   fi
 
   rm -rf "$stage"
+
+  is_valid_local_aot() {
+    [ -s "$AOT_RUNTIME_DIR/bootstrap_launcher.py" ] || return 1
+    [ -s "$AOT_RUNTIME_DIR/bootstrap.py" ] || return 1
+    "$PYTHON" - "$AOT_RUNTIME_DIR" <<'PY_CHECK_LOCAL_AOT' >/dev/null 2>&1
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+for name in ("bootstrap_launcher.py", "bootstrap.py"):
+    path = root / name
+    source = path.read_text(encoding="utf-8")
+    if not source.strip():
+        raise SystemExit(1)
+    compile(source, str(path), "exec")
+PY_CHECK_LOCAL_AOT
+    [ $? -eq 0 ] || return 1
+    "$PYTHON" "$AOT_RUNTIME_DIR/bootstrap.py" self-test >/dev/null 2>&1
+  }
+
+  if [ "$download_ok" != true ]; then
+    if is_valid_local_aot; then
+      echo "[WARN] Dùng AOT runtime cục bộ hiện tại (tải mới thất bại)."
+    elif [ -s "$AOT_RUNTIME_DIR/bootstrap.py.last_good" ]; then
+      cp -p "$AOT_RUNTIME_DIR/bootstrap.py.last_good" "$AOT_RUNTIME_DIR/bootstrap.py"
+      if is_valid_local_aot; then
+        echo "[WARN] Khôi phục và dùng AOT runtime bootstrap.py.last_good (tải mới thất bại)."
+      else
+        echo "[LỖI] Không có AOT runtime cục bộ hợp lệ."
+        return 1
+      fi
+    else
+      echo "[LỖI] Không có AOT runtime cục bộ hợp lệ."
+      return 1
+    fi
+  fi
   chmod 700 \
     "$AOT_RUNTIME_DIR/bootstrap_launcher.py" \
     "$AOT_RUNTIME_DIR/bootstrap.py"
@@ -243,7 +282,7 @@ resume_provision() {
   echo "===== AGENT BOOT $(date '+%Y-%m-%d %H:%M:%S') ====="
 
   termux-wake-lock 2>/dev/null || true
-  sleep 15
+  [ "${AOTSCRIPT_BOOT_TEST_MODE:-0}" = "1" ] || sleep 15
 
 
   start_aot_group_control
@@ -264,8 +303,10 @@ resume_provision() {
   echo "$$" > "$LOCK_DIR/pid"
 
   cleanup_lock() {
+    local rc=$?
     rm -f "$LOCK_DIR/pid"
     rmdir "$LOCK_DIR" 2>/dev/null || true
+    return "$rc"
   }
   trap cleanup_lock EXIT INT TERM
 
@@ -372,39 +413,63 @@ PY
 
   rm -f "$TEMP"
 
-  if ! "$CURL" -fsSL \
+  is_valid_agent() {
+    local target="$1"
+    [ -s "$target" ] || return 1
+    "$PYTHON" - "$target" <<'PY_CHECK_AGENT' >/dev/null 2>&1
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    source = path.read_text(encoding="utf-8")
+    if not source.strip():
+        raise SystemExit(1)
+    compile(source, str(path), "exec")
+except Exception:
+    raise SystemExit(1)
+PY_CHECK_AGENT
+  }
+
+  download_ok=false
+  if "$CURL" -fsSL \
     --retry 3 \
     --connect-timeout 15 \
     "https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF/agent?t=$(date +%s)" \
     -o "$TEMP"
   then
-    echo "[LỖI] Không tải được Agent từ GitHub."
-    rm -f "$TEMP"
-    exit 1
-  fi
-
-  if ! "$PYTHON" -c '
-import pathlib
-import sys
-source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-compile(source, sys.argv[1], "exec")
-' "$TEMP"
-  then
-    echo "[LỖI] Agent tải về sai cú pháp."
-    rm -f "$TEMP"
-    exit 1
-  fi
-
-  if [ -f "$AGENT" ] &&
-     cmp -s "$TEMP" "$AGENT"; then
-    rm -f "$TEMP"
-    echo "[OK] Agent hiện tại đã là bản mới nhất."
+    if is_valid_agent "$TEMP"; then
+      download_ok=true
+    else
+      echo "[WARN] Agent tải về sai cú pháp."
+      rm -f "$TEMP"
+    fi
   else
-    [ ! -f "$AGENT" ] ||
-      cp -p "$AGENT" "${AGENT}.bak"
-    mv -f "$TEMP" "$AGENT"
-    chmod 600 "$AGENT"
-    echo "[OK] Đã thay Agent bằng bản hợp lệ mới nhất."
+    echo "[WARN] Không tải được Agent mới từ GitHub."
+    rm -f "$TEMP"
+  fi
+
+  if [ "$download_ok" = true ]; then
+    if [ -f "$AGENT" ] && cmp -s "$TEMP" "$AGENT"; then
+      rm -f "$TEMP"
+      echo "[OK] Agent hiện tại đã là bản mới nhất."
+    else
+      [ ! -f "$AGENT" ] || cp -p "$AGENT" "${AGENT}.bak"
+      mv -f "$TEMP" "$AGENT"
+      chmod 600 "$AGENT"
+      echo "[OK] Đã thay Agent bằng bản hợp lệ mới nhất."
+    fi
+  else
+    if is_valid_agent "$AGENT"; then
+      echo "[WARN] Dùng Agent_Core.py cục bộ hiện tại (tải mới thất bại)."
+    elif is_valid_agent "${AGENT}.bak"; then
+      cp -p "${AGENT}.bak" "$AGENT"
+      chmod 600 "$AGENT"
+      echo "[WARN] Khôi phục và dùng Agent_Core.py.bak (tải mới thất bại)."
+    else
+      echo "[LỖI] Không tải được Agent từ GitHub và không có bản Agent cục bộ hợp lệ."
+      exit 1
+    fi
   fi
 
   nohup "$PYTHON" -u "$AGENT" >> "$LOG" 2>&1 &
