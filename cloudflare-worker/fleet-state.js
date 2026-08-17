@@ -1119,6 +1119,40 @@ export class FleetState
     ) {
       return null;
     }
+
+    const workerVersion = String(body.worker_version || "").trim();
+    if (workerVersion && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(workerVersion)) {
+      return null;
+    }
+    const capabilities = Array.isArray(body.capabilities)
+      ? [...new Set(body.capabilities.map(String).filter((value) =>
+        /^[a-z][a-z0-9_]{0,63}$/.test(value)
+      ))].slice(0, 16)
+      : [];
+
+    const hasFingerprint = body.fingerprint !== undefined && body.fingerprint !== null && body.fingerprint !== "";
+
+    if (!hasFingerprint) {
+      return {
+        device_id: identity.deviceId,
+        role: identity.role,
+        session_id: identity.sessionId,
+        worker_version: workerVersion || null,
+        capabilities,
+        package: null,
+        fingerprint: null,
+        layout_signature: null,
+        coordinate_ready: false,
+        ime_visible: null,
+        width: null,
+        height: null,
+        preview_b64: null,
+        preview_sha256: null,
+        preview_bytes: 0,
+        updated_at: Number(body.updated_at) || Date.now(),
+      };
+    }
+
     const fingerprint = String(
       body.fingerprint || ""
     ).toLowerCase();
@@ -1170,15 +1204,6 @@ export class FleetState
     ) {
       return null;
     }
-    const workerVersion = String(body.worker_version || "").trim();
-    if (workerVersion && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(workerVersion)) {
-      return null;
-    }
-    const capabilities = Array.isArray(body.capabilities)
-      ? [...new Set(body.capabilities.map(String).filter((value) =>
-        /^[a-z][a-z0-9_]{0,63}$/.test(value)
-      ))].slice(0, 16)
-      : [];
     let preview = null;
     if (
       typeof body.preview_b64 ===
@@ -1234,7 +1259,7 @@ export class FleetState
               )
             )
           : 0,
-      updated_at: Date.now(),
+      updated_at: Number(body.updated_at) || Date.now(),
     };
   }
 

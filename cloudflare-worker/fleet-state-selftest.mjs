@@ -634,6 +634,43 @@ if (!allocBody.ok) {
   throw new Error(`Expected ALLOCATE_SERVER to succeed with capability fallback, got: ${JSON.stringify(allocBody)}`);
 }
 
+// Test 17: Fallback metadata-only status frame is sanitized and populates capabilities/version
+const test17Identity = { role: "device", sessionId: "fleet", deviceId: "m999" };
+const fallbackPayload = {
+  type: "aot_status",
+  protocol: "fleet-batch-v1",
+  device_id: "m999",
+  worker_version: "aot-worker-2026.08.16.04",
+  capabilities: ["dynamic_update_channel", "allocate_server_2pc"],
+  updated_at: Date.now(),
+};
+const sanitizedFallback = test16Fleet.sanitizeAotLiveStatus(test17Identity, fallbackPayload);
+if (!sanitizedFallback) {
+  throw new Error("Expected fallback metadata-only status frame to be accepted by sanitizeAotLiveStatus");
+}
+if (sanitizedFallback.worker_version !== "aot-worker-2026.08.16.04" || !sanitizedFallback.capabilities.includes("allocate_server_2pc")) {
+  throw new Error(`Sanitized fallback payload missing version or capabilities: ${JSON.stringify(sanitizedFallback)}`);
+}
+if (sanitizedFallback.fingerprint !== null || sanitizedFallback.coordinate_ready !== false) {
+  throw new Error(`Sanitized fallback payload should have null fingerprint and false coordinate_ready: ${JSON.stringify(sanitizedFallback)}`);
+}
+
+// Test 18: Normal status with invalid fingerprint is strictly rejected
+const badFingerprintPayload = {
+  type: "aot_status",
+  protocol: "fleet-batch-v1",
+  device_id: "m999",
+  worker_version: "aot-worker-2026.08.16.04",
+  capabilities: ["dynamic_update_channel"],
+  fingerprint: "invalid_fingerprint_not_24_hex",
+  width: 1080,
+  height: 2400,
+};
+const badResult = test16Fleet.sanitizeAotLiveStatus(test17Identity, badFingerprintPayload);
+if (badResult !== null) {
+  throw new Error("Expected invalid fingerprint to be strictly rejected by sanitizeAotLiveStatus");
+}
+
 context.customFetchHandler = null;
 
 console.log("AOT_AUTO_HEAL_TESTS=OK");

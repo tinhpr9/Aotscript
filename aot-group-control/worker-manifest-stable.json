@@ -14,12 +14,12 @@
     {
       "path": "relay.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.16.04/relay.py",
-      "sha256": "239516c692b52640a3c1c981cb102cc0affa5d9f6a340f87f9f1e19dd479d094"
+      "sha256": "d595e2873f23948f49dbc9e492a8b7950444bddd3c047816dcc0c390da9f4303"
     },
     {
       "path": "runtime.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.16.04/runtime.py",
-      "sha256": "45c70d882eacb4e83cf9bdaee069d19e1f6afadf2fde7f132a0a60fc3c0e40f4"
+      "sha256": "9c652ccb2eb994499273344d782c32dfb766ec177626492850c11aefbf569395"
     },
     {
       "path": "controller.py",

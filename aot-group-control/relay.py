@@ -1307,8 +1307,13 @@ def _send_live_status(
     role: str | None = None,
     session_id: str | None = None,
 ) -> str | None:
+    snap: dict[str, Any] | None = None
     try:
         snap = controller.snapshot(include_nodes=False)
+    except (controller.AotControllerError, OSError):
+        snap = None
+
+    if snap is not None:
         current_fingerprint = snap.get("fingerprint")
         meaningful_change = (current_fingerprint != previous_fingerprint)
         include_preview = force_preview or meaningful_change
@@ -1321,24 +1326,17 @@ def _send_live_status(
         )
         _ws_send_json(sock, payload)
         return current_fingerprint
-    except (controller.AotControllerError, OSError) as exc:
-        if isinstance(exc, (ConnectionError, BrokenPipeError)):
-            raise
-        if previous_fingerprint is None:
-            payload = _live_status_payload(
-                device_id=device_id,
-                include_preview=False,
-                snapshot={},
-                role=role,
-                session_id=session_id,
-            )
-            try:
-                _ws_send_json(sock, payload)
-            except (ConnectionError, BrokenPipeError):
-                raise
-            except Exception:
-                pass
-        return None
+
+    if previous_fingerprint is None:
+        payload = _live_status_payload(
+            device_id=device_id,
+            include_preview=False,
+            snapshot={},
+            role=role,
+            session_id=session_id,
+        )
+        _ws_send_json(sock, payload)
+    return None
 
 
 def _send_control_result(

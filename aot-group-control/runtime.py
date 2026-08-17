@@ -13,8 +13,23 @@ import time
 from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parent
-CURRENT_RELAY = ROOT / "current" / "relay.py"
-RELAY_PATH = CURRENT_RELAY if CURRENT_RELAY.is_file() else (ROOT / "relay.py")
+
+
+def _resolve_relay_path() -> pathlib.Path:
+    # 1. If runtime.py is executed inside releases/<version>/
+    if (ROOT.parent.parent / "current" / "relay.py").is_file():
+        return ROOT.parent.parent / "current" / "relay.py"
+    # 2. If runtime.py is executed inside current/
+    if (ROOT.parent / "current" / "relay.py").is_file():
+        return ROOT.parent / "current" / "relay.py"
+    # 3. If runtime.py is executed in supervisor ROOT (~/.aot-group-control/)
+    if (ROOT / "current" / "relay.py").is_file():
+        return ROOT / "current" / "relay.py"
+    # 4. Same directory fallback for standalone/test environment
+    return ROOT / "relay.py"
+
+
+RELAY_PATH = _resolve_relay_path()
 E2E_PATH = ROOT / "e2e.py"
 CONFIG_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/aot_group_config.json"

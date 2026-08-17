@@ -502,5 +502,59 @@ class TestFleetLoopResilience(unittest.TestCase):
                 self.assertTrue(res2)
                 mock_nh.assert_called_once_with("act-1", "aot-worker-2026.08.16.04")
 
+    @mock.patch("fleet_relay.load_agent_config")
+    @mock.patch("fleet_relay._read_small")
+    @mock.patch("fleet_relay.controller.root_available", return_value=True)
+    @mock.patch("fleet_relay.ws_connect")
+    @mock.patch("fleet_relay.time.sleep")
+    def test_send_transport_plain_oserror_triggers_reconnect(
+        self, mock_sleep, mock_ws_connect, mock_root, mock_read, mock_cfg
+    ):
+        mock_read.side_effect = lambda p: "m116" if "device_id" in str(p) else "NOVA"
+        mock_cfg.return_value = {
+            "worker_report_url": "https://hub.example.com/report",
+            "agent_report_secret": "sec",
+        }
+        mock_sock = mock.MagicMock()
+        mock_ws_connect.return_value = mock_sock
+
+        calls = [0]
+        def fake_send_json(s, payload):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise OSError(104, "Connection reset by peer")
+            raise KeyboardInterrupt()
+
+        with mock.patch.object(self.RELAY.controller, "snapshot", return_value={"fingerprint": "fp1"}), \
+             mock.patch.object(self.RELAY, "_ws_send_json", side_effect=fake_send_json):
+            with self.assertRaises(KeyboardInterrupt):
+                self.RELAY.fleet_loop()
+
+        self.assertEqual(mock_ws_connect.call_count, 2)
+        self.assertIn(mock.call(2), mock_sleep.call_args_list)
+
+    def test_runtime_resolve_relay_path_from_release_dir(self):
+        import importlib.util
+        runtime_path = ROOT / "aot-group-control" / "runtime.py"
+        spec = importlib.util.spec_from_file_location("runtime_test_mod", runtime_path)
+        runtime_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runtime_mod)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            supervisor_root = pathlib.Path(tmp)
+            releases_dir = supervisor_root / "releases" / "aot-worker-2026.08.16.04"
+            releases_dir.mkdir(parents=True)
+            (releases_dir / "relay.py").write_text("print('release')")
+            (releases_dir / "runtime.py").write_text("print('runtime')")
+
+            current_symlink = supervisor_root / "current"
+            current_symlink.symlink_to(releases_dir, target_is_directory=True)
+
+            # Test resolver from release directory
+            with mock.patch.object(runtime_mod, "ROOT", releases_dir):
+                resolved = runtime_mod._resolve_relay_path()
+                self.assertEqual(resolved, supervisor_root / "current" / "relay.py")
+                self.assertEqual(resolved.resolve(), (releases_dir / "relay.py").resolve())
+
 
 if __name__ == "__main__": unittest.main()
