@@ -32,10 +32,22 @@ const context = vm.createContext({
     if (targetStr === "dup,dup") throw new Error("Thiết bị bị lặp.");
     return ["m1"];
   },
-  fetch: async (url) => {
-    return {
-      ok: true,
-      text: async () => `com.tinh.vv.hi,https://www.roblox.com/games/975?privateServerLinkCode=11111111111111111111111111111111
+  getGitHubFile: async (path, env, options = {}) => {
+    if (options?.signal?.aborted) {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+    if (context.gitHubFileError) {
+      throw new Error(context.gitHubFileError);
+    }
+    if (context.gitHubFileAbort) {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+    if (path === "tong_hop_link.txt") {
+      const contentStr = `com.tinh.vv.hi,https://www.roblox.com/games/975?privateServerLinkCode=11111111111111111111111111111111
 com.tinh.vv.hj,https://www.roblox.com/games/975?privateServerLinkCode=22222222222222222222222222222222
 com.tinh.vv.hk,https://www.roblox.com/games/975?privateServerLinkCode=33333333333333333333333333333333
 com.tinh.vv.hl,https://www.roblox.com/games/975?privateServerLinkCode=44444444444444444444444444444444
@@ -45,8 +57,15 @@ com.tinh.vv.ho,https://www.roblox.com/games/975?privateServerLinkCode=7777777777
 com.tinh.vv.hp,https://www.roblox.com/games/975?privateServerLinkCode=88888888888888888888888888888888
 com.tinh.vv.hq,https://www.roblox.com/games/975?privateServerLinkCode=99999999999999999999999999999999
 com.tinh.vv.hr,https://www.roblox.com/games/975?privateServerLinkCode=00000000000000000000000000000000
-===`
-    };
+===`;
+      return {
+        content: Buffer.from(contentStr).toString("base64")
+      };
+    }
+    throw new Error(`File ${path} not found`);
+  },
+  decodeBase64: (value) => {
+    return Buffer.from(value || "", "base64").toString("utf8");
   },
   parseTongHopLink: (text, ids, tabs) => {
     const res = {};
@@ -198,6 +217,22 @@ async function runTests() {
   // Offline device
   await triggerMessage("/phanserver offline 5");
   if (!sentMessages[0].text.includes("Lỗi: Thiết bị offline đang OFFLINE")) throw new Error("offline test failed");
+
+  // GitHub fetch failure reproduction test
+  context.gitHubFileError = "GitHub GET 404: Not Found";
+  await triggerMessage("/phanserver m1 5");
+  if (!sentMessages[0].text.includes("Lỗi: GitHub GET 404: Not Found")) {
+    throw new Error("GitHub fetch error reproduction test failed: " + sentMessages[0].text);
+  }
+  context.gitHubFileError = null;
+
+  // GitHub timeout abort reproduction test
+  context.gitHubFileAbort = true;
+  await triggerMessage("/phanserver m1 5");
+  if (!sentMessages[0].text.includes("Lỗi: The operation was aborted")) {
+    throw new Error("GitHub timeout abort test failed: " + sentMessages[0].text);
+  }
+  context.gitHubFileAbort = false;
 
   console.log("AOT_TELEGRAM_PHANSERVER_SELFTEST=OK");
 }

@@ -4232,10 +4232,13 @@ async function handleUpdate(update, env) {
       
       const abortCtrl = new AbortController();
       const abortTimeout = setTimeout(() => abortCtrl.abort(), 10000);
-      const resp = await fetch("https://raw.githubusercontent.com/tinhpr9/Aotscript/main/tong_hop_link.txt", { signal: abortCtrl.signal });
-      clearTimeout(abortTimeout);
-      if (!resp.ok) throw new Error("Fetch tong_hop_link.txt failed");
-      const text = await resp.text();
+      let fileData;
+      try {
+        fileData = await getGitHubFile("tong_hop_link.txt", env, { signal: abortCtrl.signal });
+      } finally {
+        clearTimeout(abortTimeout);
+      }
+      const text = decodeBase64(fileData?.content || "");
       
       const allocationMap = parseTongHopLink(text, ids, tabs);
       
@@ -6042,11 +6045,12 @@ async function sendStatus(chatId, env) {
   );
 }
 
-async function getGitHubFile(path, env) {
+async function getGitHubFile(path, env, options = {}) {
   const response = await fetch(
     `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
     {
       headers: githubHeaders(env),
+      signal: options?.signal,
     }
   );
 
