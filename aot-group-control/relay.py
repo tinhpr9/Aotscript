@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.client
 import importlib.util
 import json
 import os
@@ -1098,7 +1099,7 @@ def _handle_allocate_server(
             res["reason"] = reason
         try:
             _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, **res)
-        except AotRelayError:
+        except (AotRelayError, OSError, urllib.error.URLError, http.client.HTTPException):
             pass
 
     try:
