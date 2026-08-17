@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Development Workflow
 
 > This file extends [common/AGENTS.md](./AGENTS.md) with the full feature development process that happens before git operations.

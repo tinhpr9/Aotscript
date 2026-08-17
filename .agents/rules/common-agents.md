@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Agent Orchestration
 
 ## Available Subagents
