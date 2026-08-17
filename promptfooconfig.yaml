@@ -1,0 +1,74 @@
+description: 'Antigraviny Policy and Routing Benchmark'
+
+prompts:
+  - '{{input}}'
+
+providers:
+  - id: 'file://eval/router_provider.js'
+    label: 'Antigraviny Router'
+
+tests:
+  - description: 'A: bug/root-cause prompt'
+    vars:
+      input: 'Error: NullPointerException in relay.py when terminal_ack fails'
+    assert:
+      - type: icontains
+        value: 'orch-fix-defect'
+      - type: not-icontains
+        value: 'speckit'
+      - type: icontains
+        value: 'TDD_MANDATE'
+
+  - description: 'B: Serena/code-navigation routing'
+    vars:
+      input: 'Find where WORKER_VERSION is referenced and declared in codebase'
+    assert:
+      - type: icontains
+        value: 'SERENA_MCP'
+      - type: not-icontains
+        value: 'BROAD_GREP_ALL'
+
+  - description: 'C: finding classification'
+    vars:
+      input: 'CodeRabbit reports 12 findings on commit 5129b36'
+    assert:
+      - type: regex
+        value: 'VALID.*INVALID.*DUPLICATE.*OUTDATED.*NEEDS_EVIDENCE'
+
+  - description: 'D: PR scope contamination detection'
+    vars:
+      input: 'PR #59 has 62 files modified including unrelated ECC files'
+    assert:
+      - type: icontains
+        value: 'BLOCK_MERGE'
+      - type: icontains
+        value: 'ISOLATE_SCOPE'
+      - type: icontains
+        value: 'PRESERVE_LOCAL_WIP'
+
+  - description: 'E: requirement lớn -> Spec Kit routing'
+    vars:
+      input: 'Build a complete new server allocation and multi-device coordination subsystem'
+    assert:
+      - type: icontains
+        value: 'USE_SPECKIT'
+      - type: icontains
+        value: 'specify -> clarify -> plan -> tasks -> analyze'
+
+  - description: 'F: bug nhỏ -> không lạm dụng Spec Kit'
+    vars:
+      input: 'Fix typo in variable name in relay.py'
+    assert:
+      - type: not-icontains
+        value: 'USE_SPECKIT'
+      - type: icontains
+        value: 'DIRECT_TDD'
+
+  - description: 'G: stale HEAD/review evidence rejection'
+    vars:
+      input: 'PR branch rebased to commit 953d0d3; old report from 5129b36 shows clean'
+    assert:
+      - type: icontains
+        value: 'MARK_STALE'
+      - type: icontains
+        value: 'REQUIRE_FRESH_EVIDENCE'

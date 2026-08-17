@@ -1,0 +1,33 @@
+name: Promptfoo Benchmark
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    name: Promptfoo Eval Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Promptfoo
+        run: |
+          npm install -g promptfoo
+          promptfoo --version
+
+      - name: Run Promptfoo Eval
+        run: |
+          promptfoo eval --no-cache --verbose
