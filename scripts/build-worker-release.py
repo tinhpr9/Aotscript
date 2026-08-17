@@ -104,7 +104,7 @@ def main() -> int:
         "minimum_bootstrap_version": 2,
         "built_at": built_at or datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "files": [item for item in assets if item["path"] in FILES],
-        "bootstrap": next(item for item in assets if item["path"] == "bootstrap.py") | {"version": 6},
+        "bootstrap": next(item for item in assets if item["path"] == "bootstrap.py") | {"version": 7},
     }
     manifest_path = output / "worker-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

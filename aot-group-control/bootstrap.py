@@ -23,7 +23,7 @@ import urllib.request
 from typing import Any, Iterator
 
 BOOTSTRAP_VERSION = 2
-BOOTSTRAP_RELEASE_VERSION = 6
+BOOTSTRAP_RELEASE_VERSION = 7
 ROOT = pathlib.Path(__file__).resolve().parent
 RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
