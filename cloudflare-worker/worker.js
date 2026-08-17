@@ -4230,7 +4230,14 @@ async function handleUpdate(update, env) {
     try {
       const ids = await resolveAndValidateTelegramTargets(targetStr, env);
       
-      const fileData = await getGitHubFile("tong_hop_link.txt", env);
+      const abortCtrl = new AbortController();
+      const abortTimeout = setTimeout(() => abortCtrl.abort(), 10000);
+      let fileData;
+      try {
+        fileData = await getGitHubFile("tong_hop_link.txt", env, { signal: abortCtrl.signal });
+      } finally {
+        clearTimeout(abortTimeout);
+      }
       const text = decodeBase64(fileData?.content || "");
       
       const allocationMap = parseTongHopLink(text, ids, tabs);
@@ -6038,11 +6045,12 @@ async function sendStatus(chatId, env) {
   );
 }
 
-async function getGitHubFile(path, env) {
+async function getGitHubFile(path, env, options = {}) {
   const response = await fetch(
     `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
     {
       headers: githubHeaders(env),
+      signal: options?.signal,
     }
   );
 

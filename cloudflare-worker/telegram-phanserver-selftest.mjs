@@ -32,9 +32,19 @@ const context = vm.createContext({
     if (targetStr === "dup,dup") throw new Error("Thiết bị bị lặp.");
     return ["m1"];
   },
-  getGitHubFile: async (path, env) => {
+  getGitHubFile: async (path, env, options = {}) => {
+    if (options?.signal?.aborted) {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    }
     if (context.gitHubFileError) {
       throw new Error(context.gitHubFileError);
+    }
+    if (context.gitHubFileAbort) {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
     }
     if (path === "tong_hop_link.txt") {
       const contentStr = `com.tinh.vv.hi,https://www.roblox.com/games/975?privateServerLinkCode=11111111111111111111111111111111
@@ -215,6 +225,14 @@ async function runTests() {
     throw new Error("GitHub fetch error reproduction test failed: " + sentMessages[0].text);
   }
   context.gitHubFileError = null;
+
+  // GitHub timeout abort reproduction test
+  context.gitHubFileAbort = true;
+  await triggerMessage("/phanserver m1 5");
+  if (!sentMessages[0].text.includes("Lỗi: The operation was aborted")) {
+    throw new Error("GitHub timeout abort test failed: " + sentMessages[0].text);
+  }
+  context.gitHubFileAbort = false;
 
   console.log("AOT_TELEGRAM_PHANSERVER_SELFTEST=OK");
 }
