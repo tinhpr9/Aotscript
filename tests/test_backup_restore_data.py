@@ -889,32 +889,28 @@ class TestArchitectureConstraints(unittest.TestCase):
     def test_worker_version_bumped_to_12(self):
         self.assertEqual("aot-worker-2026.08.16.05", RELAY.WORKER_VERSION)
 
-    def test_fleet_hub_html_has_backup_restore_data_button(self):
+    def test_fleet_hub_html_page_removed(self):
+        """The browser WebApp HTML page has been fully removed from the worker."""
         src = (ROOT / "cloudflare-worker/worker.js").read_text()
-        hub_start = src.index("function fleetHubHtml()")
-        hub_end = src.index("async function handleAotHubPage")
-        hub = src[hub_start:hub_end]
-        self.assertIn("backupRestoreData", hub)
-        self.assertIn("Backup RESTORE_DATA", hub)
-        self.assertIn("backup_restore_data", hub)
+        self.assertNotIn("function fleetHubHtml()", src)
+        self.assertNotIn("async function handleAotHubPage", src)
+        self.assertNotIn("telegram-web-app.js", src)
+        self.assertNotIn("window.Telegram", src)
+        self.assertNotIn("/aot/hub/api/state", src)
+        self.assertNotIn("/aot/hub/api/control", src)
+        self.assertNotIn("/aot/hub/api/ws", src)
 
-    def test_existing_hub_buttons_preserved(self):
+    def test_backend_still_has_backup_restore_data(self):
+        """backup_restore_data action is preserved in the Telegram bot and fleet control path."""
         src = (ROOT / "cloudflare-worker/worker.js").read_text()
-        hub_start = src.index("function fleetHubHtml()")
-        hub_end = src.index("async function handleAotHubPage")
-        hub = src[hub_start:hub_end]
-        self.assertIn("open_swift_backup", hub)
-        self.assertIn("open_swift_apps", hub)
-        self.assertIn("Mở Swift Backup", hub)
-        self.assertIn("Mở Apps", hub)
+        self.assertIn("backup_restore_data", src)
+        self.assertIn("BACKUP_RESTORE_DATA", src)
 
-    def test_no_session_id_or_coordinates_in_hub(self):
+    def test_backend_still_has_hub_buttons_via_telegram(self):
+        """open_swift_backup and open_swift_apps remain accessible via Telegram /batch commands."""
         src = (ROOT / "cloudflare-worker/worker.js").read_text()
-        hub_start = src.index("function fleetHubHtml()")
-        hub_end = src.index("async function handleAotHubPage")
-        hub = src[hub_start:hub_end]
-        for forbidden in ("session_id", "x_norm", "y_norm", "REFERENCE"):
-            self.assertNotIn(forbidden, hub)
+        self.assertIn("open_swift_backup", src)
+        self.assertIn("open_swift_apps", src)
 
     def test_fleet_state_version_bumped(self):
         src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
