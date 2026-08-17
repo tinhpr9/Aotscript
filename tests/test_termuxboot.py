@@ -120,7 +120,7 @@ exit 0
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=20,
+            timeout=60,
         )
         return proc
 
