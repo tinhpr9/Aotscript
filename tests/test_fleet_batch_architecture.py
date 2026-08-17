@@ -44,9 +44,10 @@ class SwiftAppsSemanticTests(unittest.TestCase):
 class FleetArchitectureTests(unittest.TestCase):
     def test_new_protocol_is_device_only_and_legacy_control_is_gone(self):
         worker = (ROOT / "cloudflare-worker/worker.js").read_text()
-        dashboard = worker[worker.index("function fleetHubHtml()"):worker.index("async function handleAotHubPage")]
-        for forbidden in ("session_id", "REFERENCE", "FOLLOWERS", "preview_b64", "x_norm", "y_norm"):
-            self.assertNotIn(forbidden, dashboard)
+        self.assertNotIn("function fleetHubHtml()", worker)
+        self.assertNotIn("async function handleAotHubPage", worker)
+        self.assertNotIn("telegram-web-app.js", worker)
+        self.assertNotIn("window.Telegram", worker)
         self.assertIn("cross_device_control_removed", worker)
         relay = (ROOT / "aot-group-control/relay.py").read_text()
         parser = relay[relay.index("def build_parser"):]

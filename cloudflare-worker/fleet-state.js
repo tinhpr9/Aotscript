@@ -3126,15 +3126,6 @@ export class FleetState
     return this.sendAotPayload(this.aotDashboardTag("fleet"), { type: "aot_hub_state", ...payload.state });
   }
 
-  async connectFleetDashboard(request) {
-    if (String(request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
-      return json({ ok: false, error: "upgrade_required" }, 426);
-    }
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
-    this.ctx.acceptWebSocket(server, [this.aotDashboardTag("fleet")]);
-    return new Response(null, { status: 101, webSocket: client });
-  }
 
   async connectFleetWebSocket(url, request) {
     const deviceId = validDeviceId(url.searchParams.get("id"));
@@ -3520,12 +3511,7 @@ export class FleetState
       return this.registerFleetDevice(request, "verify");
     }
 
-    if (
-      request.method === "GET" &&
-      url.pathname === "/aot/hub/dashboard-ws"
-    ) {
-      return this.connectFleetDashboard(request);
-    }
+
 
 
     if (
