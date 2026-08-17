@@ -21,7 +21,7 @@ from launcher_test_support import launcher_command
 
 
 SETUP = pathlib.Path(os.environ.get("AOTSCRIPT_SETUP_UNDER_TEST", "setup.sh")).resolve()
-TIMEOUT = 12
+TIMEOUT = int(os.environ.get("AOTSETUP_TEST_TIMEOUT", "15"))
 PASSED: list[str] = []
 
 

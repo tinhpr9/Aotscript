@@ -4230,12 +4230,8 @@ async function handleUpdate(update, env) {
     try {
       const ids = await resolveAndValidateTelegramTargets(targetStr, env);
       
-      const abortCtrl = new AbortController();
-      const abortTimeout = setTimeout(() => abortCtrl.abort(), 10000);
-      const resp = await fetch("https://raw.githubusercontent.com/tinhpr9/Aotscript/main/tong_hop_link.txt", { signal: abortCtrl.signal });
-      clearTimeout(abortTimeout);
-      if (!resp.ok) throw new Error("Fetch tong_hop_link.txt failed");
-      const text = await resp.text();
+      const fileData = await getGitHubFile("tong_hop_link.txt", env);
+      const text = decodeBase64(fileData?.content || "");
       
       const allocationMap = parseTongHopLink(text, ids, tabs);
       
