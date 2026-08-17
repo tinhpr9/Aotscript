@@ -255,27 +255,36 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
   throw new Error("device_group was overwritten by a heartbeat without device_group");
 }
 
-// Test explicit targets
+// Test dynamic and explicit canary/stable targets
 sRecord.last_update = null;
-fleet.resolveWorkerRelease = async () => ({ version: "2026.08.13.1", hash: "mock" });
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.04", device_ids: [ids[0], ids[1]] };
+sRecord.canary_release = null;
+fleet.resolveWorkerRelease = async () => ({ version: "2026.08.16.05", hash: "mock" });
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};
 sRecord.followers[ids[2]] = true;
 await store.set("aot_session:test_explicit_targets", sRecord);
 
-// Canary with explicit targets (keeps exactly the target)
-let explicitCanaryResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "canary", [ids[0]]);
-let explicitCanaryBody = await explicitCanaryResp.json();
-if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_ids.length !== 1 || explicitCanaryBody.update.selected_device_ids[0] !== ids[0]) {
-  throw new Error("Explicit canary update did not select exactly the targeted device");
+// Dynamic Canary update selects 2 ONLINE devices
+let dynamicCanaryResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "canary");
+let dynamicCanaryBody = await dynamicCanaryResp.json();
+if (dynamicCanaryBody.ok !== true || dynamicCanaryBody.update.selected_device_ids.length !== 2) {
+  throw new Error("Dynamic canary update did not select 2 online devices");
 }
-await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
-sRecord.canary_release = { status: "HEALTHY", version: "aot-worker-2026.08.16.04", device_ids: [ids[0], ids[1]] };
+// Complete canary trial to HEALTHY
+const canarySelected = dynamicCanaryBody.update.selected_device_ids;
+for (const cid of canarySelected) {
+  sRecord.last_update.devices[cid].status = "HEALTHY";
+  sRecord.last_update.devices[cid].worker_version = "aot-worker-2026.08.16.05";
+}
+fleet.refreshCanaryReleaseGate(sRecord);
+if (sRecord.canary_release?.status !== "HEALTHY") {
+  throw new Error("Canary release gate did not transition to HEALTHY");
+}
+sRecord.last_update = null;
 await store.set("aot_session:test_explicit_targets", sRecord);
 
-// Stable with explicit targets (keeps exactly the targets)
+// Stable with explicit targets (keeps exactly the targets after healthy canary trial)
 let explicitStableResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "stable", [ids[1], ids[2]]);
 let explicitStableBody = await explicitStableResp.json();
 if (explicitStableBody.ok !== true || explicitStableBody.update.devices.length !== 2) {
@@ -286,6 +295,14 @@ const selectedIds = explicitStableBody.update.devices.map(d => d.device_id).sort
 const expectedIds = [ids[1], ids[2]].sort();
 if (selectedIds.join(",") !== expectedIds.join(",")) {
   throw new Error("Explicit stable update selected wrong devices: " + selectedIds.join(","));
+}
+await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
+
+// Explicit Canary update (explicit targeting test)
+let explicitCanaryResp = await fleet.startWorkerUpdate("test_explicit_targets", sRecord, "canary", [ids[0]]);
+let explicitCanaryBody = await explicitCanaryResp.json();
+if (explicitCanaryBody.ok !== true || explicitCanaryBody.update.selected_device_ids.length !== 1 || explicitCanaryBody.update.selected_device_ids[0] !== ids[0]) {
+  throw new Error("Explicit canary update did not select exactly the targeted device");
 }
 await fleet.abortUpdateRollout("test_explicit_targets", sRecord);
 
@@ -634,42 +651,51 @@ if (!allocBody.ok) {
   throw new Error(`Expected ALLOCATE_SERVER to succeed with capability fallback, got: ${JSON.stringify(allocBody)}`);
 }
 
-// Test 17: Fallback metadata-only status frame is sanitized and populates capabilities/version
-const test17Identity = { role: "device", sessionId: "fleet", deviceId: "m999" };
-const fallbackPayload = {
+// Test fallback status frame handling in sanitizeAotLiveStatus
+const fbIdentity = { deviceId: "m999", role: "device", sessionId: "fleet" };
+const fbValidPayload = {
   type: "aot_status",
   protocol: "fleet-batch-v1",
   device_id: "m999",
-  worker_version: "aot-worker-2026.08.16.04",
-  capabilities: ["dynamic_update_channel", "allocate_server_2pc"],
+  worker_version: "aot-worker-2026.08.16.05",
+  capabilities: ["allocate_server_2pc", "swift_apps_semantic"],
+  fallback: true,
   updated_at: Date.now(),
 };
-const sanitizedFallback = test16Fleet.sanitizeAotLiveStatus(test17Identity, fallbackPayload);
-if (!sanitizedFallback) {
-  throw new Error("Expected fallback metadata-only status frame to be accepted by sanitizeAotLiveStatus");
+const fbSanitized = test16Fleet.sanitizeAotLiveStatus(fbIdentity, fbValidPayload);
+if (!fbSanitized || fbSanitized.fallback !== true || fbSanitized.worker_version !== "aot-worker-2026.08.16.05") {
+  throw new Error("Failed to sanitize valid fallback status frame");
 }
-if (sanitizedFallback.worker_version !== "aot-worker-2026.08.16.04" || !sanitizedFallback.capabilities.includes("allocate_server_2pc")) {
-  throw new Error(`Sanitized fallback payload missing version or capabilities: ${JSON.stringify(sanitizedFallback)}`);
+if (fbSanitized.fingerprint !== null || fbSanitized.width !== null || fbSanitized.height !== null) {
+  throw new Error("Fallback status frame should have null fingerprint and dimensions");
 }
-if (sanitizedFallback.fingerprint !== null || sanitizedFallback.coordinate_ready !== false) {
-  throw new Error(`Sanitized fallback payload should have null fingerprint and false coordinate_ready: ${JSON.stringify(sanitizedFallback)}`);
+if (!fbSanitized.capabilities.includes("allocate_server_2pc")) {
+  throw new Error("Fallback status frame lost capabilities");
 }
 
-// Test 18: Normal status with invalid fingerprint is strictly rejected
-const badFingerprintPayload = {
+// Test malformed fallback frames are rejected
+const fbMismatchId = test16Fleet.sanitizeAotLiveStatus(fbIdentity, { ...fbValidPayload, device_id: "m111" });
+if (fbMismatchId !== null) throw new Error("Fallback frame with mismatch device_id was not rejected");
+
+const fbInvalidProto = test16Fleet.sanitizeAotLiveStatus(fbIdentity, { ...fbValidPayload, protocol: "invalid_proto" });
+if (fbInvalidProto !== null) throw new Error("Fallback frame with invalid protocol was not rejected");
+
+const fbInvalidVersion = test16Fleet.sanitizeAotLiveStatus(fbIdentity, { ...fbValidPayload, worker_version: "bad version with spaces" });
+if (fbInvalidVersion !== null) throw new Error("Fallback frame with invalid worker_version was not rejected");
+
+// Test normal status frames still strictly require valid fingerprint and dimensions
+const normalInvalidFp = test16Fleet.sanitizeAotLiveStatus(fbIdentity, {
   type: "aot_status",
   protocol: "fleet-batch-v1",
   device_id: "m999",
-  worker_version: "aot-worker-2026.08.16.04",
-  capabilities: ["dynamic_update_channel"],
-  fingerprint: "invalid_fingerprint_not_24_hex",
+  worker_version: "aot-worker-2026.08.16.05",
+  capabilities: ["allocate_server_2pc"],
+  fingerprint: "shortfp",
+  package: "com.test",
   width: 1080,
-  height: 2400,
-};
-const badResult = test16Fleet.sanitizeAotLiveStatus(test17Identity, badFingerprintPayload);
-if (badResult !== null) {
-  throw new Error("Expected invalid fingerprint to be strictly rejected by sanitizeAotLiveStatus");
-}
+  height: 1920,
+});
+if (normalInvalidFp !== null) throw new Error("Normal status frame with invalid fingerprint was not rejected");
 
 context.customFetchHandler = null;
 

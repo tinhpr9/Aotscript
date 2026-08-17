@@ -238,8 +238,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.04",
-                "tag": "worker-v2026.08.16.04",
+                "version": "aot-worker-2026.08.16.05",
+                "tag": "worker-v2026.08.16.05",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -332,7 +332,7 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.04",
+                "version": "aot-worker-2026.08.16.05",
                 "tag": "worker-v2026.08.15.01",  # mismatch tag
                 "commit_sha": "a" * 40,
                 "manifest": {
@@ -361,8 +361,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.04",
-                "tag": "worker-v2026.08.16.04",
+                "version": "aot-worker-2026.08.16.05",
+                "tag": "worker-v2026.08.16.05",
                 "commit_sha": "a" * 40,
             },
         }
@@ -386,8 +386,8 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "expires_at": int(time.time() * 1000) + 60000,
                 "release": {
                     "protocol": "github-release-v1",
-                    "version": "aot-worker-2026.08.16.04",
-                    "tag": "worker-v2026.08.16.04",
+                    "version": "aot-worker-2026.08.16.05",
+                    "tag": "worker-v2026.08.16.05",
                     "commit_sha": "a" * 40,
                     "manifest": {
                         "name": "worker-manifest.json",
@@ -416,8 +416,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.04",
-                "tag": "worker-v2026.08.16.04",
+                "version": "aot-worker-2026.08.16.05",
+                "tag": "worker-v2026.08.16.05",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -450,8 +450,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.04",
-                "tag": "worker-v2026.08.16.04",
+                "version": "aot-worker-2026.08.16.05",
+                "tag": "worker-v2026.08.16.05",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -482,13 +482,47 @@ class TestFleetLoopResilience(unittest.TestCase):
             self.assertEqual(payload.get("type"), "aot_status")
             self.assertEqual(payload.get("device_id"), "m116")
             self.assertEqual(payload.get("worker_version"), self.RELAY.WORKER_VERSION)
+            self.assertTrue(payload.get("fallback"))
             self.assertIn("allocate_server_2pc", payload.get("capabilities", []))
+
+    def test_subsequent_snapshot_error_does_not_send_status(self):
+        sent_payloads = []
+        mock_sock = mock.MagicMock()
+
+        def fake_send(sock, payload):
+            sent_payloads.append(payload)
+
+        with mock.patch.object(self.RELAY.controller, "snapshot", side_effect=self.RELAY.controller.AotControllerError("dump_failed")), \
+             mock.patch.object(self.RELAY, "_ws_send_json", side_effect=fake_send):
+            fp = self.RELAY._send_live_status(mock_sock, device_id="m116", previous_fingerprint="existing_fp")
+            self.assertIsNone(fp)
+            self.assertEqual(len(sent_payloads), 0)
+
+    def test_live_status_transport_errors_propagate_unsuppressed(self):
+        mock_sock = mock.MagicMock()
+        for err in [
+            ConnectionError("connection_reset"),
+            BrokenPipeError("broken_pipe"),
+            OSError(104, "Connection reset by peer"),
+            OSError(32, "Broken pipe"),
+        ]:
+            with mock.patch.object(self.RELAY.controller, "snapshot", return_value={"fingerprint": "fp1"}), \
+                 mock.patch.object(self.RELAY, "_ws_send_json", side_effect=err):
+                with self.assertRaises(type(err)):
+                    self.RELAY._send_live_status(mock_sock, device_id="m116", previous_fingerprint=None)
+
+    def test_runtime_requires_canonical_current_symlink(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("runtime_test", ROOT / "aot-group-control" / "runtime.py")
+        rt_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rt_module)
+        self.assertEqual(rt_module.RELAY_PATH, rt_module.ROOT / "current" / "relay.py")
 
     def test_notify_pending_healthy_rejects_version_mismatch(self):
         import json
         with tempfile.TemporaryDirectory() as tmp:
             pending_file = pathlib.Path(tmp) / "update_pending.json"
-            pending_file.write_text(json.dumps({"action_id": "act-1", "version": "aot-worker-2026.08.16.04"}))
+            pending_file.write_text(json.dumps({"action_id": "act-1", "version": "aot-worker-2026.08.16.05"}))
             with mock.patch.object(self.RELAY.updater, "PENDING_PATH", pending_file), \
                  mock.patch.object(self.RELAY.updater, "notify_healthy") as mock_nh:
                 # Mismatching running version should not notify healthy
@@ -498,9 +532,9 @@ class TestFleetLoopResilience(unittest.TestCase):
 
                 # Matching running version should notify healthy
                 mock_nh.return_value = True
-                res2 = self.RELAY.updater.notify_pending_healthy("aot-worker-2026.08.16.04")
+                res2 = self.RELAY.updater.notify_pending_healthy("aot-worker-2026.08.16.05")
                 self.assertTrue(res2)
-                mock_nh.assert_called_once_with("act-1", "aot-worker-2026.08.16.04")
+                mock_nh.assert_called_once_with("act-1", "aot-worker-2026.08.16.05")
 
     @mock.patch("fleet_relay.load_agent_config")
     @mock.patch("fleet_relay._read_small")

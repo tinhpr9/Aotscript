@@ -90,7 +90,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.16.04"
+WORKER_VERSION = "aot-worker-2026.08.16.05"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -1262,9 +1262,10 @@ def _live_status_payload(
     *,
     device_id: str,
     include_preview: bool,
-    snapshot: dict[str, Any],
+    snapshot: dict[str, Any] | None = None,
     role: str | None = None,
     session_id: str | None = None,
+    fallback: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "type": "aot_status",
@@ -1272,15 +1273,28 @@ def _live_status_payload(
         "device_id": device_id,
         "worker_version": WORKER_VERSION,
         "capabilities": list(WORKER_CAPABILITIES),
-        "package": snapshot.get("package"),
-        "fingerprint": snapshot.get("fingerprint"),
-        "layout_signature": snapshot.get("layout_signature"),
-        "coordinate_ready": snapshot.get("coordinate_ready") is True,
-        "ime_visible": snapshot.get("ime_visible"),
-        "width": snapshot.get("width"),
-        "height": snapshot.get("height"),
         "updated_at": int(time.time() * 1000),
     }
+    if role:
+        payload["role"] = role
+    if session_id:
+        payload["session_id"] = session_id
+
+    if fallback or snapshot is None:
+        payload["fallback"] = True
+        return payload
+
+    payload.update(
+        {
+            "package": snapshot.get("package"),
+            "fingerprint": snapshot.get("fingerprint"),
+            "layout_signature": snapshot.get("layout_signature"),
+            "coordinate_ready": snapshot.get("coordinate_ready") is True,
+            "ime_visible": snapshot.get("ime_visible"),
+            "width": snapshot.get("width"),
+            "height": snapshot.get("height"),
+        }
+    )
     if include_preview:
         try:
             frame = controller.screenshot_bytes()
@@ -1323,6 +1337,7 @@ def _send_live_status(
             snapshot=snap,
             role=role,
             session_id=session_id,
+            fallback=False,
         )
         _ws_send_json(sock, payload)
         return current_fingerprint
@@ -1331,9 +1346,10 @@ def _send_live_status(
         payload = _live_status_payload(
             device_id=device_id,
             include_preview=False,
-            snapshot={},
+            snapshot=None,
             role=role,
             session_id=session_id,
+            fallback=True,
         )
         _ws_send_json(sock, payload)
     return None
