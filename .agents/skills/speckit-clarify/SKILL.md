@@ -21,7 +21,9 @@ You **MUST** consider the user input before proceeding (if not empty).
 **Check for extension hooks (before clarification)**:
 - Check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.before_clarify` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST preserve user-accepted clarification write scope; hooks MUST NOT silently override accepted user decisions.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
@@ -244,7 +246,9 @@ Context for prioritization: $ARGUMENTS
 Check if `.specify/extensions.yml` exists in the project root.
 - If it does not exist, or no hooks are registered under `hooks.after_clarify`, skip to the Completion Report.
 - If it exists, read it and look for entries under the `hooks.after_clarify` key.
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue to the Completion Report.
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST preserve user-accepted clarification write scope; hooks MUST NOT silently override accepted user decisions.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable

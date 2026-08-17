@@ -22,7 +22,9 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 - Check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.before_converge` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST preserve append-only convergence behavior; hooks MUST NOT delete code or modify existing tasks.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
@@ -155,9 +157,7 @@ For each item in the intent inventory, inspect the current code in scope and pro
   acceptance criterion / plan decision.
 - **`contradicts`**: the code does something that conflicts with stated intent or a
   constitution MUST principle.
-- **`unrequested`**: the code contains work not called for by the spec, plan, or tasks
-  (surfaced for awareness — converge does **not** delete code, it only appends a task to
-  review/justify or remove it).
+- **`unrequested`**: the code contains work not called for by the spec, plan, or tasks (surfaced as advisory for review — converge does **not** auto-generate destructive deletion tasks; removing unrequested code requires explicit human approval).
 
 Each `Finding` records: a stable id, the `source-ref` it traces to, the `gap-type`, a
 severity, and a short human-readable description with the evidence (the file/area observed).
@@ -206,10 +206,10 @@ Append to the **end** of `tasks.md`, per the append contract:
    (highest existing phase + 1).
 2. Write a single new section header `## Phase N: Convergence`.
 3. Emit one checklist item per actionable finding, ordered CRITICAL/HIGH first, assigning
-   zero-padded IDs `T{M+1:03d}, T{M+2:03d}, …`:
+   zero-padded IDs `T{M+1:03d}, T{M+2:03d}, …`, strictly following the canonical task grammar with exact target file paths:
 
    ```markdown
-   - [ ] T042 <imperative description> per <source-ref> (<gap-type>)
+   - [ ] T042 [US#] <imperative action> in <exact/file/path> per <source-ref> (<gap-type>)
    ```
 
    `<source-ref>` traces the task to its origin: e.g. `FR-003`, `SC-002`,
@@ -241,7 +241,9 @@ Append to the **end** of `tasks.md`, per the append contract:
 After producing the result, check if `.specify/extensions.yml` exists in the project root.
 
 - If it exists, read it and look for entries under the `hooks.after_converge` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST preserve append-only convergence behavior; hooks MUST NOT delete code or modify existing tasks.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable

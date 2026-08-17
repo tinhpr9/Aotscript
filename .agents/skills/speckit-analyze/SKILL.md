@@ -21,7 +21,9 @@ You **MUST** consider the user input before proceeding (if not empty).
 **Check for extension hooks (before analysis)**:
 - Check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.before_analyze` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST preserve the STRICT READ-ONLY analysis guarantee; hooks MUST NOT modify or delete repository files.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
@@ -112,7 +114,7 @@ Create internal representations (do not include raw artifacts in output):
 
 - **Requirements inventory**: For each Functional Requirement (FR-###) and Success Criterion (SC-###), record a stable key. Use the explicit FR-/SC- identifier as the primary key when present, and optionally also derive an imperative-phrase slug for readability (e.g., "User can upload file" → `user-can-upload-file`). Include only Success Criteria items that require buildable work (e.g., load-testing infrastructure, security audit tooling), and exclude post-launch outcome metrics and business KPIs (e.g., "Reduce support tickets by 50%").
 - **User story/action inventory**: Discrete user actions with acceptance criteria
-- **Task coverage mapping**: Map each task to one or more requirements or stories (inference by keyword / explicit reference patterns like IDs or key phrases)
+- **Task coverage mapping**: Map each task to requirements and user stories using explicit references (e.g., `[US1]`, `[FR-001]`, `[SC-001]`, `[AC-1]`). Only explicit references count toward authoritative coverage and deterministic counts. Treat keyword or phrase matching strictly as a non-authoritative review-candidate signal, not as proof of coverage.
 - **Constitution rule set**: Extract principle names and MUST/SHOULD normative statements
 
 ### 4. Detection Passes (Token-Efficient Analysis)
@@ -208,7 +210,9 @@ Ask the user: "Would you like me to suggest concrete remediation edits for the t
 
 After reporting, check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.after_analyze` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST preserve the STRICT READ-ONLY analysis guarantee; hooks MUST NOT modify or delete repository files.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable

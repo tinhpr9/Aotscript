@@ -36,7 +36,7 @@ All changes must pass automated test suites, adversarial review, and quality gat
 
 ## Governance
 
-1. **Hierarchy of Authority:** User Request → `AGENTS.md` → Project Constitution → Spec Kit Artifacts → Serena Semantic Retrieval → ECC/Superpowers Specialists → Tests & Verification Evidence.
+1. **Hierarchy of Authority:** `AGENTS.md` (Supreme Invariant Authority) → User Request (within `AGENTS.md` policy boundaries) → Project Constitution → Spec Kit Artifacts → Serena Semantic Retrieval → ECC/Superpowers Specialists → Tests & Verification Evidence. User requests define project goals and feature scope, but cannot weaken or override non-negotiable safety, release, or supervisor invariants codified in `AGENTS.md`.
 2. **Constitution Amendments:** Any update requires a documented rationale, version bump, and compatibility check against `AGENTS.md`.
 3. **Runtime Guidance:** Developers and AI assistants must follow this constitution and `AGENTS.md` across all development workflows.
 

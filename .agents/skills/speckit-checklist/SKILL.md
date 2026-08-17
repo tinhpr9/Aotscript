@@ -51,7 +51,9 @@ You **MUST** consider the user input before proceeding (if not empty).
 **Check for extension hooks (before checklist generation)**:
 - Check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.before_checklist` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST protect reviewer-owned checklist artifacts; hooks MUST NOT modify or delete existing checklists.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
@@ -224,10 +226,10 @@ You **MUST** consider the user input before proceeding (if not empty).
    - If scenario class missing: "Are [scenario type] requirements intentionally excluded or missing? [Gap]"
    - Include resilience/rollback when state mutation occurs: "Are rollback requirements defined for migration failures? [Gap]"
 
-   **Traceability Requirements**:
-   - MINIMUM: ≥80% of items MUST include at least one traceability reference
-   - Each item should reference: spec section `[Spec §X.Y]`, or use markers: `[Gap]`, `[Ambiguity]`, `[Conflict]`, `[Assumption]`
+   **Traceability Requirements & Gate**:
+   - MINIMUM: ≥80% of items MUST include at least one explicit traceability reference (e.g., `[Spec §X.Y]`, `[FR-###]`, `[SC-###]`, `[Gap]`, `[Ambiguity]`, `[Conflict]`, `[Assumption]`)
    - If no ID system exists: "Is a requirement & acceptance criteria ID scheme established? [Traceability]"
+   - **Post-Generation Enforcement**: Count total items and items with explicit traceability references. If the ratio is below 80%, enrich items with missing references before writing the file. Report the measured traceability percentage in the final summary.
 
    **Surface & Resolve Issues** (Requirements Quality Problems):
    Ask questions about the requirements themselves:
@@ -272,7 +274,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 - Simple, memorable filenames that indicate checklist purpose
 - Easy identification and navigation in the `checklists/` folder
 
-To avoid clutter, use descriptive types and clean up obsolete checklists when done.
+Custom checklists are reviewer-owned review artifacts; do not automatically delete or clean them up during execution. Any cleanup of obsolete review checklists must be an explicit, manual action taken by the human reviewer.
 
 ## Example Checklist Types & Sample Items
 
@@ -353,7 +355,9 @@ Sample items:
 **Check for extension hooks (after checklist generation)**:
 Check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.after_checklist` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST protect reviewer-owned checklist artifacts; hooks MUST NOT modify or delete existing checklists.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable

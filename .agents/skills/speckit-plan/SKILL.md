@@ -21,7 +21,9 @@ You **MUST** consider the user input before proceeding (if not empty).
 **Check for extension hooks (before planning)**:
 - Check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.before_plan` key
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST preserve plan artifacts write scope without silently resolving user-owned requirements.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
@@ -62,7 +64,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Fill Technical Context (mark unknowns as "NEEDS CLARIFICATION")
    - Fill Constitution Check section from constitution
    - Evaluate gates (ERROR if violations unjustified)
-   - Phase 0: Generate research.md (resolve all NEEDS CLARIFICATION)
+   - Phase 0: Generate research.md (resolve technical unknowns through research; if non-technical requirements, scope, UX, or policy ambiguities remain, do NOT silently decide them—route them back to user clarification via `/speckit-clarify`)
    - Phase 1: Generate data-model.md, contracts/, quickstart.md
    - Re-evaluate Constitution Check post-design
 
@@ -73,7 +75,9 @@ You **MUST** consider the user input before proceeding (if not empty).
 Check if `.specify/extensions.yml` exists in the project root.
 - If it does not exist, or no hooks are registered under `hooks.after_plan`, skip to the Completion Report.
 - If it exists, read it and look for entries under the `hooks.after_plan` key.
-- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue to the Completion Report.
+- If the YAML cannot be parsed or is invalid, **FAIL CLOSED**: report a configuration validation error and halt hook execution; do NOT silently execute unverified hooks.
+- **Trusted Dispatcher & Allowlist**: Validate hook commands against the trusted extension allowlist (`speckit.*`). Reject commands with shell metacharacters, unauthorized binaries, or path traversals.
+- **Scope Boundary**: Hooks dispatched MUST preserve plan artifacts write scope without silently resolving user-owned requirements.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
