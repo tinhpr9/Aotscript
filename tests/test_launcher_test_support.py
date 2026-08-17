@@ -9,6 +9,9 @@ import tempfile
 import unittest
 from unittest import mock
 
+import sys
+if str(pathlib.Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from launcher_test_support import LauncherExecutionError, TERMUX_BASH, launcher_command
 
 
