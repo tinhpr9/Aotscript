@@ -1,3 +1,8 @@
+---
+description: Overview of Aotscript ECC rules architecture.
+trigger: model_decision
+---
+
 # Aotscript Pruned ECC Rules
 
 This directory contains the minimal, high-value ruleset configured for Aotscript:

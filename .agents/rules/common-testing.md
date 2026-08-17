@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Testing Requirements
 
 ## Minimum Test Coverage: 80%
