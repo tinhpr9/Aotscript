@@ -30,4 +30,4 @@ jobs:
 
       - name: Run Promptfoo Eval
         run: |
-          promptfoo eval --no-cache --verbose
+          promptfoo eval --no-cache
