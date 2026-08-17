@@ -13,7 +13,7 @@ Quy tắc:
 ## PROJECT 1 — AOT OmniControl
 Mục tiêu:
 - hệ thống điều khiển tập trung nhiều UGPhone
-- AOT Hub/WebApp
+- AOT Hub backend/API
 - Telegram
 - Discord
 - Cloudflare Worker/FleetState

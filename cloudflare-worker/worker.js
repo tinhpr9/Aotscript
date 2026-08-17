@@ -1108,6 +1108,136 @@ function constantTimeTextEqual(left, right) {
   return diff === 0;
 }
 
+const AOT_HUB_AUTH_MAX_AGE_SECONDS = 60 * 60;
+const AOT_HUB_INITDATA_MAX_BYTES = 16 * 1024;
+
+async function validateAotTelegramInitData(
+  rawValue,
+  env
+) {
+  const raw = String(rawValue || "");
+  if (
+    !raw ||
+    new TextEncoder().encode(raw).length >
+      AOT_HUB_INITDATA_MAX_BYTES
+  ) {
+    return null;
+  }
+  const botToken = String(
+    env.TELEGRAM_BOT_TOKEN || ""
+  );
+  const adminId = String(
+    env.TELEGRAM_ADMIN_USER_ID || ""
+  ).trim();
+  if (!botToken || !adminId) {
+    return null;
+  }
+  const params = new URLSearchParams(raw);
+  const hash = String(
+    params.get("hash") || ""
+  ).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(hash)) {
+    return null;
+  }
+  params.delete("hash");
+  const entries = [
+    ...params.entries(),
+  ].sort((left, right) =>
+    left[0].localeCompare(right[0])
+  );
+  const dataCheckString = entries
+    .map(
+      ([key, value]) =>
+        `${key}=${value}`
+    )
+    .join("\n");
+  const encoder = new TextEncoder();
+  const secretKey =
+    await hmacSha256Bytes(
+      encoder.encode("WebAppData"),
+      encoder.encode(botToken)
+    );
+  const calculated = bytesToHex(
+    await hmacSha256Bytes(
+      secretKey,
+      encoder.encode(dataCheckString)
+    )
+  );
+  if (
+    !constantTimeTextEqual(
+      calculated,
+      hash
+    )
+  ) {
+    return null;
+  }
+  const authDate = Number(
+    params.get("auth_date")
+  );
+  const nowSeconds = Math.floor(
+    Date.now() / 1000
+  );
+  if (
+    !Number.isFinite(authDate) ||
+    authDate <= 0 ||
+    authDate > nowSeconds + 60 ||
+    nowSeconds - authDate >
+      AOT_HUB_AUTH_MAX_AGE_SECONDS
+  ) {
+    return null;
+  }
+  let user;
+  try {
+    user = JSON.parse(
+      params.get("user") || "{}"
+    );
+  } catch (error) {
+    return null;
+  }
+  if (
+    !user ||
+    typeof user !== "object" ||
+    String(user.id || "") !== adminId
+  ) {
+    return null;
+  }
+  return {
+    id: String(user.id),
+    first_name:
+      String(user.first_name || "")
+        .slice(0, 80),
+  };
+}
+
+async function requireAotHubAdmin(
+  request,
+  env
+) {
+  const user =
+    await validateAotTelegramInitData(
+      request.headers.get(
+        "X-Telegram-Init-Data"
+      ),
+      env
+    );
+  if (!user) {
+    return {
+      ok: false,
+      response: noStoreJson(
+        {
+          ok: false,
+          error: "hub_unauthorized",
+        },
+        401
+      ),
+    };
+  }
+  return {
+    ok: true,
+    user,
+  };
+}
+
 
 
 
