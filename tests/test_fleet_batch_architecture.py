@@ -239,8 +239,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.05",
-                "tag": "worker-v2026.08.16.05",
+                "version": "aot-worker-2026.08.17.01",
+                "tag": "worker-v2026.08.17.01",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -333,7 +333,7 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.05",
+                "version": "aot-worker-2026.08.17.01",
                 "tag": "worker-v2026.08.15.01",  # mismatch tag
                 "commit_sha": "a" * 40,
                 "manifest": {
@@ -362,8 +362,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.05",
-                "tag": "worker-v2026.08.16.05",
+                "version": "aot-worker-2026.08.17.01",
+                "tag": "worker-v2026.08.17.01",
                 "commit_sha": "a" * 40,
             },
         }
@@ -387,8 +387,8 @@ class TestFleetLoopResilience(unittest.TestCase):
                 "expires_at": int(time.time() * 1000) + 60000,
                 "release": {
                     "protocol": "github-release-v1",
-                    "version": "aot-worker-2026.08.16.05",
-                    "tag": "worker-v2026.08.16.05",
+                    "version": "aot-worker-2026.08.17.01",
+                    "tag": "worker-v2026.08.17.01",
                     "commit_sha": "a" * 40,
                     "manifest": {
                         "name": "worker-manifest.json",
@@ -417,8 +417,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.05",
-                "tag": "worker-v2026.08.16.05",
+                "version": "aot-worker-2026.08.17.01",
+                "tag": "worker-v2026.08.17.01",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -451,8 +451,8 @@ class TestFleetLoopResilience(unittest.TestCase):
             "expires_at": int(time.time() * 1000) + 60000,
             "release": {
                 "protocol": "github-release-v1",
-                "version": "aot-worker-2026.08.16.05",
-                "tag": "worker-v2026.08.16.05",
+                "version": "aot-worker-2026.08.17.01",
+                "tag": "worker-v2026.08.17.01",
                 "commit_sha": "a" * 40,
                 "manifest": {
                     "name": "worker-manifest.json",
@@ -523,7 +523,7 @@ class TestFleetLoopResilience(unittest.TestCase):
         import json
         with tempfile.TemporaryDirectory() as tmp:
             pending_file = pathlib.Path(tmp) / "update_pending.json"
-            pending_file.write_text(json.dumps({"action_id": "act-1", "version": "aot-worker-2026.08.16.05"}))
+            pending_file.write_text(json.dumps({"action_id": "act-1", "version": "aot-worker-2026.08.17.01"}))
             with mock.patch.object(self.RELAY.updater, "PENDING_PATH", pending_file), \
                  mock.patch.object(self.RELAY.updater, "notify_healthy") as mock_nh:
                 # Mismatching running version should not notify healthy
@@ -533,9 +533,9 @@ class TestFleetLoopResilience(unittest.TestCase):
 
                 # Matching running version should notify healthy
                 mock_nh.return_value = True
-                res2 = self.RELAY.updater.notify_pending_healthy("aot-worker-2026.08.16.05")
+                res2 = self.RELAY.updater.notify_pending_healthy("aot-worker-2026.08.17.01")
                 self.assertTrue(res2)
-                mock_nh.assert_called_once_with("act-1", "aot-worker-2026.08.16.05")
+                mock_nh.assert_called_once_with("act-1", "aot-worker-2026.08.17.01")
 
     @mock.patch("fleet_relay.load_agent_config")
     @mock.patch("fleet_relay._read_small")

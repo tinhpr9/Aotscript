@@ -90,7 +90,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.16.05"
+WORKER_VERSION = "aot-worker-2026.08.17.01"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -1096,7 +1096,10 @@ def _handle_allocate_server(
         res = {"status": status, "executed": executed}
         if reason:
             res["reason"] = reason
-        _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, **res)
+        try:
+            _send_batch_ack(cfg, device_id=local_id, action_id=action_id, action=ALLOCATE_SERVER_ACTION, **res)
+        except AotRelayError:
+            pass
 
     try:
         expires_at = int(message.get("expires_at") or 0)
@@ -1113,6 +1116,19 @@ def _handle_allocate_server(
             else:
                 terminal_ack("DUPLICATE", executed=False)
             return True
+
+        # Clean up any stale preparation files from previous dropped/aborted transactions
+        base_dir = os.path.dirname(SERVER_LINKS_PATH)
+        prefix = os.path.basename(SERVER_LINKS_PATH) + ".prep."
+        try:
+            for entry in os.listdir(base_dir):
+                if entry.startswith(prefix) and entry != f"{prefix}{action_id}":
+                    try:
+                        os.remove(os.path.join(base_dir, entry))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
         try:
             allocation = message.get("allocation")

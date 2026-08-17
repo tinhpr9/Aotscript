@@ -200,4 +200,182 @@ assert os.path.exists(links_path)
 cleanup()
 temp_dir.cleanup()
 
+# T10: ACK transport failure resilience - terminal_ack swallows AotRelayError and logs without raising
+temp_dir2 = tempfile.TemporaryDirectory()
+relay.SERVER_LINKS_PATH = pathlib.Path(temp_dir2.name) / "server_links.txt"
+links_path2 = str(relay.SERVER_LINKS_PATH)
+state2 = {}
+
+def broken_send_batch_ack(*args, **kwargs):
+    raise relay.AotRelayError("Transport ACK connection dropped")
+
+relay._send_batch_ack = broken_send_batch_ack
+
+msg10_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-10",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": [{"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc10"}],
+    "expires_at": int(time.time() * 1000) + 10000
+}
+# Should return True and NOT raise AotRelayError
+res10 = relay._handle_batch_action(cfg, state2, local_id="m1", message=msg10_prep)
+assert res10 is True
+# Verify the prep file was still written
+prep_path10 = f"{links_path2}.prep.act-10"
+assert os.path.exists(prep_path10)
+
+# T11: Stale prep files cleanup - new PREPARE cleans up older orphaned .prep.* files
+stale_prep = f"{links_path2}.prep.stale-old-action"
+with open(stale_prep, "w") as f:
+    f.write("com.tinh.vv.hi,https://www.roblox.com/games/123?privateServerLinkCode=abcdef\n")
+assert os.path.exists(stale_prep)
+
+relay._send_batch_ack = mock_send_batch_ack
+acks.clear()
+
+msg11_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-11",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": [{"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc11"}],
+    "expires_at": int(time.time() * 1000) + 10000
+}
+res11 = relay._handle_batch_action(cfg, state2, local_id="m1", message=msg11_prep)
+assert res11 is True
+assert not os.path.exists(stale_prep), "Stale prep file was not cleaned up"
+assert os.path.exists(f"{links_path2}.prep.act-11")
+
+# T12: Minimum valid tabs (1 tab)
+msg12_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-12",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": [{"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=1001"}],
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+relay._handle_batch_action(cfg, state2, local_id="m1", message=msg12_prep)
+assert acks[-1]["status"] == "PREPARE_READY"
+
+# T13: Maximum valid tabs (10 tabs)
+pkgs = ['hi', 'hj', 'hk', 'hl', 'hm', 'hn', 'ho', 'hp', 'hq', 'hr']
+alloc10 = [{"pkg": f"com.tinh.vv.{p}", "url": f"https://www.roblox.com/games/123?privateServerLinkCode=f00{i}"} for i, p in enumerate(pkgs)]
+msg13_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-13",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": alloc10,
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+relay._handle_batch_action(cfg, state2, local_id="m1", message=msg13_prep)
+assert acks[-1]["status"] == "PREPARE_READY"
+
+# T14: 11 tabs rejected
+alloc11 = alloc10 + [{"pkg": "com.tinh.vv.hs", "url": "https://www.roblox.com/games/123?privateServerLinkCode=f00b"}]
+msg14_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-14",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": alloc11,
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+relay._handle_batch_action(cfg, state2, local_id="m1", message=msg14_prep)
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert acks[-1]["reason"] == "invalid_allocation_format"
+
+# T15: 0 tabs rejected
+msg15_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-15",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": [],
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+relay._handle_batch_action(cfg, state2, local_id="m1", message=msg15_prep)
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert acks[-1]["reason"] == "invalid_allocation_format"
+
+# T16: Missing package in order rejected
+alloc_bad_pkg = [{"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/123?privateServerLinkCode=1001"}]
+msg16_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-16",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": alloc_bad_pkg,
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+relay._handle_batch_action(cfg, state2, local_id="m1", message=msg16_prep)
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert "invalid_package_order" in acks[-1]["reason"]
+
+# T17: Duplicate URL across tabs rejected
+alloc_dup_url = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=deadbeef"},
+    {"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/123?privateServerLinkCode=deadbeef"}
+]
+msg17_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-17",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": alloc_dup_url,
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+relay._handle_batch_action(cfg, state2, local_id="m1", message=msg17_prep)
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert "duplicate_url" in acks[-1]["reason"]
+
+# T18: ABORT after PREPARE cleans up prep file and COMMIT afterwards fails
+msg18_abort = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-13",
+    "action": "ABORT_ALLOCATE_SERVER",
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+relay._handle_batch_action(cfg, state2, local_id="m1", message=msg18_abort)
+assert acks[-1]["status"] == "FAILED"
+assert acks[-1]["reason"] == "aborted_by_hub"
+assert not os.path.exists(f"{links_path2}.prep.act-13")
+
+msg18_commit = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-13",
+    "action": "COMMIT_ALLOCATE_SERVER",
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+relay._handle_batch_action(cfg, state2, local_id="m1", message=msg18_commit)
+assert acks[-1]["status"] == "FAILED"
+assert acks[-1]["reason"] == "missing_prep_file"
+
+temp_dir2.cleanup()
+relay.SERVER_LINKS_PATH = temp_path / "server_links.txt"
+relay.STATE_PATH = temp_path / "aot_group_state.json"
+
 print("AOT_ALLOCATE_SERVER_RELAY_TEST=OK")
