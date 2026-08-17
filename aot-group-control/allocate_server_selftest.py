@@ -399,6 +399,67 @@ assert res18_commit is True
 assert acks[-1]["status"] == "FAILED"
 assert acks[-1]["reason"] == "missing_prep_file"
 
+# T19: Interleaved Abort & New Prepare - new transaction PREPARE cleans up older aborted transaction's prep file without breaking delayed ABORT or current transaction's COMMIT
+msg19_act1_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-19-a",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": [{"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc19a"}],
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+assert relay._handle_batch_action(cfg, state2, local_id="m1", message=msg19_act1_prep) is True
+assert acks[-1]["status"] == "PREPARE_READY"
+assert os.path.exists(f"{links_path2}.prep.act-19-a")
+
+# New transaction PREPARE arrives before delayed ABORT for act-19-a
+msg19_act2_prep = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-19-b",
+    "action": "PREPARE_ALLOCATE_SERVER",
+    "allocation": [{"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc19b"}],
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+assert relay._handle_batch_action(cfg, state2, local_id="m1", message=msg19_act2_prep) is True
+assert acks[-1]["status"] == "PREPARE_READY"
+assert not os.path.exists(f"{links_path2}.prep.act-19-a"), "Older prep file cleaned up"
+assert os.path.exists(f"{links_path2}.prep.act-19-b"), "New prep file exists"
+
+# Delayed ABORT for act-19-a arrives -> cleanly returns FAILED (aborted_by_hub), does NOT damage act-19-b
+msg19_act1_abort = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-19-a",
+    "action": "ABORT_ALLOCATE_SERVER",
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+assert relay._handle_batch_action(cfg, state2, local_id="m1", message=msg19_act1_abort) is True
+assert acks[-1]["status"] == "FAILED"
+assert acks[-1]["reason"] == "aborted_by_hub"
+assert os.path.exists(f"{links_path2}.prep.act-19-b"), "act-19-b prep file intact"
+
+# COMMIT for act-19-b succeeds
+msg19_act2_commit = {
+    "type": "aot_batch_action",
+    "protocol": "fleet-batch-v1",
+    "target_device_ids": ["m1"],
+    "action_id": "act-19-b",
+    "action": "COMMIT_ALLOCATE_SERVER",
+    "expires_at": int(time.time() * 1000) + 10000
+}
+acks.clear()
+assert relay._handle_batch_action(cfg, state2, local_id="m1", message=msg19_act2_commit) is True
+assert acks[-1]["status"] == "OPENED"
+assert not os.path.exists(f"{links_path2}.prep.act-19-b")
+assert os.path.exists(links_path2)
+
 temp_dir2.cleanup()
 relay.SERVER_LINKS_PATH = temp_path / "server_links.txt"
 relay.STATE_PATH = temp_path / "aot_group_state.json"
