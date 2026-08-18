@@ -42,7 +42,7 @@ SERVER_LINKS_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/server_links.txt"
 )
 ROBLOX_SERVER_URL_PATTERN = re.compile(
-    r"^https://(www\.)?roblox\.com/games/\d+\?privateServerLinkCode=[0-9a-fA-F]+$"
+    r"^https://(www\.)?roblox\.com/games/\d+\?(?i:privateServerLinkCode=[0-9a-fA-F]+)$"
 )
 PROTOCOL_VERSION = "phase3-1"
 MAX_WS_FRAME_BYTES = 512 * 1024

@@ -96,7 +96,39 @@ msg_exp["expires_at"] = int(time.time()*1000) - 10000
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg_exp)
 assert acks[-1]["status"] == "TIMEOUT"
 
-# 5. PREPARE -> COMMIT -> OPENED
+# 5. Regression test: lowercase privateserverlinkcode
+cleanup()
+msg_lower = dict(msg1)
+msg_lower["action_id"] = "a_lower"
+msg_lower["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateserverlinkcode=abc"}
+]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg_lower)
+# After fix, this should PASS (PREPARE_READY -> PREPARE_ALLOCATE_SERVER)
+assert acks[-1]["status"] == "PREPARE_READY", acks[-1]
+
+# 6. Regression test: canonical privateServerLinkCode
+cleanup()
+msg_canon = dict(msg1)
+msg_canon["action_id"] = "a_canon"
+msg_canon["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=AbCdEf123"}
+]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg_canon)
+assert acks[-1]["status"] == "PREPARE_READY", acks[-1]
+
+# 7. Regression test: invalid host/path fails
+cleanup()
+msg_inv = dict(msg1)
+msg_inv["action_id"] = "a_inv"
+msg_inv["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://evil.roblox.com.proxy.com/games/123?privateServerLinkCode=abc"}
+]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg_inv)
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert "invalid_roblox_url_at_0" in acks[-1]["reason"]
+
+# 8. PREPARE -> COMMIT -> OPENED
 cleanup()
 alloc = [
     {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc"},
