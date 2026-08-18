@@ -21,6 +21,8 @@ class AntigravinyRouterProvider {
       output = 'ROUTING: DIRECT_TDD';
     } else if (p.includes('stale') || p.includes('rebased to commit')) {
       output = 'ACTION: MARK_STALE, REQUIRE_FRESH_EVIDENCE';
+    } else if (p.includes('aotsetup') || p.includes('headless') || p.includes('đã xong') || p.includes('da xong')) {
+      output = 'ROUTING: DIRECT_TDD, NO_MANUAL_CHECKPOINT, HEADLESS_SETUP=YES, INDEPENDENT_MPROVISION=YES';
     }
 
     return { output };
