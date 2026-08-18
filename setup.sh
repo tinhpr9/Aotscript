@@ -1058,14 +1058,9 @@ run_aot_setup() {
     emit OK "DRY-RUN: AOT setup hoàn tất."
     return 0
   fi
-  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ]; then
-    state_write provision_initialized yes
-    state_write setup_complete yes
-    emit OK "TEST: AOT setup hoàn tất."
-    return 0
-  fi
-  if [ -f "$PWD/setup-m166.sh" ] && bash -n "$PWD/setup-m166.sh"; then
-    msetup_script="$PWD/setup-m166.sh"
+  if [ -n "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ] && [ -f "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ]; then
+    msetup_script="$AOTSCRIPT_SETUP_M166_SOURCE"
+    bash -n "$msetup_script" || die "setup-m166.sh tải về sai cú pháp."
   else
     msetup_script="$(mktemp "$SETUP_STATE_DIR/.setup-m166.XXXXXX")"
     curl -fsSL --retry 3 --connect-timeout 15 \
@@ -1073,16 +1068,20 @@ run_aot_setup() {
         rm -f "$msetup_script"
         die "Không tải được setup-m166.sh."
       }
+    [ -s "$msetup_script" ] || {
+      rm -f "$msetup_script"
+      die "setup-m166.sh tải về bị rỗng."
+    }
     bash -n "$msetup_script" || {
       rm -f "$msetup_script"
       die "setup-m166.sh tải về sai cú pháp."
     }
   fi
-  bash "$msetup_script" "$device_id" "$group" </dev/null || {
-    [ "$msetup_script" = "$PWD/setup-m166.sh" ] || rm -f "$msetup_script"
+  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" bash "$msetup_script" "$device_id" "$group" </dev/null || {
+    [ -n "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ] || rm -f "$msetup_script"
     die "AOT msetup không hoàn tất."
   }
-  [ "$msetup_script" = "$PWD/setup-m166.sh" ] || rm -f "$msetup_script"
+  [ -n "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ] || rm -f "$msetup_script"
   state_write provision_initialized yes
   state_write setup_complete yes
 }

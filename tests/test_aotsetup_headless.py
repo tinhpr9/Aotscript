@@ -239,6 +239,193 @@ class TestAotsetupHeadless(unittest.TestCase):
         )
         self.assertIn(res.returncode, (0, 1))
 
+    # 12. Production child invoked with correct args & AOTSCRIPT_PROVISION_REF propagated
+    def test_12_production_child_invoked_with_correct_args_and_env(self):
+        recorder = self.root / "mock_msetup.sh"
+        record_file = self.root / "record.json"
+        recorder.write_text(
+            f"#!/usr/bin/env bash\n"
+            f"cat <<EOF > '{record_file}'\n"
+            f"{{\n"
+            f'  "arg1": "$1",\n'
+            f'  "arg2": "$2",\n'
+            f'  "provision_ref": "$AOTSCRIPT_PROVISION_REF"\n'
+            f"}}\n"
+            f"EOF\n"
+            f"exit 0\n",
+            encoding="utf-8",
+        )
+        recorder.chmod(0o755)
+
+        env = self._base_env(
+            AOTSCRIPT_SETUP_DEVICE_ID="m88",
+            AOTSCRIPT_SETUP_GROUP="NOVA",
+            AOTSCRIPT_SETUP_CONFIRM="yes",
+            AOTSCRIPT_SETUP_M166_SOURCE=str(recorder),
+        )
+        res = self._run_setup(env)
+        self.assertEqual(res.returncode, 0, f"Setup failed: {res.stderr}\n{res.stdout}")
+        self.assertTrue(record_file.is_file())
+        data = json.loads(record_file.read_text(encoding="utf-8"))
+        self.assertEqual(data["arg1"], "m88")
+        self.assertEqual(data["arg2"], "NOVA")
+        self.assertTrue(data["provision_ref"].strip())
+
+        setup_driver = self.state / "aotscript" / "setup-driver"
+        self.assertEqual((setup_driver / "setup_complete").read_text().strip(), "yes")
+
+    # 13. Malicious $PWD/setup-m166.sh is NEVER executed
+    def test_13_malicious_pwd_script_ignored(self):
+        pwd_script = self.root / "setup-m166.sh"
+        marker = self.root / "malicious_marker"
+        pwd_script.write_text(f"#!/usr/bin/env bash\ntouch '{marker}'\nexit 99\n", encoding="utf-8")
+        pwd_script.chmod(0o755)
+
+        fake_bin = self.root / "fake_bin"
+        fake_bin.mkdir()
+        fake_curl = fake_bin / "curl"
+        safe_payload = self.root / "downloaded_msetup.sh"
+        safe_payload.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        fake_curl.write_text(
+            f"#!/usr/bin/env bash\n"
+            f"shift\n"  # skip curl flags until destination file
+            f'target="${{@: -1}}"\n'
+            f"cp '{safe_payload}' \"$target\"\n"
+            f"exit 0\n",
+            encoding="utf-8",
+        )
+        fake_curl.chmod(0o755)
+
+        path_env = os.environ.get("PATH", "")
+        env = self._base_env(
+            AOTSCRIPT_SETUP_DEVICE_ID="m88",
+            AOTSCRIPT_SETUP_GROUP="NOVA",
+            AOTSCRIPT_SETUP_CONFIRM="yes",
+            PATH=f"{fake_bin}:{path_env}",
+        )
+        res = subprocess.run(
+            ["bash", str(SETUP_SH)],
+            cwd=str(self.root),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(res.returncode, 0, f"Setup failed: {res.stderr}\n{res.stdout}")
+        self.assertFalse(marker.exists(), "Malicious $PWD/setup-m166.sh must NOT be executed!")
+
+    # 14. Download failure fails closed cleanly
+    def test_14_download_failure_fails_closed(self):
+        fake_bin = self.root / "fake_bin"
+        fake_bin.mkdir()
+        fake_curl = fake_bin / "curl"
+        fake_curl.write_text("#!/usr/bin/env bash\nexit 22\n", encoding="utf-8")
+        fake_curl.chmod(0o755)
+
+        path_env = os.environ.get("PATH", "")
+        env = self._base_env(
+            AOTSCRIPT_SETUP_DEVICE_ID="m88",
+            AOTSCRIPT_SETUP_GROUP="NOVA",
+            AOTSCRIPT_SETUP_CONFIRM="yes",
+            PATH=f"{fake_bin}:{path_env}",
+        )
+        res = self._run_setup(env)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("Không tải được setup-m166.sh", res.stderr)
+        setup_driver = self.state / "aotscript" / "setup-driver"
+        self.assertFalse((setup_driver / "setup_complete").exists())
+
+    # 15. Syntax validation failure fails closed before execution
+    def test_15_syntax_validation_failure_fails_closed(self):
+        fake_bin = self.root / "fake_bin"
+        fake_bin.mkdir()
+        fake_curl = fake_bin / "curl"
+        fake_curl.write_text(
+            '#!/usr/bin/env bash\n'
+            'target="${@: -1}"\n'
+            'echo "function { )" > "$target"\n'
+            'exit 0\n',
+            encoding="utf-8",
+        )
+        fake_curl.chmod(0o755)
+
+        path_env = os.environ.get("PATH", "")
+        env = self._base_env(
+            AOTSCRIPT_SETUP_DEVICE_ID="m88",
+            AOTSCRIPT_SETUP_GROUP="NOVA",
+            AOTSCRIPT_SETUP_CONFIRM="yes",
+            PATH=f"{fake_bin}:{path_env}",
+        )
+        res = self._run_setup(env)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("setup-m166.sh tải về sai cú pháp", res.stderr)
+        setup_driver = self.state / "aotscript" / "setup-driver"
+        self.assertFalse((setup_driver / "setup_complete").exists())
+
+    # 16. Child exits non-zero -> setup fails closed
+    def test_16_child_non_zero_exit_fails_closed(self):
+        failing_script = self.root / "failing_msetup.sh"
+        failing_script.write_text("#!/usr/bin/env bash\nexit 42\n", encoding="utf-8")
+        failing_script.chmod(0o755)
+
+        env = self._base_env(
+            AOTSCRIPT_SETUP_DEVICE_ID="m88",
+            AOTSCRIPT_SETUP_GROUP="NOVA",
+            AOTSCRIPT_SETUP_CONFIRM="yes",
+            AOTSCRIPT_SETUP_M166_SOURCE=str(failing_script),
+        )
+        res = self._run_setup(env)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("AOT msetup không hoàn tất", res.stderr)
+        setup_driver = self.state / "aotscript" / "setup-driver"
+        self.assertFalse((setup_driver / "setup_complete").exists())
+
+    # 17. Incomplete identity pair fails closed
+    def test_17_partial_identity_state_fails_closed(self):
+        # Create incomplete identity pair: device_id exists but device_group is missing
+        (self.shouko / "device_id.txt").write_text("m88\n", encoding="utf-8")
+
+        env = self._base_env(
+            AOTSCRIPT_SETUP_DEVICE_ID="m88",
+            AOTSCRIPT_SETUP_GROUP="NOVA",
+            AOTSCRIPT_SETUP_CONFIRM="yes",
+        )
+        res = self._run_setup(env)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("incomplete_identity_pair", res.stderr + res.stdout)
+
+    # 18. Fresh setup executes production child once, rerun is idempotent without re-execution
+    def test_18_fresh_setup_then_rerun_skips_child(self):
+        count_file = self.root / "call_count.txt"
+        count_file.write_text("0", encoding="utf-8")
+        recorder = self.root / "counting_msetup.sh"
+        recorder.write_text(
+            f"#!/usr/bin/env bash\n"
+            f"count=$(cat '{count_file}')\n"
+            f"count=$((count + 1))\n"
+            f"echo \"$count\" > '{count_file}'\n"
+            f"exit 0\n",
+            encoding="utf-8",
+        )
+        recorder.chmod(0o755)
+
+        env1 = self._base_env(
+            AOTSCRIPT_SETUP_DEVICE_ID="m88",
+            AOTSCRIPT_SETUP_GROUP="NOVA",
+            AOTSCRIPT_SETUP_CONFIRM="yes",
+            AOTSCRIPT_SETUP_M166_SOURCE=str(recorder),
+        )
+        res1 = self._run_setup(env1)
+        self.assertEqual(res1.returncode, 0)
+        self.assertEqual(count_file.read_text(encoding="utf-8").strip(), "1")
+
+        # Second run without M166_SOURCE or env overrides
+        env2 = self._base_env()
+        res2 = self._run_setup(env2)
+        self.assertEqual(res2.returncode, 0)
+        self.assertIn("Identity hợp lệ", res2.stdout)
+        self.assertEqual(count_file.read_text(encoding="utf-8").strip(), "1", "Rerun must NOT re-execute child setup!")
+
 
 if __name__ == "__main__":
     unittest.main()
