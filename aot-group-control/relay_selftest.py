@@ -3,7 +3,7 @@ import importlib.util, pathlib, sys, tempfile, time
 root = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("relay", root / "relay.py")
 module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
-assert module.WORKER_VERSION == "aot-worker-2026.08.17.01"
+assert module.WORKER_VERSION == "aot-worker-2026.08.18.01"
 assert module.websocket_url("https://example.test/report", device_id="m301") == "wss://example.test/aot/control/ws?device_id=m301"
 assert module.build_parser().parse_args(["fleet"]).command == "fleet"
 assert "backup_restore_data_semantic" in module.WORKER_CAPABILITIES
@@ -193,7 +193,7 @@ res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, 
 assert res is None
 assert len(sent_status) == 1
 assert sent_status[0]["fallback"] is True
-assert sent_status[0]["worker_version"] == "aot-worker-2026.08.17.01"
+assert sent_status[0]["worker_version"] == "aot-worker-2026.08.18.01"
 assert "allocate_server_2pc" in sent_status[0]["capabilities"]
 
 # Transport error propagation: any OSError from _ws_send_json must propagate unsuppressed

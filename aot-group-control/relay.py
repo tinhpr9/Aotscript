@@ -42,7 +42,7 @@ SERVER_LINKS_PATH = pathlib.Path(
     "/storage/emulated/0/Download/Shouko/server_links.txt"
 )
 ROBLOX_SERVER_URL_PATTERN = re.compile(
-    r"^https://(www\.)?roblox\.com/games/\d+\?privateServerLinkCode=[0-9a-fA-F]+$"
+    r"^https://(www\.)?roblox\.com/games/\d+\?(?i:privateServerLinkCode=[0-9a-fA-F]+)$"
 )
 PROTOCOL_VERSION = "phase3-1"
 MAX_WS_FRAME_BYTES = 512 * 1024
@@ -91,7 +91,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.17.01"
+WORKER_VERSION = "aot-worker-2026.08.18.01"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -1151,10 +1151,12 @@ def _handle_allocate_server(
                 if not isinstance(url, str) or not ROBLOX_SERVER_URL_PATTERN.match(url):
                     terminal_ack("PREPARE_FAILED", executed=False, reason=f"invalid_roblox_url_at_{i}")
                     return True
-                if url in seen_urls:
+                canonical_url = re.sub(r"(?i)\?privateServerLinkCode=", "?privateServerLinkCode=", url)
+                if canonical_url in seen_urls:
                     terminal_ack("PREPARE_FAILED", executed=False, reason=f"duplicate_url_at_{i}")
                     return True
-                seen_urls.add(url)
+                seen_urls.add(canonical_url)
+                item['url'] = canonical_url
 
             prep_path = f"{SERVER_LINKS_PATH}.prep.{action_id}"
             temp_path = prep_path + ".tmp"

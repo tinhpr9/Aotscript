@@ -1095,6 +1095,7 @@ async function hmacSha256Bytes(
 
 
 function parseTongHopLink(text, target_device_ids, tabs) {
+
   const pkgs = [
     "com.tinh.vv.hi",
     "com.tinh.vv.hj",
@@ -1128,7 +1129,7 @@ function parseTongHopLink(text, target_device_ids, tabs) {
   const lines = String(text || "").split("\n");
   const validUrls = [];
   const seenUrls = new Set();
-  const urlRegex = /^https:\/\/(www\.)?roblox\.com\/games\/\d+\?privateServerLinkCode=[0-9a-zA-Z]+$/i;
+  const urlRegex = /^https:\/\/(www\.)?roblox\.com\/games\/\d+\?[pP][rR][iI][vV][aA][tT][eE][sS][eE][rR][vV][eE][rR][lL][iI][nN][kK][cC][oO][dD][eE]=[0-9a-fA-F]+$/;
 
   for (let rawLine of lines) {
     let line = rawLine.trim();
@@ -1137,9 +1138,12 @@ function parseTongHopLink(text, target_device_ids, tabs) {
       const commaIndex = line.lastIndexOf(",");
       line = line.slice(commaIndex + 1).trim();
     }
-    if (urlRegex.test(line) && !seenUrls.has(line)) {
-      seenUrls.add(line);
-      validUrls.push(line);
+    if (urlRegex.test(line)) {
+      const canonicalUrl = line.replace(/\?[pP][rR][iI][vV][aA][tT][eE][sS][eE][rR][vV][eE][rR][lL][iI][nN][kK][cC][oO][dD][eE]=/, '?privateServerLinkCode=');
+      if (!seenUrls.has(canonicalUrl)) {
+        seenUrls.add(canonicalUrl);
+        validUrls.push(canonicalUrl);
+      }
     }
   }
 

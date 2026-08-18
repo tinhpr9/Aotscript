@@ -47,7 +47,7 @@ def main() -> int:
     parser.add_argument("--source-root", type=pathlib.Path, default=ROOT)
     parser.add_argument("--reproduce-metadata-from", type=pathlib.Path)
     args = parser.parse_args()
-    if not re.fullmatch(r"2026\.08\.17\.01", args.version):
+    if not re.fullmatch(r"2026\.08\.18\.01", args.version):
         raise SystemExit("release_version_mismatch")
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
         raise SystemExit("release_commit_invalid")

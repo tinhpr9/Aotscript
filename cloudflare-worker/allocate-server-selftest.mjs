@@ -129,6 +129,18 @@ try {
   if (!e.message.includes("Device ID bị lặp: m117")) throw e;
 }
 
+// 13. Logical duplicate URL (different case in query key)
+try {
+  parse(`com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111
+com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?pRiVaTeSeRvErLiNkCoDe=11111111111111111111111111111111`, ["m1"], 2);
+  throw new Error("Test 13 failed: case-insensitive duplicate URLs should throw");
+} catch(e) {
+  if(!e.message.includes("URL khả dụng")) throw e; // Due to new parsing, dedupe drops it, so validUrls.length is 1, which throws "Không đủ URL hợp lệ!"
+}
+
+// 14. Mixed-case query key passes valid validation
+const mixedCaseRes = parse(`com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?pRiVaTeSeRvErLiNkCoDe=11111111111111111111111111111111`, ["m1"], 1);
+if (mixedCaseRes["m1"].length !== 1) throw new Error("Test 14: Mixed case query key failed to parse");
 // 12. Non-string or empty device ID in target list -> throws invalid device list
 try {
   parse(text20, [null], 1);
