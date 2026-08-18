@@ -1110,6 +1110,17 @@ function parseTongHopLink(text, target_device_ids, tabs) {
   if (!Array.isArray(target_device_ids) || target_device_ids.length === 0) {
     throw new Error("Danh sách thiết bị không hợp lệ.");
   }
+  const seenDeviceIds = new Set();
+  for (const id of target_device_ids) {
+    if (typeof id !== "string" || !id.trim()) {
+      throw new Error("Danh sách thiết bị không hợp lệ.");
+    }
+    const normalized = id.trim().toLowerCase();
+    if (seenDeviceIds.has(normalized)) {
+      throw new Error(`Device ID bị lặp: ${id}`);
+    }
+    seenDeviceIds.add(normalized);
+  }
   if (!Number.isInteger(tabs) || tabs < 1 || tabs > 10) {
     throw new Error("Số tab phải từ 1 đến 10.");
   }

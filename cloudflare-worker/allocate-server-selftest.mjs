@@ -113,4 +113,34 @@ try {
   if (!e.message.includes("Số tab phải từ 1 đến 10")) throw e;
 }
 
+// 10. Duplicate target device IDs -> throws error before allocation
+try {
+  parse(text20, ["m117", "m117"], 1);
+  throw new Error("Test 10 failed: duplicate device IDs should throw");
+} catch (e) {
+  if (!e.message.includes("Device ID bị lặp: m117")) throw e;
+}
+
+// 11. Case-insensitive duplicate target device IDs -> throws error before allocation
+try {
+  parse(text20, ["M117", "m117"], 1);
+  throw new Error("Test 11 failed: case-insensitive duplicate device IDs should throw");
+} catch (e) {
+  if (!e.message.includes("Device ID bị lặp: m117")) throw e;
+}
+
+// 12. Non-string or empty device ID in target list -> throws invalid device list
+try {
+  parse(text20, [null], 1);
+  throw new Error("Test 12a failed: null device ID should throw");
+} catch (e) {
+  if (!e.message.includes("Danh sách thiết bị không hợp lệ")) throw e;
+}
+try {
+  parse(text20, ["   "], 1);
+  throw new Error("Test 12b failed: empty whitespace device ID should throw");
+} catch (e) {
+  if (!e.message.includes("Danh sách thiết bị không hợp lệ")) throw e;
+}
+
 console.log("AOT_ALLOCATE_SERVER_SELFTEST=OK");
