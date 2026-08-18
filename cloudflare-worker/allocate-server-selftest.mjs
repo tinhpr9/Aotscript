@@ -9,105 +9,138 @@ const parseTongHopLink = vm.runInContext(`(() => { ${funcMatch[0]}; return parse
 
 const parse = (text, ids, tabs) => parseTongHopLink(text, ids, tabs);
 
-const mockText = `
-com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111
-com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateServerLinkCode=22222222222222222222222222222222
-com.tinh.vv.hk,https://www.roblox.com/games/97598239454123?privateServerLinkCode=33333333333333333333333333333333
-com.tinh.vv.hl,https://www.roblox.com/games/97598239454123?privateServerLinkCode=44444444444444444444444444444444
-com.tinh.vv.hm,https://www.roblox.com/games/97598239454123?privateServerLinkCode=55555555555555555555555555555555
-com.tinh.vv.hn,https://www.roblox.com/games/97598239454123?privateServerLinkCode=66666666666666666666666666666666
-com.tinh.vv.ho,https://www.roblox.com/games/97598239454123?privateServerLinkCode=77777777777777777777777777777777
-com.tinh.vv.hp,https://www.roblox.com/games/97598239454123?privateServerLinkCode=88888888888888888888888888888888
+// Generate helper
+const makeUrl = (id) => `https://www.roblox.com/games/97598239454123?privateServerLinkCode=${String(id).padStart(32, "0")}`;
+
+// 1. 1 device, 1 tab
+const text1 = makeUrl(1);
+const res1 = parse(text1, ["m117"], 1);
+if (res1["m117"].length !== 1 || res1["m117"][0].pkg !== "com.tinh.vv.hi" || res1["m117"][0].url !== makeUrl(1)) {
+  throw new Error("Test 1 failed: 1 device 1 tab");
+}
+
+// 2. 1 device, 10 tabs
+const text10 = Array.from({ length: 10 }, (_, i) => makeUrl(i + 1)).join("\n");
+const res10 = parse(text10, ["m117"], 10);
+if (res10["m117"].length !== 10) throw new Error("Test 2a failed: length != 10");
+if (res10["m117"][0].pkg !== "com.tinh.vv.hi" || res10["m117"][9].pkg !== "com.tinh.vv.hr") throw new Error("Test 2b failed: wrong pkg mapping");
+
+// 3. 2 devices, 10 tabs (needs 20 unique URLs)
+const text20 = Array.from({ length: 25 }, (_, i) => makeUrl(i + 1)).join("\n");
+const res20 = parse(text20, ["m117", "m116"], 10);
+if (res20["m117"].length !== 10 || res20["m116"].length !== 10) throw new Error("Test 3a failed: wrong length");
+if (res20["m117"][0].url !== makeUrl(1) || res20["m117"][9].url !== makeUrl(10)) throw new Error("Test 3b failed: m117 wrong range");
+if (res20["m116"][0].url !== makeUrl(11) || res20["m116"][9].url !== makeUrl(20)) throw new Error("Test 3c failed: m116 wrong range");
+const urls20 = [...res20["m117"], ...res20["m116"]].map(x => x.url);
+if (new Set(urls20).size !== 20) throw new Error("Test 3d failed: overlapping URLs across devices");
+
+// 4. 2 devices, 5 tabs (needs 10 unique URLs)
+const res2x5 = parse(text20, ["m117", "m116"], 5);
+if (res2x5["m117"].length !== 5 || res2x5["m116"].length !== 5) throw new Error("Test 4a failed");
+if (res2x5["m117"][4].pkg !== "com.tinh.vv.hm" || res2x5["m116"][4].pkg !== "com.tinh.vv.hm") throw new Error("Test 4b failed: pkg mapping");
+if (res2x5["m116"][0].url !== makeUrl(6)) throw new Error("Test 4c failed: m116 start url");
+
+// 5. Insufficient URLs -> Fail Fast
+try {
+  // Only 15 URLs provided, but 2 devices * 10 tabs = 20 needed
+  const text15 = Array.from({ length: 15 }, (_, i) => makeUrl(i + 1)).join("\n");
+  parse(text15, ["m117", "m116"], 10);
+  throw new Error("Test 5 failed: should have thrown on insufficient URLs");
+} catch (e) {
+  if (!e.message.includes("Không đủ URL hợp lệ! Cần 20 URL")) {
+    throw new Error(`Test 5 failed with unexpected message: ${e.message}`);
+  }
+}
+
+// 6. Duplicate URLs in file -> Deduplicated, then fails if unique count < required
+try {
+  const textDup = [makeUrl(1), makeUrl(1), makeUrl(2), makeUrl(2)].join("\n");
+  // 4 lines, but only 2 unique URLs; needs 3 for 1 device * 3 tabs
+  parse(textDup, ["m1"], 3);
+  throw new Error("Test 6 failed: should have thrown due to duplicate deduction");
+} catch (e) {
+  if (!e.message.includes("Không đủ URL hợp lệ! Cần 3 URL (1 thiết bị × 3 tab), nhưng chỉ có 2 URL khả dụng.")) {
+    throw new Error(`Test 6 failed with unexpected message: ${e.message}`);
+  }
+}
+
+// 7. Invalid lines, empty lines, separator lines === skipped cleanly
+const textWithNoise = `
 ===
-com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateServerLinkCode=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateServerLinkCode=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-com.tinh.vv.hk,https://www.roblox.com/games/97598239454123?privateServerLinkCode=CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
-com.tinh.vv.hl,https://www.roblox.com/games/97598239454123?privateServerLinkCode=DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
-com.tinh.vv.hm,https://www.roblox.com/games/97598239454123?privateServerLinkCode=EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
-com.tinh.vv.hn,https://www.roblox.com/games/97598239454123?privateServerLinkCode=FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
-com.tinh.vv.ho,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111112
-com.tinh.vv.hp,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111113
+not-a-url
+${makeUrl(1)}
+
+===
+https://invalid.domain.com/games/123?privateServerLinkCode=1234
+${makeUrl(2)}
+   
+===
+${makeUrl(3)}
 `;
-
-// Test 1: 1 device, 1 tab
-let res = parse(mockText, ["m1"], 1);
-if (res["m1"].length !== 1) throw new Error("fail 1");
-
-// Test 2: 1 device, 8 tabs
-res = parse(mockText, ["m1"], 8);
-if (res["m1"].length !== 8) throw new Error("fail 2");
-
-// Test 3: 2 devices, 5 tabs
-res = parse(mockText, ["m1", "m2"], 5);
-if (res["m1"].length !== 5 || res["m2"].length !== 5) throw new Error("fail 3");
-if (!res["m2"][0].url.includes("AAAA")) throw new Error("fail 3 url");
-
-// Test 4: Not enough URLs
-try {
-  parse(mockText, ["m1", "m2", "m3"], 5);
-  throw new Error("should throw");
-} catch(e) {
-  if(!e.message.includes("Không đủ block URL")) throw e;
+const resNoise = parse(textWithNoise, ["m1"], 3);
+if (resNoise["m1"].length !== 3) throw new Error("Test 7 failed: noise not skipped");
+if (resNoise["m1"][0].url !== makeUrl(1) || resNoise["m1"][1].url !== makeUrl(2) || resNoise["m1"][2].url !== makeUrl(3)) {
+  throw new Error("Test 7b failed: wrong URLs extracted from noise");
 }
 
-// Test 5: Malformed URL
-try {
-  parse("com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateServerLinkCode=ZZZZ", ["m1"], 1);
-  throw new Error("should throw");
-} catch(e) {
-  if(!e.message.includes("URL không hợp lệ")) throw e;
+// 8. Backward compatibility with legacy comma prefixes (e.g. com.tinh.vv.hi,https://...)
+const textLegacy = `
+com.tinh.vv.hi,${makeUrl(1)}
+com.tinh.vv.hj,${makeUrl(2)}
+`;
+const resLegacy = parse(textLegacy, ["m1"], 2);
+if (resLegacy["m1"].length !== 2 || resLegacy["m1"][0].url !== makeUrl(1) || resLegacy["m1"][1].url !== makeUrl(2)) {
+  throw new Error("Test 8 failed: legacy comma prefixes not parsed");
 }
 
-// Test 6: Wrong package order
+// 9. Invalid parameters (tab < 1, tab > 10, empty target devices)
 try {
-  parse("com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111", ["m1"], 1);
-  throw new Error("should throw");
-} catch(e) {
-  if(!e.message.includes("Sai package hoặc sai thứ tự")) throw e;
+  parse(text20, [], 5);
+  throw new Error("Test 9a failed");
+} catch (e) {
+  if (!e.message.includes("Danh sách thiết bị không hợp lệ")) throw e;
+}
+try {
+  parse(text20, ["m1"], 0);
+  throw new Error("Test 9b failed");
+} catch (e) {
+  if (!e.message.includes("Số tab phải từ 1 đến 10")) throw e;
+}
+try {
+  parse(text20, ["m1"], 11);
+  throw new Error("Test 9c failed");
+} catch (e) {
+  if (!e.message.includes("Số tab phải từ 1 đến 10")) throw e;
 }
 
-// Test 7: Duplicate URL
+// 10. Duplicate target device IDs -> throws error before allocation
 try {
-  parse(`com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111
-com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111`, ["m1"], 2);
-  throw new Error("should throw");
-} catch(e) {
-  if(!e.message.includes("URL bị lặp")) throw e;
+  parse(text20, ["m117", "m117"], 1);
+  throw new Error("Test 10 failed: duplicate device IDs should throw");
+} catch (e) {
+  if (!e.message.includes("Device ID bị lặp: m117")) throw e;
 }
 
-// Test 8: Block < requested tabs (no valid block with >= 9 links exists)
+// 11. Case-insensitive duplicate target device IDs -> throws error before allocation
 try {
-  parse(mockText, ["m1"], 9);
-  throw new Error("should throw");
-} catch(e) {
-  if(!e.message.includes("block đủ link")) throw e;
+  parse(text20, ["M117", "m117"], 1);
+  throw new Error("Test 11 failed: case-insensitive duplicate device IDs should throw");
+} catch (e) {
+  if (!e.message.includes("Device ID bị lặp: m117")) throw e;
 }
 
-// Test 9: 8,8,10,10 block file — tabs=10 must skip first 2 blocks (only 8 links) and pick 3rd+4th
-const generate10Lines = (offset) => {
-  const pkgs = ["com.tinh.vv.hi","com.tinh.vv.hj","com.tinh.vv.hk","com.tinh.vv.hl","com.tinh.vv.hm","com.tinh.vv.hn","com.tinh.vv.ho","com.tinh.vv.hp","com.tinh.vv.hq","com.tinh.vv.hr"];
-  return pkgs.map((p,i) => `${p},https://www.roblox.com/games/97598239454123?privateServerLinkCode=${String(offset * 10 + i + 1).padStart(32,"0")}`).join("\n");
-};
-const generate8Lines = (offset) => {
-  const pkgs = ["com.tinh.vv.hi","com.tinh.vv.hj","com.tinh.vv.hk","com.tinh.vv.hl","com.tinh.vv.hm","com.tinh.vv.hn","com.tinh.vv.ho","com.tinh.vv.hp"];
-  return pkgs.map((p,i) => `${p},https://www.roblox.com/games/97598239454123?privateServerLinkCode=${String(offset * 10 + i + 101).padStart(32,"0")}`).join("\n");
-};
-const mixedText = [generate8Lines(0), "===", generate8Lines(1), "===", generate10Lines(2), "===", generate10Lines(3)].join("\n");
-const result9 = parse(mixedText, ["m1", "m2"], 10);
-if (result9["m1"].length !== 10) throw new Error(`Test 9a: m1 got ${result9["m1"].length} links, expected 10`);
-if (result9["m2"].length !== 10) throw new Error(`Test 9b: m2 got ${result9["m2"].length} links, expected 10`);
-// Verify m1 comes from block 3 (offset=2) and m2 from block 4 (offset=3) — not blocks 1 or 2
-if (result9["m1"][0].pkg !== "com.tinh.vv.hi") throw new Error("Test 9c: m1 wrong pkg");
-if (result9["m2"][9].pkg !== "com.tinh.vv.hr") throw new Error("Test 9d: m2 wrong last pkg");
-// Verify all URLs are unique across both devices
-const allUrls = [...result9["m1"], ...result9["m2"]].map(x => x.url);
-if (new Set(allUrls).size !== allUrls.length) throw new Error("Test 9e: duplicate URLs across batch");
-
-// Test 9f: tabs=8 should pick first 2 blocks (with 8 links each), not the later ones
-const result9f = parse(mixedText, ["m1", "m2"], 8);
-if (result9f["m1"].length !== 8) throw new Error(`Test 9f: m1 got ${result9f["m1"].length} links, expected 8`);
-if (result9f["m2"].length !== 8) throw new Error(`Test 9g: m2 got ${result9f["m2"].length} links, expected 8`);
-if (!result9f["m1"][0].url.includes("101")) throw new Error("Test 9h: m1 should come from block 1");
-if (!result9f["m2"][0].url.includes("111")) throw new Error("Test 9i: m2 should come from block 2");
+// 12. Non-string or empty device ID in target list -> throws invalid device list
+try {
+  parse(text20, [null], 1);
+  throw new Error("Test 12a failed: null device ID should throw");
+} catch (e) {
+  if (!e.message.includes("Danh sách thiết bị không hợp lệ")) throw e;
+}
+try {
+  parse(text20, ["   "], 1);
+  throw new Error("Test 12b failed: empty whitespace device ID should throw");
+} catch (e) {
+  if (!e.message.includes("Danh sách thiết bị không hợp lệ")) throw e;
+}
 
 console.log("AOT_ALLOCATE_SERVER_SELFTEST=OK");

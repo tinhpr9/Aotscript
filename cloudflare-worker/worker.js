@@ -1095,59 +1095,69 @@ async function hmacSha256Bytes(
 
 
 function parseTongHopLink(text, target_device_ids, tabs) {
-  const pkgs = ["com.tinh.vv.hi", "com.tinh.vv.hj", "com.tinh.vv.hk", "com.tinh.vv.hl", "com.tinh.vv.hm", "com.tinh.vv.hn", "com.tinh.vv.ho", "com.tinh.vv.hp", "com.tinh.vv.hq", "com.tinh.vv.hr"];
-  const lines = text.split('\n');
-  const blocks = [];
-  let currentBlock = [];
-  const seenUrls = new Set();
-  
-  for (let line of lines) {
-    line = line.trim();
-    if (!line) continue;
-    if (line === '===') {
-      if (currentBlock.length > 0) {
-        blocks.push(currentBlock);
-      }
-      currentBlock = [];
-      continue;
-    }
-    
-    const parts = line.split(',');
-    if (parts.length < 2) {
-      throw new Error(`Dòng không đúng định dạng: ${line}`);
-    }
-    const pkg = parts[0].trim();
-    const url = parts.slice(1).join(',').trim();
-    if (!url.match(/^https:\/\/(www\.)?roblox\.com\/games\/\d+\?privateServerLinkCode=[0-9a-fA-F]+$/i)) {
-      throw new Error(`URL không hợp lệ: ${url}`);
-    }
-    if (seenUrls.has(url)) {
-      throw new Error(`URL bị lặp: ${url}`);
-    }
-    if (currentBlock.length >= 10) {
-      throw new Error(`Block có nhiều hơn 10 dòng.`);
-    }
-    if (pkg !== pkgs[currentBlock.length]) {
-      throw new Error(`Sai package hoặc sai thứ tự. Cần ${pkgs[currentBlock.length]}, nhưng nhận được ${pkg}.`);
-    }
-    seenUrls.add(url);
-    currentBlock.push({ pkg, url });
+  const pkgs = [
+    "com.tinh.vv.hi",
+    "com.tinh.vv.hj",
+    "com.tinh.vv.hk",
+    "com.tinh.vv.hl",
+    "com.tinh.vv.hm",
+    "com.tinh.vv.hn",
+    "com.tinh.vv.ho",
+    "com.tinh.vv.hp",
+    "com.tinh.vv.hq",
+    "com.tinh.vv.hr"
+  ];
+  if (!Array.isArray(target_device_ids) || target_device_ids.length === 0) {
+    throw new Error("Danh sách thiết bị không hợp lệ.");
   }
-  if (currentBlock.length > 0) {
-    blocks.push(currentBlock);
+  const seenDeviceIds = new Set();
+  for (const id of target_device_ids) {
+    if (typeof id !== "string" || !id.trim()) {
+      throw new Error("Danh sách thiết bị không hợp lệ.");
+    }
+    const normalized = id.trim().toLowerCase();
+    if (seenDeviceIds.has(normalized)) {
+      throw new Error(`Device ID bị lặp: ${id}`);
+    }
+    seenDeviceIds.add(normalized);
   }
-  
-  // Fix 3: only consider blocks that have >= tabs links (filter before assignment)
-  const validBlocks = blocks.filter(b => b.length >= tabs);
+  if (!Number.isInteger(tabs) || tabs < 1 || tabs > 10) {
+    throw new Error("Số tab phải từ 1 đến 10.");
+  }
 
-  if (target_device_ids.length > validBlocks.length) {
-    throw new Error(`Không đủ block URL có đủ ${tabs} link! Cần ${target_device_ids.length} block, nhưng chỉ có ${validBlocks.length} block đủ link (tổng ${blocks.length} block).`);
+  const lines = String(text || "").split("\n");
+  const validUrls = [];
+  const seenUrls = new Set();
+  const urlRegex = /^https:\/\/(www\.)?roblox\.com\/games\/\d+\?privateServerLinkCode=[0-9a-zA-Z]+$/i;
+
+  for (let rawLine of lines) {
+    let line = rawLine.trim();
+    if (!line || line === "===") continue;
+    if (line.includes(",")) {
+      const commaIndex = line.lastIndexOf(",");
+      line = line.slice(commaIndex + 1).trim();
+    }
+    if (urlRegex.test(line) && !seenUrls.has(line)) {
+      seenUrls.add(line);
+      validUrls.push(line);
+    }
+  }
+
+  const requiredCount = target_device_ids.length * tabs;
+  if (validUrls.length < requiredCount) {
+    throw new Error(
+      `Không đủ URL hợp lệ! Cần ${requiredCount} URL (${target_device_ids.length} thiết bị × ${tabs} tab), nhưng chỉ có ${validUrls.length} URL khả dụng.`
+    );
   }
 
   const allocationMap = {};
   for (let i = 0; i < target_device_ids.length; i++) {
-    const block = validBlocks[i];
-    allocationMap[target_device_ids[i]] = block.slice(0, tabs);
+    const deviceId = target_device_ids[i];
+    const slice = validUrls.slice(i * tabs, (i + 1) * tabs);
+    allocationMap[deviceId] = slice.map((url, tabIdx) => ({
+      pkg: pkgs[tabIdx],
+      url
+    }));
   }
   return allocationMap;
 }
