@@ -104,20 +104,31 @@ msg_lower["allocation"] = [
     {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateserverlinkcode=abc"}
 ]
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg_lower)
-# After fix, this should PASS (PREPARE_READY -> PREPARE_ALLOCATE_SERVER)
 assert acks[-1]["status"] == "PREPARE_READY", acks[-1]
 
-# 6. Regression test: canonical privateServerLinkCode
+# 6. Regression test: mixed-case query-key PASS
 cleanup()
-msg_canon = dict(msg1)
-msg_canon["action_id"] = "a_canon"
-msg_canon["allocation"] = [
-    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=AbCdEf123"}
+msg_mixed = dict(msg1)
+msg_mixed["action_id"] = "a_mixed"
+msg_mixed["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?pRiVaTeSeRvErLiNkCoDe=AbCdEf123"}
 ]
-relay._handle_batch_action(cfg, state, local_id="m1", message=msg_canon)
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg_mixed)
 assert acks[-1]["status"] == "PREPARE_READY", acks[-1]
 
-# 7. Regression test: invalid host/path fails
+# 6b. Logical Duplicate check: case-insensitive query keys are duplicates
+cleanup()
+msg_dupcase = dict(msg1)
+msg_dupcase["action_id"] = "a_dupcase"
+msg_dupcase["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123?privateServerLinkCode=abc"},
+    {"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/123?privateserverlinkcode=abc"}
+]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg_dupcase)
+assert acks[-1]["status"] == "PREPARE_FAILED", acks[-1]
+assert "duplicate_url_at_1" in acks[-1]["reason"]
+
+# 7. Regression test: invalid host fails
 cleanup()
 msg_inv = dict(msg1)
 msg_inv["action_id"] = "a_inv"
@@ -125,6 +136,17 @@ msg_inv["allocation"] = [
     {"pkg": "com.tinh.vv.hi", "url": "https://evil.roblox.com.proxy.com/games/123?privateServerLinkCode=abc"}
 ]
 relay._handle_batch_action(cfg, state, local_id="m1", message=msg_inv)
+assert acks[-1]["status"] == "PREPARE_FAILED"
+assert "invalid_roblox_url_at_0" in acks[-1]["reason"]
+
+# 7b. Regression test: invalid path fails
+cleanup()
+msg_inv2 = dict(msg1)
+msg_inv2["action_id"] = "a_inv2"
+msg_inv2["allocation"] = [
+    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/notgames/123?privateServerLinkCode=abc"}
+]
+relay._handle_batch_action(cfg, state, local_id="m1", message=msg_inv2)
 assert acks[-1]["status"] == "PREPARE_FAILED"
 assert "invalid_roblox_url_at_0" in acks[-1]["reason"]
 

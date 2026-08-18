@@ -258,7 +258,7 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
 // Test dynamic and explicit canary/stable targets
 sRecord.last_update = null;
 sRecord.canary_release = null;
-fleet.resolveWorkerRelease = async () => ({ version: "2026.08.18.01", hash: "mock" });
+fleet.resolveWorkerRelease = async () => ({ version: "aot-worker-2026.08.18.01", hash: "mock" });
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};

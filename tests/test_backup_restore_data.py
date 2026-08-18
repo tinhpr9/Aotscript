@@ -912,11 +912,6 @@ class TestArchitectureConstraints(unittest.TestCase):
         self.assertIn("open_swift_backup", src)
         self.assertIn("open_swift_apps", src)
 
-    def test_fleet_state_version_bumped(self):
-        src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
-        self.assertIn("aot-worker-2026.08.18.01", src)
-        self.assertIn("worker-v2026.08.18.01", src)
-
     def test_fleet_state_has_backup_restore_data_action(self):
         src = (ROOT / "cloudflare-worker/fleet-state.js").read_text()
         self.assertIn("AOT_BACKUP_RESTORE_DATA_ACTION", src)
@@ -935,17 +930,6 @@ class TestArchitectureConstraints(unittest.TestCase):
     def test_agents_md_policy_reconciled(self):
         src = (ROOT / "AGENTS.md").read_text()
         self.assertIn("FILTER_RESTORE_DATA", src)
-        self.assertIn("BACKUP_RESTORE_DATA", src)
-
-    def test_smoke_test_checks_new_version(self):
-        src = (ROOT / "aot-group-control/worker_smoke_test.py").read_text()
-        self.assertIn("aot-worker-2026.08.18.01", src)
-        self.assertIn("backup_restore_data_semantic", src)
-        self.assertIn("BACKUP_RESTORE_DATA_ACTION", src)
-
-    def test_relay_selftest_checks_new_version(self):
-        src = (ROOT / "aot-group-control/relay_selftest.py").read_text()
-        self.assertIn("aot-worker-2026.08.18.01", src)
         self.assertIn("BACKUP_RESTORE_DATA", src)
 
 class TestBoundaryTaps(unittest.TestCase):

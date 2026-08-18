@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "required_files": [
+    "relay.py",
+    "runtime.py",
+    "controller.py",
+    "updater.py",
+    "e2e.py",
+    "worker_smoke_test.py",
+    "legacy_relay_bridge.py",
+    "msetup_registration.py",
+    "worker-release-schema.json"
+  ],
+  "protected_state": [
+    "device_id.txt",
+    "device_group.txt",
+    "aot_group_config.json",
+    "agent_config.json"
+  ]
+}
