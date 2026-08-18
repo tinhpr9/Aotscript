@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import vm from "node:vm";
+import { webcrypto as crypto } from "node:crypto";
 
 const context = vm.createContext({ URL, Request, Response, Headers, JSON, Map, Set, Object, Array, String, Number, Boolean, Math, Date, console, crypto, structuredClone });
 const telegramCalls = [];
