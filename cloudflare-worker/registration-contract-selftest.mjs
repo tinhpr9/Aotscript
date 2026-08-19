@@ -38,6 +38,22 @@ await mod.evaluate();
 
 const store = new Map();
 const sockets = new Map();
+
+function attachMockSocket(tag) {
+  const socket = {
+    tags: [tag],
+    send() {},
+    close() {
+      const arr = sockets.get(tag) || [];
+      const idx = arr.indexOf(socket);
+      if (idx !== -1) arr.splice(idx, 1);
+    }
+  };
+  if (!sockets.has(tag)) sockets.set(tag, []);
+  sockets.get(tag).push(socket);
+  return socket;
+}
+
 const ctx = {
   storage: {
     get: async k => store.get(k),
@@ -91,7 +107,7 @@ console.log("RUNNING REGISTRATION CONTRACT SELFTEST...");
 
 // 3. VERIFY ONLINE TEST
 {
-  sockets.set("aot-device:m118", [{ send() {} }]);
+  attachMockSocket("aot-device:m118");
   const reqBody = { device_id: "m118" };
   validateAgainstSchema(reqBody, "VerifyRequest");
   const { status, data } = await postRegistration("verify", reqBody);
@@ -103,11 +119,11 @@ console.log("RUNNING REGISTRATION CONTRACT SELFTEST...");
   assert.equal(data.visible_in_hub, true, "Online verify visible_in_hub must be true");
 }
 
-// 4. RESET IDENTITY TEST
+// 4. RESET IDENTITY TEST (Public Endpoint Observable Behavior)
 {
   // Setup old device m118 and unrelated device m119
   await postRegistration("discover", { device_id: "m119" });
-  sockets.set("aot-device:m119", [{ send() {} }]);
+  attachMockSocket("aot-device:m119");
 
   const resetReq = { old_device_id: "m118", new_device_id: "m120" };
   validateAgainstSchema(resetReq, "ResetRequest");
@@ -118,16 +134,54 @@ console.log("RUNNING REGISTRATION CONTRACT SELFTEST...");
   assert.equal(data.old_device_id, "m118", "Reset response must return old_device_id");
   assert.equal(data.new_device_id, "m120", "Reset response must return new_device_id");
 
+  // Verify new device m120 is observable via public verify endpoint
+  attachMockSocket("aot-device:m120");
+  const verifyNew = await postRegistration("verify", { device_id: "m120" });
+  assert.equal(verifyNew.status, 200, "New device m120 must be verifiable");
+
   // Verify unrelated device m119 is preserved
-  const fleetRecord = await fleet.readFleet();
-  assert.ok(fleetRecord.devices.m119, "Unrelated device m119 must be preserved");
-  assert.ok(fleetRecord.devices.m120, "New device m120 must exist");
-  assert.equal(fleetRecord.devices.m118, undefined, "Old device m118 must be purged");
+  const verifyUnrelated = await postRegistration("verify", { device_id: "m119" });
+  assert.equal(verifyUnrelated.status, 200, "Unrelated device m119 must be preserved");
+
+  // Verify old device m118 is purged and offline
+  const verifyOld = await postRegistration("verify", { device_id: "m118" });
+  assert.equal(verifyOld.status, 409, "Old device m118 must be offline/purged");
 }
 
-// 5. NEGATIVE TESTS: INVALID & FORBIDDEN FIELDS
+// 5. NEGATIVE TESTS: INVALID, NULL, EMPTY, & FORBIDDEN FIELDS
 {
-  // Invalid device ID
+  // Null, empty, and omitted ID edge cases
+  const nullDiscover = await postRegistration("discover", { device_id: null });
+  assert.equal(nullDiscover.status, 400, "Null device_id in discover must return 400");
+
+  const emptyDiscover = await postRegistration("discover", { device_id: "" });
+  assert.equal(emptyDiscover.status, 400, "Empty device_id in discover must return 400");
+
+  const omittedDiscover = await postRegistration("discover", {});
+  assert.equal(omittedDiscover.status, 400, "Omitted device_id in discover must return 400");
+
+  const nullVerify = await postRegistration("verify", { device_id: null });
+  assert.equal(nullVerify.status, 400, "Null device_id in verify must return 400");
+
+  const emptyVerify = await postRegistration("verify", { device_id: "" });
+  assert.equal(emptyVerify.status, 400, "Empty device_id in verify must return 400");
+
+  const omittedVerify = await postRegistration("verify", {});
+  assert.equal(omittedVerify.status, 400, "Omitted device_id in verify must return 400");
+
+  const nullReset1 = await postRegistration("reset", { old_device_id: null, new_device_id: "m120" });
+  assert.equal(nullReset1.status, 400, "Null old_device_id in reset must return 400");
+
+  const nullReset2 = await postRegistration("reset", { old_device_id: "m118", new_device_id: null });
+  assert.equal(nullReset2.status, 400, "Null new_device_id in reset must return 400");
+
+  const emptyReset = await postRegistration("reset", { old_device_id: "", new_device_id: "m120" });
+  assert.equal(emptyReset.status, 400, "Empty old_device_id in reset must return 400");
+
+  const omittedReset = await postRegistration("reset", {});
+  assert.equal(omittedReset.status, 400, "Omitted fields in reset must return 400");
+
+  // Invalid device ID pattern
   const invalid1 = await postRegistration("discover", { device_id: "invalid-id" });
   assert.equal(invalid1.status, 400, "Invalid device_id in discover must return 400");
 

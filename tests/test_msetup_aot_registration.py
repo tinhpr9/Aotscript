@@ -66,9 +66,25 @@ class MsetupFleetRegistrationTests(unittest.TestCase):
             MODULE.assignment_config("m301", {"ok": True, "device_id": "m302"})
         self.assertEqual(str(ctx.exception), "registration_assignment_invalid")
 
-    def test_missing_server_device_id_fails_closed(self):
+    def test_missing_or_empty_server_device_id_fails_closed(self):
+        # Missing device_id
         with self.assertRaises(MODULE.RegistrationError) as ctx:
             MODULE.assignment_config("m301", {"ok": True, "session_id": "s1", "role": "follower"})
+        self.assertEqual(str(ctx.exception), "registration_assignment_invalid")
+
+        # Null device_id
+        with self.assertRaises(MODULE.RegistrationError) as ctx:
+            MODULE.assignment_config("m301", {"ok": True, "device_id": None})
+        self.assertEqual(str(ctx.exception), "registration_assignment_invalid")
+
+        # Empty string device_id
+        with self.assertRaises(MODULE.RegistrationError) as ctx:
+            MODULE.assignment_config("m301", {"ok": True, "device_id": ""})
+        self.assertEqual(str(ctx.exception), "registration_assignment_invalid")
+
+        # Non-dict response
+        with self.assertRaises(MODULE.RegistrationError) as ctx:
+            MODULE.assignment_config("m301", None)
         self.assertEqual(str(ctx.exception), "registration_assignment_invalid")
 
     def test_configure_flow_success_and_fail_closed(self):
