@@ -240,8 +240,9 @@ class AgyVerifyEngine:
             lock_valid
             and sha_match
             and ecc_dirs_exist
-            and (len(manifest_errors) == 0 if content_manifest else True)
+            and (len(manifest_errors) == 0 if content_manifest else False)
         )
+
 
         detail_msg = (
             f"Core Integrity: expected_sha={expected_core_sha[:8]}..., current_sha={current_core_sha[:8]}..., sha_match={sha_match}, content_verified={len(manifest_errors) == 0}"

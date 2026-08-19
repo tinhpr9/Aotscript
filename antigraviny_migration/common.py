@@ -482,9 +482,14 @@ def fetch_and_verify_core(
             except subprocess.CalledProcessError as e:
                 raise CoreMaterializeError(f"Failed to query local git core SHA: {e}")
         else:
-            if not os.path.exists(os.path.join(core_repo_url, "compatibility.json")):
-                raise CoreMaterializeError(f"Local core directory missing compatibility.json: {core_repo_url}")
+            # No .git directory — SHA cannot be verified. Fail closed.
+            raise CoreMaterializeError(
+                f"Local core at {core_repo_url!r} has no .git directory — "
+                f"SHA {target_sha!r} cannot be verified. "
+                f"Only git-tracked directories with a .git entry are accepted as local core sources."
+            )
         return core_repo_url
+
 
     # Case 2: Remote repository core source
     if auth_check and not check_repo_access(core_repo_url, _simulate_unauthenticated=_simulate_unauthenticated):

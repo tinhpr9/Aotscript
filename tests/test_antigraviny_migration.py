@@ -227,13 +227,22 @@ class TestAntigravinyMigration(unittest.TestCase):
                 "core_sha": "8f8322416ddcce40fa3791a5d41583a6e08d4b98",
                 "compatibility_schema": "antigraviny-core/v1"
             }, f)
+        # Compute expected content_manifest for the mock .agents tree
+        import hashlib as _hashlib
+        def _sha256(text):
+            return _hashlib.sha256(text.encode()).hexdigest()
+        mock_manifest = {
+            "skills/test-ecc-skill/SKILL.md": _sha256("# ECC Skill\n"),
+        }
         with open(os.path.join(self.repo_dir, ".agents", "ecc-install-state.json"), "w") as f:
             json.dump({
                 "installed": True,
                 "core_sha": "8f8322416ddcce40fa3791a5d41583a6e08d4b98",
                 "core_version": "1.0.0",
-                "compatibility_schema": "antigraviny-core/v1"
+                "compatibility_schema": "antigraviny-core/v1",
+                "content_manifest": mock_manifest,
             }, f)
+
         with open(os.path.join(self.repo_dir, ".agents", "skills", "test-ecc-skill", "SKILL.md"), "w") as f:
             f.write("# ECC Skill\n")
 
@@ -510,6 +519,21 @@ class TestAntigravinyMigration(unittest.TestCase):
             )
         self.assertIn("SHA mismatch", str(ctx.exception))
 
+    def test_13c_local_dir_no_git_is_rejected(self):
+        """2c. Local directory with compatibility.json but no .git is rejected (cannot verify SHA)."""
+        non_git_dir = os.path.join(self.temp_dir, "non_git_core")
+        os.makedirs(non_git_dir, exist_ok=True)
+        # Has compatibility.json (the old permissive code would have accepted this)
+        with open(os.path.join(non_git_dir, "compatibility.json"), "w") as f:
+            json.dump({"schema_version": "antigraviny-core/v1"}, f)
+        with self.assertRaises(CoreMaterializeError) as ctx:
+            fetch_and_verify_core(
+                core_repo_url=non_git_dir,
+                target_sha="a" * 40,
+                auth_check=False,
+            )
+        self.assertIn("no .git directory", str(ctx.exception))
+
     def test_14_compatibility_mismatch_rejected(self):
         """3. Compatibility mismatch rejected."""
         lock_data = {
@@ -748,8 +772,42 @@ class TestAntigravinyMigration(unittest.TestCase):
         self.assertFalse(res.checks["CORE_INTEGRITY"]["pass"])
         self.assertIn("mismatch", res.checks["CORE_INTEGRITY"]["detail"].lower())
 
+    def test_21c_missing_content_manifest_fails_integrity(self):
+        """10c. ecc-install-state.json with correct SHA but no content_manifest causes CORE_INTEGRITY=FAIL."""
+        test_repo = os.path.join(self.temp_dir, "test_no_manifest_repo")
+        os.makedirs(test_repo, exist_ok=True)
+        with open(os.path.join(test_repo, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump({
+                "schema_version": "1.0",
+                "core_repo": self.mock_core_dir,
+                "core_sha": self.mock_core_sha,
+                "core_version": "1.0.0",
+                "compatibility_schema": "antigraviny-core/v1"
+            }, f)
+
+        agents_dir = os.path.join(test_repo, ".agents")
+        os.makedirs(os.path.join(agents_dir, "skills"), exist_ok=True)
+
+        # Write ecc-install-state.json WITHOUT content_manifest (simulates old code write)
+        install_state = {
+            "installed": True,
+            "core_sha": self.mock_core_sha,
+            "compatibility_schema": "antigraviny-core/v1",
+        }
+        with open(os.path.join(agents_dir, "ecc-install-state.json"), "w") as f:
+            json.dump(install_state, f)
+
+        verifier = AgyVerifyEngine(target_root=self.new_env_dir, repo_path=test_repo)
+        res = verifier.verify()
+        # Must FAIL — no content_manifest means integrity is unverifiable
+        self.assertFalse(
+            res.checks["CORE_INTEGRITY"]["pass"],
+            "CORE_INTEGRITY should FAIL when content_manifest is absent from install state"
+        )
+
     def test_22_bootstrap_is_idempotent_with_core_materialize(self):
         """11. Bootstrap is idempotent with core materialization."""
+
         boot = AgyBootstrapEngine(
             target_root=self.new_env_dir,
             core_source=self.mock_core_dir,
