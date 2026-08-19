@@ -968,117 +968,6 @@ export class FleetState
     );
   }
 
-  async discoverAotRegistration(request) {
-    const body = await this.readJson(request);
-    const deviceId = validDeviceId(body?.device_id);
-    const previousDeviceId = body?.previous_device_id
-      ? validDeviceId(body.previous_device_id)
-      : null;
-    if (!deviceId || (body?.previous_device_id && !previousDeviceId)) {
-      return json({ ok: false, error: "invalid_registration_identity" }, 400);
-    }
-    const entries = await this.ctx.storage.list({ prefix: "aot_session:" });
-    const candidates = [];
-    for (const [key] of entries) {
-      const sessionId = String(key).slice("aot_session:".length);
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) continue;
-      const identities = this.ctx.getWebSockets(`aot-session:${sessionId}`)
-        .map((socket) => this.parseAotSocketIdentity(socket))
-        .filter(Boolean);
-      const references = [...new Set(
-        identities.filter((item) => item.role === "reference").map((item) => item.deviceId)
-      )];
-      if (references.length !== 1) continue;
-      const referenceDeviceId = references[0];
-      candidates.push({
-        session_id: sessionId,
-        reference_device_id: referenceDeviceId,
-        role: [deviceId, previousDeviceId].includes(referenceDeviceId)
-          ? "reference"
-          : "follower",
-      });
-    }
-    if (candidates.length === 0) {
-      return json({ ok: false, error: "no_active_aot_session" }, 404);
-    }
-    if (candidates.length !== 1) {
-      return json({ ok: false, error: "multiple_active_aot_sessions", count: candidates.length }, 409);
-    }
-    return json({ ok: true, ...candidates[0] });
-  }
-
-  async resetAotIdentity(request) {
-    const body = await this.readJson(request);
-    const oldDeviceId = validDeviceId(body?.old_device_id);
-    const newDeviceId = validDeviceId(body?.new_device_id);
-    const sessionId = String(body?.session_id || "").trim();
-    const role = String(body?.role || "");
-    if (
-      !oldDeviceId || !newDeviceId || oldDeviceId === newDeviceId
-      || !/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)
-      || !["reference", "follower"].includes(role)
-    ) {
-      return json({ ok: false, error: "invalid_identity_reset" }, 400);
-    }
-    const entries = await this.ctx.storage.list({ prefix: "aot_session:" });
-    for (const [key, record] of entries) {
-      const candidateSession = String(key).slice("aot_session:".length);
-      let changed = false;
-      if (record?.reference_device_id === oldDeviceId) {
-        record.reference_device_id = candidateSession === sessionId && role === "reference"
-          ? newDeviceId
-          : null;
-        changed = true;
-      }
-      if (record?.followers && Object.prototype.hasOwnProperty.call(record.followers, oldDeviceId)) {
-        delete record.followers[oldDeviceId];
-        changed = true;
-      }
-      this.aotLive.delete(this.aotLiveKey(candidateSession, oldDeviceId));
-      for (const oldRole of ["reference", "follower"]) {
-        for (const socket of this.ctx.getWebSockets(this.aotSocketTag(oldRole, candidateSession, oldDeviceId))) {
-          try { socket.close(4002, "identity_changed"); } catch (error) {}
-        }
-      }
-      if (changed) {
-        await this.writeAotSession(candidateSession, record);
-        await this.broadcastAotHubState(candidateSession);
-      }
-    }
-    return json({ ok: true, old_device_id: oldDeviceId, new_device_id: newDeviceId });
-  }
-
-  async verifyAotRegistration(request) {
-    const body = await this.readJson(request);
-    const deviceId = validDeviceId(body?.device_id);
-    const referenceDeviceId = validDeviceId(body?.reference_device_id);
-    const sessionId = String(body?.session_id || "").trim();
-    const role = String(body?.role || "");
-    if (
-      !deviceId || !referenceDeviceId
-      || !/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)
-      || !["reference", "follower"].includes(role)
-    ) {
-      return json({ ok: false, error: "invalid_registration_verification" }, 400);
-    }
-    const record = await this.readAotSession(sessionId);
-    const isMember = role === "reference"
-      ? record.reference_device_id === deviceId && referenceDeviceId === deviceId
-      : Boolean(record.followers?.[deviceId]) && record.reference_device_id === referenceDeviceId;
-    const online = this.ctx.getWebSockets(this.aotSocketTag(role, sessionId, deviceId)).length > 0;
-    if (!isMember || !online) {
-      return json({
-        ok: false,
-        error: !isMember ? "device_not_in_aot_session" : "device_not_online_in_aot_hub",
-        member: isMember,
-        online,
-      }, 409);
-    }
-    return json({
-      ok: true, device_id: deviceId, role, session_id: sessionId,
-      reference_device_id: referenceDeviceId, online: true, visible_in_hub: true,
-    });
-  }
 
   parseAotSocketIdentity(socket) {
     let tags;
@@ -3398,16 +3287,20 @@ export class FleetState
     if (operation === "reset") {
       const oldId = validDeviceId(body?.old_device_id);
       if (!oldId || oldId === deviceId) return json({ ok: false, error: "invalid_identity_reset" }, 400);
-      delete record.devices[oldId]; this.aotLive.delete(oldId);
+      delete record.devices[oldId];
+      this.aotLive.delete(oldId);
       for (const socket of this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", oldId))) {
         try { socket.close(4002, "identity_changed"); } catch (error) {}
       }
+      record.devices[deviceId] = { ...(record.devices[deviceId] || {}), device_id: deviceId, device_group: String(body?.device_group || record.devices[deviceId]?.device_group || "").toUpperCase(), joined_at: record.devices[deviceId]?.joined_at || Date.now() };
+      await this.writeFleet(record);
+      return json({ ok: true, old_device_id: oldId, new_device_id: deviceId });
     }
     record.devices[deviceId] = { ...(record.devices[deviceId] || {}), device_id: deviceId, device_group: String(body?.device_group || record.devices[deviceId]?.device_group || "").toUpperCase(), joined_at: record.devices[deviceId]?.joined_at || Date.now() };
     await this.writeFleet(record);
     if (operation === "verify") {
       const online = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", deviceId)).length > 0;
-      if (!online) return json({ ok: false, error: "device_not_online_in_aot_hub", online: false }, 409);
+      if (!online) return json({ ok: false, error: "device_not_online_in_aot_hub", online: false, visible_in_hub: false }, 409);
       return json({ ok: true, device_id: deviceId, online: true, visible_in_hub: true });
     }
     return json({ ok: true, device_id: deviceId });

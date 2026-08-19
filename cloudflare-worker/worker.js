@@ -1047,6 +1047,15 @@ async function handleAotRegistration(request, env, operation) {
   if (await isDeviceRevoked(deviceId, env)) {
     return noStoreJson({ ok: false, error: "device_revoked" }, 410);
   }
+  if (operation === "reset") {
+    const oldDeviceId = normalizeDeviceId(parsed.value.old_device_id);
+    if (!oldDeviceId || oldDeviceId === deviceId) {
+      return noStoreJson({ ok: false, error: "invalid_identity_reset" }, 400);
+    }
+    if (await isDeviceRevoked(oldDeviceId, env)) {
+      return noStoreJson({ ok: false, error: "device_revoked" }, 410);
+    }
+  }
   const allowed = new Set(["discover", "reset", "verify"]);
   if (!allowed.has(operation)) {
     return noStoreJson({ ok: false, error: "invalid_registration_operation" }, 400);

@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AotRegistrationContract",
+  "description": "Canonical machine-checkable contract for AOT Fleet registration endpoints",
+  "version": 1,
+  "identity_model": "device_id_only",
+  "forbidden_fields": [
+    "role",
+    "session_id",
+    "reference_device_id"
+  ],
+  "operations": {
+    "discover": {
+      "path": "/aot/control/registration/discover",
+      "method": "POST",
+      "request": {
+        "required": [
+          "device_id"
+        ],
+        "optional": [
+          "previous_device_id",
+          "device_group"
+        ]
+      },
+      "response": {
+        "success": {
+          "status": 200,
+          "required": [
+            "ok",
+            "device_id"
+          ],
+          "types": {
+            "ok": "boolean",
+            "device_id": "string"
+          }
+        },
+        "errors": [
+          {
+            "status": 400,
+            "code": "invalid_device_id"
+          },
+          {
+            "status": 401,
+            "code": "unauthorized"
+          },
+          {
+            "status": 410,
+            "code": "device_revoked"
+          }
+        ]
+      }
+    },
+    "verify": {
+      "path": "/aot/control/registration/verify",
+      "method": "POST",
+      "request": {
+        "required": [
+          "device_id"
+        ],
+        "optional": []
+      },
+      "response": {
+        "success": {
+          "status": 200,
+          "required": [
+            "ok",
+            "device_id",
+            "online",
+            "visible_in_hub"
+          ],
+          "types": {
+            "ok": "boolean",
+            "device_id": "string",
+            "online": "boolean",
+            "visible_in_hub": "boolean"
+          }
+        },
+        "errors": [
+          {
+            "status": 400,
+            "code": "invalid_device_id"
+          },
+          {
+            "status": 401,
+            "code": "unauthorized"
+          },
+          {
+            "status": 409,
+            "code": "device_not_online_in_aot_hub"
+          },
+          {
+            "status": 410,
+            "code": "device_revoked"
+          }
+        ]
+      }
+    },
+    "reset": {
+      "path": "/aot/control/registration/reset",
+      "method": "POST",
+      "request": {
+        "required": [
+          "old_device_id",
+          "new_device_id"
+        ],
+        "optional": []
+      },
+      "response": {
+        "success": {
+          "status": 200,
+          "required": [
+            "ok",
+            "old_device_id",
+            "new_device_id"
+          ],
+          "types": {
+            "ok": "boolean",
+            "old_device_id": "string",
+            "new_device_id": "string"
+          }
+        },
+        "errors": [
+          {
+            "status": 400,
+            "code": "invalid_device_id"
+          },
+          {
+            "status": 400,
+            "code": "invalid_identity_reset"
+          },
+          {
+            "status": 401,
+            "code": "unauthorized"
+          },
+          {
+            "status": 410,
+            "code": "device_revoked"
+          }
+        ]
+      }
+    }
+  }
+}
