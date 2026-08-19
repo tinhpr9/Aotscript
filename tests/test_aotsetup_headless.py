@@ -380,10 +380,29 @@ class TestAotsetupHeadless(unittest.TestCase):
         setup_driver = self.state / "aotscript" / "setup-driver"
         self.assertFalse((setup_driver / "setup_complete").exists())
 
-    # 17. Incomplete identity pair fails closed
-    def test_17_partial_identity_state_fails_closed(self):
-        # Create incomplete identity pair: device_id exists but device_group is missing
+    # 17a. Fresh device with interrupted partial Shouko write recovers and completes without deadlock
+    def test_17a_partial_shouko_fresh_recovers_without_deadlock(self):
+        # Fresh device with partial uncommitted write in Shouko (e.g. device_id exists, device_group missing)
         (self.shouko / "device_id.txt").write_text("m88\n", encoding="utf-8")
+
+        env = self._base_env(
+            AOTSCRIPT_SETUP_DRY_RUN="1",
+            AOTSCRIPT_SETUP_DEVICE_ID="m88",
+            AOTSCRIPT_SETUP_GROUP="NOVA",
+            AOTSCRIPT_SETUP_CONFIRM="yes",
+        )
+        res = self._run_setup(env)
+        self.assertEqual(res.returncode, 0, f"Fresh setup should recover: {res.stderr}\n{res.stdout}")
+        self.assertTrue((self.shouko / "device_id.txt").is_file())
+        self.assertTrue((self.shouko / "device_group.txt").is_file())
+        self.assertEqual((self.shouko / "device_group.txt").read_text(encoding="utf-8").strip(), "NOVA")
+
+    # 17b. Incomplete setup-driver pair fails closed
+    def test_17b_incomplete_setup_driver_pair_fails_closed(self):
+        setup_driver = self.state / "aotscript" / "setup-driver"
+        setup_driver.mkdir(parents=True, exist_ok=True)
+        (setup_driver / "device_id").write_text("m88\n", encoding="utf-8")
+        # device_group is intentionally missing in setup-driver
 
         env = self._base_env(
             AOTSCRIPT_SETUP_DEVICE_ID="m88",
@@ -393,6 +412,24 @@ class TestAotsetupHeadless(unittest.TestCase):
         res = self._run_setup(env)
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("incomplete_identity_pair", res.stderr + res.stdout)
+
+    # 17c. Existing bound device with partial Shouko self-heals from authoritative setup-driver
+    def test_17c_partial_shouko_bound_heals_from_authoritative_source(self):
+        setup_driver = self.state / "aotscript" / "setup-driver"
+        setup_driver.mkdir(parents=True, exist_ok=True)
+        (setup_driver / "device_id").write_text("m88\n", encoding="utf-8")
+        (setup_driver / "device_group").write_text("NOVA\n", encoding="utf-8")
+        host_hash = hashlib.sha256(b"test-host").hexdigest()
+        (setup_driver / "host_fingerprint").write_text(host_hash + "\n", encoding="utf-8")
+        (setup_driver / "setup_complete").write_text("yes\n", encoding="utf-8")
+        # Shouko has only device_id.txt, missing device_group.txt
+        (self.shouko / "device_id.txt").write_text("m88\n", encoding="utf-8")
+
+        env = self._base_env()
+        res = self._run_setup(env)
+        self.assertEqual(res.returncode, 0, f"Bound device should self-heal shouko: {res.stderr}\n{res.stdout}")
+        self.assertTrue((self.shouko / "device_group.txt").is_file())
+        self.assertEqual((self.shouko / "device_group.txt").read_text(encoding="utf-8").strip(), "NOVA")
 
     # 18. Fresh setup executes production child once, rerun is idempotent without re-execution
     def test_18_fresh_setup_then_rerun_skips_child(self):

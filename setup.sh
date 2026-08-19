@@ -571,12 +571,21 @@ def source_snapshot():
 
     shouko_id = shouko / "device_id.txt"
     shouko_group = shouko / "device_group.txt"
-    if shouko_id.exists() != shouko_group.exists():
-        fail(f"incomplete_identity_pair:{shouko}")
-    if shouko_id.exists():
+    if shouko_id.exists() and shouko_group.exists():
         entries.append(("shouko", shouko_id, shouko_group,
                         valid_id(read_text(shouko_id), shouko_id),
                         valid_group(read_text(shouko_group), shouko_group)))
+    elif shouko_id.exists() != shouko_group.exists():
+        if setup_id.exists():
+            auth_id = valid_id(read_text(setup_id), setup_id)
+            auth_group = valid_group(read_text(setup_group), setup_group)
+            atomic_text(shouko_id, auth_id + "\n")
+            atomic_text(shouko_group, auth_group + "\n")
+            entries.append(("shouko", shouko_id, shouko_group, auth_id, auth_group))
+        elif not entries:
+            pass
+        else:
+            fail(f"incomplete_identity_pair:{shouko}")
     return entries, phase
 
 
