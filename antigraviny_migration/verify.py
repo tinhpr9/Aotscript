@@ -1,7 +1,7 @@
 """
 Verification Engine for Antigraviny/Agy Migration System.
-Performs live inspection, core contract verification, and comparative audit
-to ensure full capability parity, immutable SHA integrity, and runtime health.
+Performs live inspection, core contract verification, deterministic content manifest audit,
+and comparative audit to ensure full capability parity, immutable SHA integrity, and runtime health.
 """
 
 import os
@@ -19,6 +19,8 @@ from antigraviny_migration.common import (
     CredentialClassification,
     MigrationManifest,
     load_core_lock,
+    verify_tree_manifest,
+    CoreLockError,
 )
 
 
@@ -169,54 +171,93 @@ class AgyVerifyEngine:
             result.add_check("REPO_HEAD", False, f"Repo directory {active_repo} not found")
 
         # 6. CORE_LOCK & CORE_INTEGRITY
-        lock_file = os.path.join(active_repo, "ANTIGRAVINY_CORE.lock")
         agents_dir = os.path.join(active_repo, ".agents")
         install_state_file = os.path.join(agents_dir, "ecc-install-state.json")
 
         expected_core_sha = "unknown"
         current_core_sha = "unknown"
         lock_valid = False
+        lock_error_msg = None
 
-        if os.path.isfile(lock_file):
-            try:
-                with open(lock_file, "r", encoding="utf-8") as lf:
-                    lock_data = json.load(lf)
-                expected_core_sha = lock_data.get("core_sha", "unknown")
-                lock_valid = bool(expected_core_sha and lock_data.get("compatibility_schema") == "antigraviny-core/v1")
-                result.add_check(
-                    "CORE_LOCK",
-                    lock_valid,
-                    f"Core Lock: repo={lock_data.get('core_repo')}, sha={expected_core_sha[:8]}...",
-                    expected=expected_core_sha,
-                )
-            except Exception as e:
-                result.add_check("CORE_LOCK", False, f"Error parsing ANTIGRAVINY_CORE.lock: {e}")
-        else:
-            result.add_check("CORE_LOCK", False, f"ANTIGRAVINY_CORE.lock missing in {active_repo}")
+        try:
+            lock_data = load_core_lock(active_repo)
+            expected_core_sha = lock_data["core_sha"]
+            lock_valid = True
+            result.add_check(
+                "CORE_LOCK",
+                True,
+                f"Core Lock Valid: repo={lock_data.get('core_repo')}, sha={expected_core_sha[:8]}..., schema={lock_data.get('compatibility_schema')}",
+                expected=expected_core_sha,
+                health="PASS",
+            )
+        except CoreLockError as cle:
+            lock_error_msg = str(cle)
+            result.add_check(
+                "CORE_LOCK",
+                False,
+                f"Invalid ANTIGRAVINY_CORE.lock: {cle}",
+                expected=None,
+                health="FAIL",
+            )
+        except Exception as e:
+            lock_error_msg = str(e)
+            result.add_check(
+                "CORE_LOCK",
+                False,
+                f"Error checking ANTIGRAVINY_CORE.lock: {e}",
+                expected=None,
+                health="FAIL",
+            )
 
+        content_manifest = None
         if os.path.isfile(install_state_file):
             try:
                 with open(install_state_file, "r", encoding="utf-8") as isf:
                     install_data = json.load(isf)
                 current_core_sha = install_data.get("core_sha", "unknown")
+                content_manifest = install_data.get("content_manifest")
             except Exception:
                 pass
 
         sha_match = (
-            expected_core_sha != "unknown"
+            lock_valid
+            and expected_core_sha != "unknown"
             and current_core_sha != "unknown"
             and expected_core_sha.lower() == current_core_sha.lower()
         )
         ecc_dirs_exist = os.path.exists(os.path.join(agents_dir, "skills")) or os.path.exists(os.path.join(agents_dir, "rules"))
-        core_integrity_pass = lock_valid and sha_match and ecc_dirs_exist
+
+        # Deterministic content integrity check
+        manifest_errors = []
+        if content_manifest and isinstance(content_manifest, dict):
+            manifest_errors = verify_tree_manifest(
+                agents_dir,
+                content_manifest,
+                ignore_names=["ecc-install-state.json"],
+            )
+
+        content_integrity_pass = bool(
+            lock_valid
+            and sha_match
+            and ecc_dirs_exist
+            and (len(manifest_errors) == 0 if content_manifest else True)
+        )
+
+        detail_msg = (
+            f"Core Integrity: expected_sha={expected_core_sha[:8]}..., current_sha={current_core_sha[:8]}..., sha_match={sha_match}, content_verified={len(manifest_errors) == 0}"
+        )
+        if manifest_errors:
+            detail_msg += f" (Manifest errors: {'; '.join(manifest_errors[:3])})"
+        elif not lock_valid:
+            detail_msg += f" (Lock error: {lock_error_msg})"
 
         result.add_check(
             "CORE_INTEGRITY",
-            core_integrity_pass,
-            f"Core Integrity: expected_sha={expected_core_sha[:8]}..., current_sha={current_core_sha[:8]}..., match={sha_match}",
+            content_integrity_pass,
+            detail_msg,
             expected=expected_core_sha,
             current=current_core_sha,
-            health="PASS" if core_integrity_pass else "FAIL",
+            health="PASS" if content_integrity_pass else "FAIL",
         )
 
         # 7. ECC & 8. AGENTS_RULES
@@ -287,7 +328,7 @@ class AgyVerifyEngine:
         result.add_check("AGY_START", agy_start_ok, f"Agy invocation verified: {agy_start_ok}")
 
         # 18. SMOKE_TEST / CORE_HEALTH
-        smoke_ok = agy_start_ok and ecc_ok and perm_ok
+        smoke_ok = agy_start_ok and ecc_ok and perm_ok and content_integrity_pass
         result.add_check(
             "SMOKE_TEST",
             smoke_ok,

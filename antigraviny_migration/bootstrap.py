@@ -149,8 +149,16 @@ class AgyBootstrapEngine:
                 self.log(f"Core materialized successfully (SHA={mat_res.get('core_sha')[:8]}..., capabilities={mat_res.get('capabilities_count')}).")
                 steps_executed.append("core:materialized")
             except Exception as e:
-                self.log(f"Warning during core materialization: {e}")
+                self.log(f"Critical error during core materialization: {e}")
                 steps_executed.append(f"core:materialize_error: {e}")
+                return {
+                    "success": False,
+                    "error": f"Core materialization failed: {e}",
+                    "architecture": arch,
+                    "system": system,
+                    "steps": steps_executed,
+                    "repo_dir": target_repo_dir,
+                }
 
         self.log("Bootstrap completed successfully.")
         return {

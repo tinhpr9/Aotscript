@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "core_repo": "https://github.com/tinhpr9/antigraviny-core.git",
-  "core_version": "1.0.0",
-  "core_sha": "8f8322416ddcce40fa3791a5d41583a6e08d4b98",
+  "core_version": "1.1.0",
+  "core_sha": "747916654bed392827acad8a995920221a5fd732",
   "compatibility_schema": "antigraviny-core/v1"
 }

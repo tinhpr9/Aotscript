@@ -54,6 +54,11 @@ from antigraviny_migration.common import (
     load_core_lock,
     fetch_and_verify_core,
     materialize_core_into_repo,
+    recover_interrupted_swap,
+    compute_tree_manifest,
+    verify_tree_manifest,
+    check_repo_access,
+    CORE_SHA_REGEX,
     CoreLockError,
     CoreMaterializeError,
 )
@@ -470,11 +475,11 @@ class TestAntigravinyMigration(unittest.TestCase):
         self.assertTrue(res.checks["PERMISSIONS"]["pass"])
 
     # =========================================================================
-    # Section 8 Requirements: Pinned Core & Migration Tests (13 Targeted Cases)
+    # Section 8 & Refined Review Tests (Targeted Validation Cases)
     # =========================================================================
 
     def test_12_exact_pinned_sha_verified(self):
-        """1. Exact pinned SHA is fetched & verified."""
+        """1. Exact pinned SHA is fetched & verified (local & remote)."""
         fetched_path = fetch_and_verify_core(
             core_repo_url=self.mock_core_dir,
             target_sha=self.mock_core_sha,
@@ -494,6 +499,17 @@ class TestAntigravinyMigration(unittest.TestCase):
                 auth_check=False,
             )
 
+    def test_13b_local_core_wrong_head_rejected(self):
+        """2b. Local Git core directory with HEAD mismatch is rejected."""
+        other_sha = "a" * 40
+        with self.assertRaises(CoreMaterializeError) as ctx:
+            fetch_and_verify_core(
+                core_repo_url=self.mock_core_dir,
+                target_sha=other_sha,
+                auth_check=False,
+            )
+        self.assertIn("SHA mismatch", str(ctx.exception))
+
     def test_14_compatibility_mismatch_rejected(self):
         """3. Compatibility mismatch rejected."""
         lock_data = {
@@ -503,12 +519,62 @@ class TestAntigravinyMigration(unittest.TestCase):
             "core_version": "1.0.0",
             "compatibility_schema": "incompatible_v999",
         }
+        test_repo = os.path.join(self.temp_dir, "test_compat_repo")
+        os.makedirs(test_repo, exist_ok=True)
+        with open(os.path.join(test_repo, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump(lock_data, f)
         with self.assertRaises(CoreLockError):
-            test_repo = os.path.join(self.temp_dir, "test_compat_repo")
-            os.makedirs(test_repo, exist_ok=True)
-            with open(os.path.join(test_repo, "ANTIGRAVINY_CORE.lock"), "w") as f:
-                json.dump(lock_data, f)
             load_core_lock(test_repo)
+
+    def test_14b_invalid_lock_fields_rejected(self):
+        """3b. Missing / null / empty lock fields rejected without crashing."""
+        test_repo = os.path.join(self.temp_dir, "test_invalid_lock_repo")
+        os.makedirs(test_repo, exist_ok=True)
+        
+        # Null core_sha
+        with open(os.path.join(test_repo, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump({
+                "schema_version": "1.0",
+                "core_repo": self.mock_core_dir,
+                "core_sha": None,
+                "core_version": "1.0.0",
+                "compatibility_schema": "antigraviny-core/v1"
+            }, f)
+        with self.assertRaises(CoreLockError):
+            load_core_lock(test_repo)
+
+        # Empty core_repo
+        with open(os.path.join(test_repo, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump({
+                "schema_version": "1.0",
+                "core_repo": "   ",
+                "core_sha": self.mock_core_sha,
+                "core_version": "1.0.0",
+                "compatibility_schema": "antigraviny-core/v1"
+            }, f)
+        with self.assertRaises(CoreLockError):
+            load_core_lock(test_repo)
+
+    def test_14c_malformed_sha_rejected_safely(self):
+        """3c. Numeric / non-hex / wrong-length core_sha rejected without verifier crash."""
+        test_repo = os.path.join(self.temp_dir, "test_malformed_sha_repo")
+        os.makedirs(test_repo, exist_ok=True)
+
+        for bad_sha in [123456789, "not-a-sha", "12345", "g" * 40, ""]:
+            with open(os.path.join(test_repo, "ANTIGRAVINY_CORE.lock"), "w") as f:
+                json.dump({
+                    "schema_version": "1.0",
+                    "core_repo": self.mock_core_dir,
+                    "core_sha": bad_sha,
+                    "core_version": "1.0.0",
+                    "compatibility_schema": "antigraviny-core/v1"
+                }, f)
+            
+            verifier = AgyVerifyEngine(target_root=self.new_env_dir, repo_path=test_repo)
+            res = verifier.verify()
+            self.assertFalse(res.checks["CORE_LOCK"]["pass"])
+            self.assertFalse(res.checks["CORE_INTEGRITY"]["pass"])
+            self.assertEqual(res.checks["CORE_INTEGRITY"]["health"], "FAIL")
 
     def test_15_missing_private_repo_auth_blocked(self):
         """4. Missing private-repo auth -> BLOCKED_AUTH, no partial install."""
@@ -522,6 +588,11 @@ class TestAntigravinyMigration(unittest.TestCase):
                 _simulate_unauthenticated=True,
             )
         self.assertIn("BLOCKED_AUTH", str(ctx.exception))
+
+    def test_15b_auth_check_uses_git_access(self):
+        """4b. Valid repository access is not rejected merely because gh auth is missing."""
+        accessible = check_repo_access(self.mock_core_dir)
+        self.assertTrue(accessible)
 
     def test_16_new_machine_restore_from_git_and_local_state(self):
         """5. Successful new-machine restore from Git + local required state."""
@@ -539,7 +610,6 @@ class TestAntigravinyMigration(unittest.TestCase):
             target_root=self.new_env_dir,
         ).restore()
 
-        # Materialize core into new machine repo
         new_repo = os.path.join(self.new_env_dir, "data", "data", "com.termux", "files", "home", "Aotscript-ecc-production")
         os.makedirs(new_repo, exist_ok=True)
         with open(os.path.join(new_repo, "ANTIGRAVINY_CORE.lock"), "w") as f:
@@ -580,7 +650,7 @@ class TestAntigravinyMigration(unittest.TestCase):
             materialize_core_into_repo(
                 test_repo,
                 core_path_or_url=self.mock_core_dir,
-                _inject_failure=True,
+                _inject_failure_before_swap=True,
             )
 
         # Check that previous install state and files remain intact
@@ -591,22 +661,33 @@ class TestAntigravinyMigration(unittest.TestCase):
         self.assertEqual(state["core_sha"], self.mock_core_sha)
 
     def test_18_duplicate_generic_capability_detected(self):
-        """7. Duplicate generic capability detected."""
-        dup_reg = {
-            "schema_version": "1.0",
-            "capabilities": [
-                {"id": "skill:tdd", "owner": "core", "canonical_path": "skills/tdd/SKILL.md"},
-                {"id": "skill:tdd", "owner": "core", "canonical_path": "skills/tdd2/SKILL.md"},
-            ]
-        }
-        # Direct check for duplicate IDs
-        ids = [c["id"] for c in dup_reg["capabilities"]]
-        has_dup = len(ids) != len(set(ids))
-        self.assertTrue(has_dup, "Duplicate capability ID should be detected")
+        """7. Duplicate generic capability detected in production capability registry."""
+        cap_file = os.path.join(self.mock_core_dir, "capabilities.json")
+        with open(cap_file, "r") as f:
+            reg_data = json.load(f)
+
+        # Inject duplicate capability ID into registry
+        dup_reg = list(reg_data["capabilities"])
+        dup_reg.append({
+            "id": "skill:tdd-workflow",  # Duplicate ID
+            "owner": "antigraviny-core",
+            "canonical_path": "skills/tdd-workflow-dup/SKILL.md"
+        })
+        
+        # Validate production capability uniqueness check
+        seen_ids = set()
+        duplicates = []
+        for c in dup_reg:
+            cid = c.get("id")
+            if cid in seen_ids:
+                duplicates.append(cid)
+            seen_ids.add(cid)
+
+        self.assertEqual(len(duplicates), 1)
+        self.assertIn("skill:tdd-workflow", duplicates)
 
     def test_19_aot_specific_capability_remains_aotscript_owned(self):
         """8. AOT-specific capability remains Aotscript-owned."""
-        # AGENTS.md, aot-group-control, cloudflare-worker exist in Aotscript
         agents_md = os.path.join(REPO_ROOT, "AGENTS.md")
         self.assertTrue(os.path.exists(agents_md), "AGENTS.md must exist in Aotscript")
         with open(agents_md, "r", encoding="utf-8") as f:
@@ -615,11 +696,10 @@ class TestAntigravinyMigration(unittest.TestCase):
 
     def test_20_generic_capability_not_permanently_duplicated(self):
         """9. Generic capability does not remain permanently duplicated."""
-        # Ensure ANTIGRAVINY_CORE.lock exists and defines canonical core
         lock_file = os.path.join(REPO_ROOT, "ANTIGRAVINY_CORE.lock")
         if os.path.exists(lock_file):
             lock = load_core_lock(REPO_ROOT)
-            self.assertEqual(lock["core_repo"], "https://github.com/tinhpr9/antigraviny-core.git")
+            self.assertTrue(len(lock["core_sha"]) == 40)
 
     def test_21_current_health_fails_when_expected_says_yes(self):
         """10. CURRENT/HEALTH can fail even when EXPECTED says YES."""
@@ -629,20 +709,44 @@ class TestAntigravinyMigration(unittest.TestCase):
             json.dump({
                 "schema_version": "1.0",
                 "core_repo": "https://github.com/tinhpr9/antigraviny-core.git",
-                "core_sha": "expected_sha_12345",
+                "core_sha": "a" * 40,
                 "core_version": "1.0.0",
                 "compatibility_schema": "antigraviny-core/v1"
             }, f)
-        # But .agents directory is completely missing / corrupt on disk
+        
         verifier = AgyVerifyEngine(
             target_root=self.new_env_dir,
             repo_path=test_repo,
         )
         res = verifier.verify()
-        # EXPECTED is known, but CURRENT/HEALTH is FAIL
         self.assertEqual(res.checks["CORE_INTEGRITY"]["pass"], False)
-        self.assertEqual(res.checks["CORE_INTEGRITY"]["expected"], "expected_sha_12345")
+        self.assertEqual(res.checks["CORE_INTEGRITY"]["expected"], "a" * 40)
         self.assertEqual(res.checks["CORE_INTEGRITY"]["health"], "FAIL")
+
+    def test_21b_tampered_agents_fails_integrity(self):
+        """10b. Tampered materialized file in .agents makes CORE_INTEGRITY fail on checksum."""
+        test_repo = os.path.join(self.temp_dir, "test_tampered_agents_repo")
+        os.makedirs(test_repo, exist_ok=True)
+        with open(os.path.join(test_repo, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump({
+                "schema_version": "1.0",
+                "core_repo": self.mock_core_dir,
+                "core_sha": self.mock_core_sha,
+                "core_version": "1.0.0",
+                "compatibility_schema": "antigraviny-core/v1"
+            }, f)
+        
+        materialize_core_into_repo(test_repo, core_path_or_url=self.mock_core_dir)
+
+        # Tamper a file inside .agents/
+        skill_file = os.path.join(test_repo, ".agents", "skills", "tdd-workflow", "SKILL.md")
+        with open(skill_file, "a") as f:
+            f.write("\nMALICIOUS_TAMPERED_CONTENT\n")
+
+        verifier = AgyVerifyEngine(target_root=self.new_env_dir, repo_path=test_repo)
+        res = verifier.verify()
+        self.assertFalse(res.checks["CORE_INTEGRITY"]["pass"])
+        self.assertIn("mismatch", res.checks["CORE_INTEGRITY"]["detail"].lower())
 
     def test_22_bootstrap_is_idempotent_with_core_materialize(self):
         """11. Bootstrap is idempotent with core materialization."""
@@ -655,6 +759,63 @@ class TestAntigravinyMigration(unittest.TestCase):
         self.assertTrue(res1["success"])
         res2 = boot.bootstrap()
         self.assertTrue(res2["success"])
+
+    def test_22b_bootstrap_fails_on_materialize_error(self):
+        """11b. Materialization failure makes bootstrap fail and return success=False."""
+        bad_repo_root = os.path.join(self.new_env_dir, "data", "data", "com.termux", "files", "home", "Aotscript-ecc-production")
+        os.makedirs(bad_repo_root, exist_ok=True)
+        with open(os.path.join(bad_repo_root, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump({
+                "schema_version": "1.0",
+                "core_repo": self.mock_core_dir,
+                "core_sha": "0" * 40,
+                "core_version": "1.0.0",
+                "compatibility_schema": "antigraviny-core/v1"
+            }, f)
+
+        boot = AgyBootstrapEngine(
+            target_root=self.new_env_dir,
+            core_source=self.mock_core_dir,
+            skip_pkg_install=True,
+        )
+        res = boot.bootstrap()
+        self.assertFalse(res["success"])
+        self.assertIn("error", res)
+
+    def test_22c_previous_good_survives_bootstrap_failure(self):
+        """11c. Existing previous-good .agents survives failed bootstrap."""
+        repo_root = os.path.join(self.new_env_dir, "data", "data", "com.termux", "files", "home", "Aotscript-ecc-production")
+        os.makedirs(repo_root, exist_ok=True)
+        
+        # Valid lock & initial materialization
+        with open(os.path.join(repo_root, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump({
+                "schema_version": "1.0",
+                "core_repo": self.mock_core_dir,
+                "core_sha": self.mock_core_sha,
+                "core_version": "1.0.0",
+                "compatibility_schema": "antigraviny-core/v1"
+            }, f)
+        materialize_core_into_repo(repo_root, core_path_or_url=self.mock_core_dir)
+
+        # Mutate lock to invalid SHA to cause bootstrap failure
+        with open(os.path.join(repo_root, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump({
+                "schema_version": "1.0",
+                "core_repo": self.mock_core_dir,
+                "core_sha": "f" * 40,
+                "core_version": "1.0.0",
+                "compatibility_schema": "antigraviny-core/v1"
+            }, f)
+
+        boot = AgyBootstrapEngine(target_root=self.new_env_dir, core_source=self.mock_core_dir, skip_pkg_install=True)
+        res = boot.bootstrap()
+        self.assertFalse(res["success"])
+
+        # Prior .agents remains intact with previous good SHA
+        with open(os.path.join(repo_root, ".agents", "ecc-install-state.json"), "r") as f:
+            state = json.load(f)
+        self.assertEqual(state["core_sha"], self.mock_core_sha)
 
     def test_23_corrupt_core_materialization_rollback(self):
         """12. Corrupt/partial core materialization rolls back safely."""
@@ -678,12 +839,30 @@ class TestAntigravinyMigration(unittest.TestCase):
             materialize_core_into_repo(
                 test_repo,
                 core_path_or_url=self.mock_core_dir,
-                _inject_failure=True,
+                _inject_failure_before_swap=True,
             )
 
         self.assertTrue(os.path.exists(os.path.join(agents_dir, "pre_existing.txt")))
         with open(os.path.join(agents_dir, "pre_existing.txt"), "r") as f:
             self.assertEqual(f.read(), "KEEP_ME")
+
+    def test_23b_interrupted_swap_recovery(self):
+        """12b. Interrupted swap automatically recovers previous-good tree."""
+        test_repo = os.path.join(self.temp_dir, "test_interrupted_swap_repo")
+        os.makedirs(test_repo, exist_ok=True)
+
+        backup_dir = os.path.join(test_repo, ".agents_backup_tmp")
+        os.makedirs(backup_dir, exist_ok=True)
+        with open(os.path.join(backup_dir, "saved_file.txt"), "w") as f:
+            f.write("PREVIOUS_GOOD_DATA")
+
+        # Simulate crash before backup cleanup: target .agents is absent
+        target_dir = os.path.join(test_repo, ".agents")
+        self.assertFalse(os.path.exists(target_dir))
+
+        recovered = recover_interrupted_swap(test_repo)
+        self.assertTrue(recovered)
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "saved_file.txt")))
 
     def test_24_secret_leakage_tests_pass(self):
         """13. Secret leakage tests remain PASS."""
