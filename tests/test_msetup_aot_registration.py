@@ -20,12 +20,32 @@ class MsetupFleetRegistrationTests(unittest.TestCase):
         self.assertTrue(self.contract_path.is_file(), "Canonical registration contract artifact must exist")
         self.contract = json.loads(self.contract_path.read_text(encoding="utf-8"))
 
-    def test_canonical_contract_structure(self):
+    def _validate_instance(self, instance: dict, def_name: str):
+        defs = self.contract.get("$defs", {})
+        self.assertIn(def_name, defs, f"Schema $defs must include {def_name}")
+        schema = defs[def_name]
+        self.assertEqual(schema.get("type"), "object")
+        for req in schema.get("required", []):
+            self.assertIn(req, instance, f"Missing required property {req} for {def_name}")
+        if schema.get("additionalProperties") is False:
+            allowed = set(schema.get("properties", {}).keys())
+            for key in instance:
+                self.assertIn(key, allowed, f"Disallowed property {key} for {def_name}")
+
+    def test_canonical_contract_structure_and_definitions(self):
         self.assertEqual(self.contract.get("identity_model"), "device_id_only")
         self.assertIn("discover", self.contract["operations"])
         self.assertIn("verify", self.contract["operations"])
         self.assertIn("reset", self.contract["operations"])
         self.assertEqual(self.contract.get("forbidden_fields"), ["role", "session_id", "reference_device_id"])
+
+        # Test request and response schemas against valid instances
+        self._validate_instance({"device_id": "m118"}, "DiscoverRequest")
+        self._validate_instance({"ok": True, "device_id": "m118"}, "DiscoverResponseSuccess")
+        self._validate_instance({"device_id": "m118"}, "VerifyRequest")
+        self._validate_instance({"ok": True, "device_id": "m118", "online": True, "visible_in_hub": True}, "VerifyResponseSuccess")
+        self._validate_instance({"old_device_id": "m118", "new_device_id": "m120"}, "ResetRequest")
+        self._validate_instance({"ok": True, "old_device_id": "m118", "new_device_id": "m120"}, "ResetResponseSuccess")
 
     def test_device_only_assignment_and_idempotent_atomic_config(self):
         # Discover response satisfying canonical contract

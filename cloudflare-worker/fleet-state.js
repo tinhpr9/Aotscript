@@ -3281,29 +3281,41 @@ export class FleetState
 
   async registerFleetDevice(request, operation) {
     const body = await this.readJson(request);
-    const deviceId = validDeviceId(body?.device_id || body?.new_device_id);
-    if (!deviceId) return json({ ok: false, error: "invalid_device_id" }, 400);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return json({ ok: false, error: "invalid_registration_request" }, 400);
+    }
+    for (const forbidden of ["role", "session_id", "reference_device_id"]) {
+      if (Object.prototype.hasOwnProperty.call(body, forbidden)) {
+        return json({ ok: false, error: "forbidden_registration_field" }, 400);
+      }
+    }
     const record = await this.readFleet();
     if (operation === "reset") {
       const oldId = validDeviceId(body?.old_device_id);
-      if (!oldId || oldId === deviceId) return json({ ok: false, error: "invalid_identity_reset" }, 400);
+      const newId = validDeviceId(body?.new_device_id);
+      if (!oldId || !newId || oldId === newId) return json({ ok: false, error: "invalid_identity_reset" }, 400);
       delete record.devices[oldId];
       this.aotLive.delete(oldId);
       for (const socket of this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", oldId))) {
         try { socket.close(4002, "identity_changed"); } catch (error) {}
       }
+      record.devices[newId] = { ...(record.devices[newId] || {}), device_id: newId, device_group: String(body?.device_group || record.devices[newId]?.device_group || "").toUpperCase(), joined_at: record.devices[newId]?.joined_at || Date.now() };
+      await this.writeFleet(record);
+      return json({ ok: true, old_device_id: oldId, new_device_id: newId });
+    }
+    const deviceId = validDeviceId(body?.device_id);
+    if (!deviceId) return json({ ok: false, error: "invalid_device_id" }, 400);
+    if (operation === "discover") {
       record.devices[deviceId] = { ...(record.devices[deviceId] || {}), device_id: deviceId, device_group: String(body?.device_group || record.devices[deviceId]?.device_group || "").toUpperCase(), joined_at: record.devices[deviceId]?.joined_at || Date.now() };
       await this.writeFleet(record);
-      return json({ ok: true, old_device_id: oldId, new_device_id: deviceId });
+      return json({ ok: true, device_id: deviceId });
     }
-    record.devices[deviceId] = { ...(record.devices[deviceId] || {}), device_id: deviceId, device_group: String(body?.device_group || record.devices[deviceId]?.device_group || "").toUpperCase(), joined_at: record.devices[deviceId]?.joined_at || Date.now() };
-    await this.writeFleet(record);
     if (operation === "verify") {
       const online = this.ctx.getWebSockets(this.aotSocketTag("device", "fleet", deviceId)).length > 0;
       if (!online) return json({ ok: false, error: "device_not_online_in_aot_hub", online: false, visible_in_hub: false }, 409);
       return json({ ok: true, device_id: deviceId, online: true, visible_in_hub: true });
     }
-    return json({ ok: true, device_id: deviceId });
+    return json({ ok: false, error: "invalid_registration_operation" }, 400);
   }
 
   async notifyTelegramPhanserver(batch) {
