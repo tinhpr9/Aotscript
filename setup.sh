@@ -571,12 +571,21 @@ def source_snapshot():
 
     shouko_id = shouko / "device_id.txt"
     shouko_group = shouko / "device_group.txt"
-    if shouko_id.exists() != shouko_group.exists():
-        fail(f"incomplete_identity_pair:{shouko}")
-    if shouko_id.exists():
+    if shouko_id.exists() and shouko_group.exists():
         entries.append(("shouko", shouko_id, shouko_group,
                         valid_id(read_text(shouko_id), shouko_id),
                         valid_group(read_text(shouko_group), shouko_group)))
+    elif shouko_id.exists() != shouko_group.exists():
+        if setup_id.exists():
+            auth_id = valid_id(read_text(setup_id), setup_id)
+            auth_group = valid_group(read_text(setup_group), setup_group)
+            atomic_text(shouko_id, auth_id + "\n")
+            atomic_text(shouko_group, auth_group + "\n")
+            entries.append(("shouko", shouko_id, shouko_group, auth_id, auth_group))
+        elif not entries:
+            pass
+        else:
+            fail(f"incomplete_identity_pair:{shouko}")
     return entries, phase
 
 
@@ -623,6 +632,9 @@ def bind(device_id, group, host_hash):
     atomic_text(setup_dir / "device_id", device_id + "\n")
     atomic_text(setup_dir / "device_group", group + "\n")
     atomic_text(setup_dir / "host_fingerprint", host_hash + "\n")
+    shouko.mkdir(parents=True, exist_ok=True)
+    atomic_text(shouko / "device_id.txt", device_id + "\n")
+    atomic_text(shouko / "device_group.txt", group + "\n")
     print("IDENTITY_BIND=OK")
 
 
@@ -641,11 +653,11 @@ def plan(old_id, new_id, new_group, host_hash):
         fail("invalid_clone_plan")
     entries, phase = source_snapshot()
     names = {entry[0] for entry in entries}
-    if names != {"setup-driver", "mprovision", "shouko"}:
+    if names not in ({"setup-driver", "mprovision", "shouko"}, {"setup-driver", "shouko"}):
         fail("clone_requires_all_identity_sources")
     if any(entry[3] != old_id for entry in entries):
         fail("clone_source_changed")
-    if phase != "complete":
+    if mprovision.exists() and phase != "complete":
         fail(f"unsafe_mprovision_phase:{phase or 'missing'}")
     agent_path = storage / "Download" / "Agent_Core.py"
     config_path = shouko / "agent_config.json"
@@ -805,36 +817,37 @@ def apply_identity():
             report.unlink()
         except FileNotFoundError:
             pass
-    new_mprovision = {
-        "version": provision_version,
-        "provision_ref": provision_ref,
-        "device_id": new_id,
-        "device_group": new_group,
-        "phase": "complete",
-        "run_id": f"clone-{data['created_at'].replace(':', '').replace('-', '')}-{new_id}",
-        "backup_before": "",
-        "backup_before_remote": "",
-        "backup_after": "",
-        "backup_after_remote": "",
-        "swift_install": "1",
-        "wizard_step": "",
-        "manual_pre_confirmed_at": "",
-        "manual_post_confirmed_at": "",
-        "completed_at": now,
-        "report_remote": "",
-        "report_json": "",
-        "report_text": "",
-        "publish_next_status": "",
-        "publish_next_started_at": "",
-        "publish_next_completed_at": "",
-        "publish_next_failed_step": "",
-        "publish_next_history_remote": "",
-        "publish_next_shouko_sha256": "",
-        "publish_next_delta_sha256": "",
-        "clone_source_device_id": data["source_id"],
-        "identity_migrated_at": now,
-    }
-    atomic_json(mprovision, new_mprovision)
+    if mprovision.exists():
+        new_mprovision = {
+            "version": provision_version,
+            "provision_ref": provision_ref,
+            "device_id": new_id,
+            "device_group": new_group,
+            "phase": "complete",
+            "run_id": f"clone-{data['created_at'].replace(':', '').replace('-', '')}-{new_id}",
+            "backup_before": "",
+            "backup_before_remote": "",
+            "backup_after": "",
+            "backup_after_remote": "",
+            "swift_install": "1",
+            "wizard_step": "",
+            "manual_pre_confirmed_at": "",
+            "manual_post_confirmed_at": "",
+            "completed_at": now,
+            "report_remote": "",
+            "report_json": "",
+            "report_text": "",
+            "publish_next_status": "",
+            "publish_next_started_at": "",
+            "publish_next_completed_at": "",
+            "publish_next_failed_step": "",
+            "publish_next_history_remote": "",
+            "publish_next_shouko_sha256": "",
+            "publish_next_delta_sha256": "",
+            "clone_source_device_id": data["source_id"],
+            "identity_migrated_at": now,
+        }
+        atomic_json(mprovision, new_mprovision)
     atomic_text(setup_dir / "device_id", new_id + "\n")
     atomic_text(setup_dir / "device_group", new_group + "\n")
     atomic_text(setup_dir / "host_fingerprint", data["host_fingerprint"] + "\n")
@@ -1041,85 +1054,45 @@ print(phase)
 PY
 }
 
-run_provision_once() {
-  local device_id="$1" group="$2" script phase
-  CURRENT_STEP="provision"
-  if [ -s "$MPROVISION_STATE" ]; then
-    phase="$(read_mprovision_phase "$device_id" "$group")" || die "mprovision state không khớp identity."
-    state_write provision_initialized yes
-    emit INFO "Resume mprovision phase=$phase; không chạy lại entrypoint/backup."
-    return 0
-  fi
-  if [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
-    state_write provision_initialized yes
-    emit OK "DRY-RUN: provision fresh sẽ chạy đúng một lần."
-    return 0
-  fi
-  [ "$(state_read provision_initialized)" != yes ] || die "Thiếu mprovision state sau lần khởi tạo trước."
-  script="$(download_provision)"
-  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" bash "$script" "$device_id" "$group" </dev/null ||
-    die "Provision không hoàn tất bước hiện tại."
-  [ -s "$MPROVISION_STATE" ] || die "Provision không tạo state."
-  read_mprovision_phase "$device_id" "$group" >/dev/null || die "State provision postcondition sai."
-  state_write provision_initialized yes
-}
-
-show_bootstrap_checkpoint() {
-  cat <<'CHECKPOINT'
-
-========== CHECKPOINT GIAO DIỆN BAN ĐẦU ==========
-[ ] Tắt Play Protect và cập nhật Google Play.
-[ ] Cài Termux:API và Termux:Boot từ F-Droid; mở Termux:Boot một lần.
-[ ] Developer Options: external storage, resize, 700dp, freeform, desktop mode.
-[ ] Cập nhật keyboard theo quy trình vận hành.
-Nhập “MỞ LẠI” hoặc “ĐÃ XONG”.
-==================================================
-CHECKPOINT
-}
-
 bootstrap_checkpoint() {
-  local action normalized
-  [ "$(state_read bootstrap_ui_done)" = yes ] && return 0
-  show_bootstrap_checkpoint
-  prompt_value CHECKPOINT "Lựa chọn: "
-  action="$PROMPT_RESULT"
-  normalized="$(printf '%s' "$action" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
-  case "$normalized" in
-    MỞLẠI|MOLAI)
-      command -v termux-open-url >/dev/null 2>&1 && {
-        termux-open-url "https://f-droid.org/packages/com.termux.api/" </dev/null >/dev/null 2>&1 || true
-        termux-open-url "https://f-droid.org/packages/com.termux.boot/" </dev/null >/dev/null 2>&1 || true
-      }
-      emit INFO "Checkpoint vẫn đang chờ."
-      exit 0
-      ;;
-    ĐÃXONG|DAXONG) state_write bootstrap_ui_done yes ;;
-    *) die "Chỉ chấp nhận MỞ LẠI hoặc ĐÃ XONG." ;;
-  esac
+  state_write bootstrap_ui_done yes
 }
 
-start_wizard() {
-  local device_id="$1" group="$2" phase wizard
-  CURRENT_STEP="wizard"
+run_aot_setup() {
+  local device_id="$1" group="$2" msetup_script
+  CURRENT_STEP="setup-aot"
   if [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
-    state_write wizard_started yes
-    return 0
-  fi
-  phase="$(read_mprovision_phase "$device_id" "$group")" || die "Không đọc được phase wizard."
-  if [ "$phase" = complete ]; then
+    state_write provision_initialized yes
     state_write setup_complete yes
-    emit OK "Identity hợp lệ; workflow complete, không replay provision/backup/restore."
+    emit OK "DRY-RUN: AOT setup hoàn tất."
     return 0
   fi
-  if command -v aotscript-wizard >/dev/null 2>&1; then
-    wizard="$(command -v aotscript-wizard)"
-  elif [ -x "$HOME/bin/aotscript-wizard" ]; then
-    wizard="$HOME/bin/aotscript-wizard"
+  if [ -n "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ] && [ -f "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ]; then
+    msetup_script="$AOTSCRIPT_SETUP_M166_SOURCE"
+    bash -n "$msetup_script" || die "setup-m166.sh tải về sai cú pháp."
   else
-    die "Thiếu aotscript-wizard."
+    msetup_script="$(mktemp "$SETUP_STATE_DIR/.setup-m166.XXXXXX")"
+    curl -fsSL --retry 3 --connect-timeout 15 \
+      "$RAW_BASE/setup-m166.sh?t=$(date +%s)" -o "$msetup_script" || {
+        rm -f "$msetup_script"
+        die "Không tải được setup-m166.sh."
+      }
+    [ -s "$msetup_script" ] || {
+      rm -f "$msetup_script"
+      die "setup-m166.sh tải về bị rỗng."
+    }
+    bash -n "$msetup_script" || {
+      rm -f "$msetup_script"
+      die "setup-m166.sh tải về sai cú pháp."
+    }
   fi
-  "$wizard" start </dev/null || die "Wizard chưa chạy được; xem wizard-supervisor.log."
-  state_write wizard_started yes
+  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" bash "$msetup_script" "$device_id" "$group" </dev/null || {
+    [ -n "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ] || rm -f "$msetup_script"
+    die "AOT msetup không hoàn tất."
+  }
+  [ -n "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ] || rm -f "$msetup_script"
+  state_write provision_initialized yes
+  state_write setup_complete yes
 }
 
 choose_identity() {
@@ -1239,9 +1212,21 @@ main() {
   state_write provision_ref "$PROVISION_REF"
   emit INFO "Identity hiện tại: $device_id / $group"
   bootstrap_checkpoint
-  run_provision_once "$device_id" "$group"
-  start_wizard "$device_id" "$group"
-  emit OK "Checkpoint hiện tại đã xử lý. Lần sau chỉ chạy aotsetup."
+  local is_complete=no
+  if [ "$(state_read setup_complete)" = yes ]; then
+    is_complete=yes
+  elif [ -s "$MPROVISION_STATE" ]; then
+    if [ "$(read_mprovision_phase "$device_id" "$group" 2>/dev/null || true)" = complete ]; then
+      is_complete=yes
+      state_write setup_complete yes
+    fi
+  fi
+  if [ "$is_complete" = yes ]; then
+    emit OK "Identity hợp lệ; workflow complete, không replay provision/backup/restore. Lần sau chỉ chạy aotsetup."
+    return 0
+  fi
+  run_aot_setup "$device_id" "$group"
+  emit OK "AOT setup hoàn tất. Lần sau chỉ chạy aotsetup."
 }
 
 main "$@"

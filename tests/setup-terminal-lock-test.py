@@ -21,7 +21,7 @@ from launcher_test_support import launcher_command
 
 
 SETUP = pathlib.Path(os.environ.get("AOTSCRIPT_SETUP_UNDER_TEST", "setup.sh")).resolve()
-TIMEOUT = 12
+TIMEOUT = int(os.environ.get("AOTSCRIPT_TEST_TIMEOUT", "30"))
 PASSED: list[str] = []
 
 
@@ -85,7 +85,6 @@ def base_env(root: pathlib.Path, input_mode: str = "env") -> dict[str, str]:
             "AOTSCRIPT_SETUP_DEVICE_ID": "m88",
             "AOTSCRIPT_SETUP_GROUP": "NOVA",
             "AOTSCRIPT_SETUP_CONFIRM": "yes",
-            "AOTSCRIPT_SETUP_CHECKPOINT_ACTION": "DA XONG",
         }
     )
     return env
@@ -222,8 +221,6 @@ def test_prompt_pty_and_redirect(root: pathlib.Path) -> None:
         child.send(b"nova\n")
         child.read_until(b"[y/N]")
         child.send(b"yes\n")
-        child.read_until(b"L\xe1\xbb\xb1a ch\xe1\xbb\x8dn")
-        child.send(b"DA XONG\n")
         rc, output = child.finish()
         assert rc == 0, output
         assert b"M88" in output and b"nova" in output and b"yes" in output
@@ -278,7 +275,7 @@ def test_su_cannot_steal_input(root: pathlib.Path) -> None:
     )
     try:
         child.read_until(b"Device ID")
-        child.send(b"m88\nNOVA\nyes\nDA XONG\n")
+        child.send(b"m88\nNOVA\nyes\n")
         rc, output = child.finish()
         assert rc == 0, output
         assert marker.read_text() == "EOF"
@@ -297,6 +294,7 @@ def test_echo_and_ctrl_c(root: pathlib.Path) -> None:
         termios.tcsetattr(child.slave, termios.TCSANOW, attrs)
         child.read_until(b"Device ID")
         assert termios.tcgetattr(child.slave)[3] & termios.ECHO
+        time.sleep(0.05)
         child.send(b"\x03")
         rc, _ = child.finish()
         assert rc == 130

@@ -72,3 +72,16 @@ tests:
         value: 'MARK_STALE'
       - type: icontains
         value: 'REQUIRE_FRESH_EVIDENCE'
+
+  - description: 'H: headless aotsetup / remove manual checkpoint routing'
+    vars:
+      input: 'Remove manual checkpoint ĐÃ XONG from aotsetup for headless fresh device setup'
+    assert:
+      - type: icontains
+        value: 'HEADLESS_SETUP=YES'
+      - type: not-icontains
+        value: 'USE_SPECKIT'
+      - type: icontains
+        value: 'DIRECT_TDD'
+      - type: icontains
+        value: 'NO_MANUAL_CHECKPOINT'

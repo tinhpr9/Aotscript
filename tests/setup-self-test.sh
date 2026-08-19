@@ -166,14 +166,12 @@ run_clean_launcher "$fresh" fresh-host "$fresh_launcher" \
   AOTSCRIPT_SETUP_DEVICE_ID=m88 \
   AOTSCRIPT_SETUP_GROUP=NOVA \
   AOTSCRIPT_SETUP_CONFIRM=yes \
-  AOTSCRIPT_SETUP_CHECKPOINT_ACTION='DA XONG' \
   -- > "$TMP/fresh.out"
 [ -d "$TMP" ] || fail clean-env-temp-removed-before-completion
 [ -x "$fresh_launcher" ] || fail clean-env-launcher-missing-after-run
 rm -f "$bootstrap"
 run_clean_launcher "$fresh" fresh-host "$fresh_launcher" \
   AOTSCRIPT_SETUP_DRY_RUN=1 \
-  AOTSCRIPT_SETUP_CHECKPOINT_ACTION='DA XONG' \
   -- > "$TMP/local-resume.out"
 grep -Fq 'Lần sau chỉ chạy aotsetup' "$TMP/local-resume.out" || fail local-launcher-resume
 
