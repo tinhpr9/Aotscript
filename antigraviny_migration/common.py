@@ -9,6 +9,7 @@ import hashlib
 import json
 import stat
 import shutil
+import tempfile
 import platform
 import subprocess
 from datetime import datetime, timezone
@@ -311,3 +312,244 @@ class MigrationManifest:
             credentials_status=data.get("credentials_status", []),
             files=file_entries,
         )
+
+
+# =====================================================================
+# Antigraviny Core Lock & Materialization Contract
+# =====================================================================
+
+class CoreLockError(Exception):
+    """Raised when ANTIGRAVINY_CORE.lock is missing or invalid."""
+    pass
+
+
+class CoreMaterializeError(Exception):
+    """Raised when core fetching, verification, or materialization fails."""
+    pass
+
+
+def load_core_lock(repo_root: Optional[str] = None) -> Dict[str, Any]:
+    """Load and validate ANTIGRAVINY_CORE.lock from repository root."""
+    if not repo_root:
+        env = detect_environment()
+        repo_root = env.get("repo_dir") or os.getcwd()
+
+    lock_file = os.path.join(repo_root, "ANTIGRAVINY_CORE.lock")
+    if not os.path.isfile(lock_file):
+        raise CoreLockError(f"Missing ANTIGRAVINY_CORE.lock in {repo_root}")
+
+    try:
+        with open(lock_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        raise CoreLockError(f"Invalid JSON in {lock_file}: {e}")
+
+    for req_field in ["core_repo", "core_sha", "core_version", "compatibility_schema"]:
+        if req_field not in data or not data[req_field]:
+            raise CoreLockError(f"ANTIGRAVINY_CORE.lock missing required field '{req_field}'")
+
+    if data.get("compatibility_schema") != "antigraviny-core/v1":
+        raise CoreLockError(
+            f"Unsupported compatibility schema: {data.get('compatibility_schema')} (expected 'antigraviny-core/v1')"
+        )
+
+    return data
+
+
+def check_gh_auth(repo_url: Optional[str] = None) -> bool:
+    """Preflight check to verify GitHub CLI / git auth status for private repos."""
+    try:
+        res = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=5)
+        return res.returncode == 0
+    except Exception:
+        # Fallback to checking if git can access without prompting
+        return False
+
+
+def fetch_and_verify_core(
+    core_repo_url: str,
+    target_sha: str,
+    dest_dir: Optional[str] = None,
+    auth_check: bool = True,
+    _simulate_unauthenticated: bool = False,
+) -> str:
+    """
+    Fetch exact commit SHA from core repo and verify SHA immutability.
+    Returns path to local verified core directory.
+    """
+    if auth_check and (_simulate_unauthenticated or not check_gh_auth(core_repo_url)):
+        # Check if local directory exists already
+        if not (dest_dir and os.path.exists(dest_dir)):
+            raise CoreMaterializeError(
+                "BLOCKED_AUTH: GitHub CLI / git authentication not available for private core repository"
+            )
+
+    target_dir = dest_dir or tempfile.mkdtemp(prefix="agy_core_fetch_")
+    
+    if not os.path.exists(os.path.join(target_dir, ".git")):
+        os.makedirs(target_dir, exist_ok=True)
+        try:
+            subprocess.run(["git", "clone", core_repo_url, target_dir], check=True, capture_output=True, text=True, timeout=120)
+        except Exception as e:
+            raise CoreMaterializeError(f"Failed to clone core repository from {core_repo_url}: {e}")
+
+    # Checkout exact SHA
+    try:
+        subprocess.run(["git", "-C", target_dir, "fetch", "origin"], capture_output=True, text=True, timeout=60)
+        res = subprocess.run(["git", "-C", target_dir, "checkout", target_sha], capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            raise CoreMaterializeError(f"Failed to checkout exact SHA {target_sha} in core repo: {res.stderr}")
+    except Exception as e:
+        if isinstance(e, CoreMaterializeError):
+            raise
+        raise CoreMaterializeError(f"Git checkout error for {target_sha}: {e}")
+
+    # Verify verified SHA
+    try:
+        h = subprocess.run(["git", "-C", target_dir, "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
+        current_sha = h.stdout.strip()
+        if current_sha.lower() != target_sha.lower():
+            raise CoreMaterializeError(
+                f"Core SHA mismatch: expected {target_sha}, got {current_sha}"
+            )
+    except Exception as e:
+        if isinstance(e, CoreMaterializeError):
+            raise
+        raise CoreMaterializeError(f"Failed to verify HEAD SHA: {e}")
+
+    return target_dir
+
+
+def materialize_core_into_repo(
+    repo_root: str,
+    core_path_or_url: Optional[str] = None,
+    lock_data: Optional[Dict[str, Any]] = None,
+    overlay_dir: Optional[str] = None,
+    dry_run: bool = False,
+    _inject_failure: bool = False,
+) -> Dict[str, Any]:
+    """
+    Materialize pinned Antigraviny core into repo_root/.agents/ with atomic rollback.
+    """
+    lock = lock_data or load_core_lock(repo_root)
+    target_sha = lock["core_sha"]
+    core_repo_url = core_path_or_url or lock["core_repo"]
+
+    # 1. Resolve core directory
+    temp_clone_dir = None
+    if os.path.isdir(core_repo_url) and os.path.exists(os.path.join(core_repo_url, "capabilities.json")):
+        core_dir = core_repo_url
+    else:
+        temp_clone_dir = tempfile.mkdtemp(prefix="agy_core_mat_")
+        core_dir = fetch_and_verify_core(core_repo_url, target_sha, dest_dir=temp_clone_dir)
+
+    try:
+        # Check compatibility file in core
+        compat_file = os.path.join(core_dir, "compatibility.json")
+        if not os.path.isfile(compat_file):
+            raise CoreMaterializeError(f"Core directory missing compatibility.json: {core_dir}")
+        with open(compat_file, "r", encoding="utf-8") as f:
+            compat_data = json.load(f)
+        if compat_data.get("schema_version") != lock.get("compatibility_schema"):
+            raise CoreMaterializeError(
+                f"Compatibility mismatch: lock specifies '{lock.get('compatibility_schema')}', core provides '{compat_data.get('schema_version')}'"
+            )
+
+        # 2. Stage destination .agents directory
+        target_agents_dir = os.path.join(repo_root, ".agents")
+        stage_dir = tempfile.mkdtemp(prefix="agy_agents_stage_")
+        backup_dir = tempfile.mkdtemp(prefix="agy_agents_backup_")
+        target_existed = os.path.exists(target_agents_dir)
+
+        # Track previous good sha
+        prev_good_sha = None
+        if target_existed:
+            prev_state_file = os.path.join(target_agents_dir, "ecc-install-state.json")
+            if os.path.isfile(prev_state_file):
+                try:
+                    with open(prev_state_file, "r", encoding="utf-8") as psf:
+                        prev_state = json.load(psf)
+                        prev_good_sha = prev_state.get("core_sha")
+                except Exception:
+                    pass
+
+        try:
+            if target_existed:
+                shutil.rmtree(backup_dir, ignore_errors=True)
+                shutil.copytree(target_agents_dir, backup_dir)
+
+            # Copy generic capabilities from core
+            for sub in ["agents", "workflows", "rules", "skills"]:
+                src_sub = os.path.join(core_dir, sub)
+                dst_sub = os.path.join(stage_dir, sub)
+                if os.path.exists(src_sub):
+                    shutil.copytree(src_sub, dst_sub)
+
+            # Apply overlay if provided or exists in repo (.agents-overlay)
+            active_overlay = overlay_dir or os.path.join(repo_root, ".agents-overlay")
+            if os.path.exists(active_overlay) and os.path.isdir(active_overlay):
+                for root, _, files in os.walk(active_overlay):
+                    rel = os.path.relpath(root, active_overlay)
+                    dst_folder = os.path.join(stage_dir, rel) if rel != "." else stage_dir
+                    os.makedirs(dst_folder, exist_ok=True)
+                    for f in files:
+                        shutil.copy2(os.path.join(root, f), os.path.join(dst_folder, f))
+
+            # Record install state with sha and previous good sha
+            cap_file = os.path.join(core_dir, "capabilities.json")
+            cap_count = 0
+            if os.path.isfile(cap_file):
+                try:
+                    with open(cap_file, "r", encoding="utf-8") as cf:
+                        cap_count = json.load(cf).get("count", 0)
+                except Exception:
+                    pass
+
+            install_state = {
+                "installed": True,
+                "core_repo": lock["core_repo"],
+                "core_version": lock.get("core_version", "1.0.0"),
+                "core_sha": target_sha,
+                "previous_good_core_sha": prev_good_sha or target_sha,
+                "compatibility_schema": lock["compatibility_schema"],
+                "materialized_at": datetime.now(timezone.utc).isoformat(),
+                "capabilities_count": cap_count,
+            }
+            with open(os.path.join(stage_dir, "ecc-install-state.json"), "w", encoding="utf-8") as sf:
+                json.dump(install_state, sf, indent=2)
+
+            if _inject_failure:
+                raise CoreMaterializeError("Injected failure for rollback testing")
+
+            if not dry_run:
+                if os.path.exists(target_agents_dir):
+                    shutil.rmtree(target_agents_dir)
+                os.makedirs(os.path.dirname(os.path.abspath(target_agents_dir)), exist_ok=True)
+                shutil.copytree(stage_dir, target_agents_dir)
+
+            return {
+                "success": True,
+                "core_sha": target_sha,
+                "previous_good_core_sha": prev_good_sha,
+                "capabilities_count": cap_count,
+                "install_state": install_state,
+            }
+
+        except Exception as e:
+            # Atomic rollback
+            if target_existed and os.path.exists(backup_dir):
+                shutil.rmtree(target_agents_dir, ignore_errors=True)
+                shutil.copytree(backup_dir, target_agents_dir)
+            elif not target_existed and os.path.exists(target_agents_dir):
+                shutil.rmtree(target_agents_dir, ignore_errors=True)
+            if isinstance(e, CoreMaterializeError):
+                raise
+            raise CoreMaterializeError(f"Materialization failed: {e}")
+
+        finally:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+    finally:
+        if temp_clone_dir:
+            shutil.rmtree(temp_clone_dir, ignore_errors=True)

@@ -1,7 +1,7 @@
 """
 Bootstrap Engine for Antigraviny/Agy Migration System.
 Prepares target machine environment (Termux, proot-distro Debian 12, dependencies,
-runtime tools, repository clone) in an idempotent, non-destructive manner.
+runtime tools, repository clone, and core materialization) in an idempotent, non-destructive manner.
 """
 
 import os
@@ -11,7 +11,13 @@ import platform
 import subprocess
 from typing import Dict, List, Any, Optional
 
-from antigraviny_migration.common import detect_environment
+from antigraviny_migration.common import (
+    detect_environment,
+    load_core_lock,
+    materialize_core_into_repo,
+    CoreLockError,
+    CoreMaterializeError,
+)
 
 
 class AgyBootstrapEngine:
@@ -25,6 +31,7 @@ class AgyBootstrapEngine:
         target_root: Optional[str] = None,
         repo_url: Optional[str] = None,
         branch: Optional[str] = None,
+        core_source: Optional[str] = None,
         skip_pkg_install: bool = False,
         dry_run: bool = False,
         quiet: bool = False,
@@ -32,6 +39,7 @@ class AgyBootstrapEngine:
         self.target_root = target_root
         self.repo_url = repo_url or self.DEFAULT_REPO_URL
         self.branch = branch or self.DEFAULT_BRANCH
+        self.core_source = core_source
         self.skip_pkg_install = skip_pkg_install
         self.dry_run = dry_run
         self.quiet = quiet
@@ -91,7 +99,6 @@ class AgyBootstrapEngine:
         # 3. Termux Host Setup (if running in real Termux and not skipped/mocked)
         if not self.target_root and self.env_info.get("is_termux") and not self.skip_pkg_install:
             self.log("Detected Termux host environment. Checking base packages...")
-            # Check pkg or apt
             pkg_cmd = shutil.which("pkg") or shutil.which("apt")
             if pkg_cmd:
                 needed_pkgs = ["proot-distro", "tmux", "termux-api", "git", "python", "nodejs", "rclone", "ripgrep", "curl", "tar", "gzip", "jq"]
@@ -122,7 +129,6 @@ class AgyBootstrapEngine:
                     steps_executed.append("repo:cloned")
                 except Exception as e:
                     self.log(f"Failed to clone repo from {self.repo_url}: {e}")
-                    # Create placeholder repo directory if clone fails in offline test
                     os.makedirs(os.path.join(target_repo_dir, ".agents"), exist_ok=True)
                     steps_executed.append("repo:placeholder_created")
             else:
@@ -130,6 +136,21 @@ class AgyBootstrapEngine:
         else:
             self.log(f"Repository already exists at {target_repo_dir}.")
             steps_executed.append("repo:already_exists")
+
+        # 5. Core Materialization from ANTIGRAVINY_CORE.lock
+        lock_file = os.path.join(target_repo_dir, "ANTIGRAVINY_CORE.lock")
+        if os.path.isfile(lock_file) and not self.dry_run:
+            try:
+                self.log("Found ANTIGRAVINY_CORE.lock. Materializing pinned core capabilities...")
+                mat_res = materialize_core_into_repo(
+                    repo_root=target_repo_dir,
+                    core_path_or_url=self.core_source,
+                )
+                self.log(f"Core materialized successfully (SHA={mat_res.get('core_sha')[:8]}..., capabilities={mat_res.get('capabilities_count')}).")
+                steps_executed.append("core:materialized")
+            except Exception as e:
+                self.log(f"Warning during core materialization: {e}")
+                steps_executed.append(f"core:materialize_error: {e}")
 
         self.log("Bootstrap completed successfully.")
         return {
