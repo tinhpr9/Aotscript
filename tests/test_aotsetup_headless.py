@@ -100,18 +100,32 @@ class TestAotsetupHeadless(unittest.TestCase):
         data = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertTrue(data.get("enabled"))
 
-    # 4. Agent start đúng 1 process (verified in test mode via state tracking)
+    # 4. Agent start đúng 1 process (observable child process invocation)
     def test_04_agent_started_single_process(self):
+        agent_log = self.root / "agent_invocations.log"
+        mock_msetup = self.root / "mock_msetup_agent.sh"
+        mock_msetup.write_text(
+            f"#!/usr/bin/env bash\n"
+            f"echo \"AGENT_STARTED pid=$$ time=$(date +%s)\" >> '{agent_log}'\n"
+            f"exit 0\n",
+            encoding="utf-8",
+        )
+        mock_msetup.chmod(0o755)
+
         env = self._base_env(
-            AOTSCRIPT_SETUP_DRY_RUN="1",
             AOTSCRIPT_SETUP_DEVICE_ID="m88",
             AOTSCRIPT_SETUP_GROUP="NOVA",
             AOTSCRIPT_SETUP_CONFIRM="yes",
+            AOTSCRIPT_SETUP_M166_SOURCE=str(mock_msetup),
         )
         res = self._run_setup(env)
-        self.assertEqual(res.returncode, 0)
-        setup_driver = self.state / "aotscript" / "setup-driver"
-        self.assertEqual((setup_driver / "setup_complete").read_text().strip(), "yes")
+        self.assertEqual(res.returncode, 0, f"Setup failed: {res.stderr}\n{res.stdout}")
+
+        # Verify observable agent startup from log
+        self.assertTrue(agent_log.is_file(), "Agent invocation log must exist")
+        lines = agent_log.read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(lines), 1, f"Expected exactly 1 agent process started, got {len(lines)}: {lines}")
+        self.assertIn("AGENT_STARTED", lines[0])
 
     # 5. AOT registration configured
     def test_05_aot_registration_configured(self):
