@@ -1040,20 +1040,74 @@ async function handleAotRegistration(request, env, operation) {
   if (parsed.error) {
     return noStoreJson({ ok: false, error: parsed.error }, 400);
   }
-  const deviceId = normalizeDeviceId(parsed.value.device_id || parsed.value.new_device_id);
-  if (!deviceId) {
-    return noStoreJson({ ok: false, error: "invalid_device_id" }, 400);
+  const rawBody = parsed.value;
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+    return noStoreJson({ ok: false, error: "invalid_registration_request" }, 400);
   }
-  if (await isDeviceRevoked(deviceId, env)) {
-    return noStoreJson({ ok: false, error: "device_revoked" }, 410);
+  // Reject forbidden legacy identity fields fail-closed
+  const forbiddenKeys = ["role", "session_id", "reference_device_id"];
+  for (const forbidden of forbiddenKeys) {
+    if (Object.prototype.hasOwnProperty.call(rawBody, forbidden)) {
+      return noStoreJson({ ok: false, error: "forbidden_registration_field" }, 400);
+    }
   }
-  const allowed = new Set(["discover", "reset", "verify"]);
-  if (!allowed.has(operation)) {
+
+  let canonicalBody;
+  if (operation === "discover") {
+    if (!rawBody.device_id) {
+      return noStoreJson({ ok: false, error: "invalid_device_id" }, 400);
+    }
+    const deviceId = normalizeDeviceId(rawBody.device_id);
+    if (!deviceId) {
+      return noStoreJson({ ok: false, error: "invalid_device_id" }, 400);
+    }
+    let previousDeviceId = null;
+    if (rawBody.previous_device_id !== undefined && rawBody.previous_device_id !== null && rawBody.previous_device_id !== "") {
+      previousDeviceId = normalizeDeviceId(rawBody.previous_device_id);
+      if (!previousDeviceId) {
+        return noStoreJson({ ok: false, error: "invalid_device_id" }, 400);
+      }
+    }
+    if (await isDeviceRevoked(deviceId, env)) {
+      return noStoreJson({ ok: false, error: "device_revoked" }, 410);
+    }
+    canonicalBody = {
+      device_id: deviceId,
+      previous_device_id: previousDeviceId,
+      device_group: rawBody.device_group ? String(rawBody.device_group).toUpperCase() : "",
+    };
+  } else if (operation === "verify") {
+    if (!rawBody.device_id) {
+      return noStoreJson({ ok: false, error: "invalid_device_id" }, 400);
+    }
+    const deviceId = normalizeDeviceId(rawBody.device_id);
+    if (!deviceId) {
+      return noStoreJson({ ok: false, error: "invalid_device_id" }, 400);
+    }
+    if (await isDeviceRevoked(deviceId, env)) {
+      return noStoreJson({ ok: false, error: "device_revoked" }, 410);
+    }
+    canonicalBody = { device_id: deviceId };
+  } else if (operation === "reset") {
+    if (!rawBody.old_device_id || !rawBody.new_device_id) {
+      return noStoreJson({ ok: false, error: "invalid_identity_reset" }, 400);
+    }
+    const oldDeviceId = normalizeDeviceId(rawBody.old_device_id);
+    const newDeviceId = normalizeDeviceId(rawBody.new_device_id);
+    if (!oldDeviceId || !newDeviceId || oldDeviceId === newDeviceId) {
+      return noStoreJson({ ok: false, error: "invalid_identity_reset" }, 400);
+    }
+    if (await isDeviceRevoked(oldDeviceId, env) || await isDeviceRevoked(newDeviceId, env)) {
+      return noStoreJson({ ok: false, error: "device_revoked" }, 410);
+    }
+    canonicalBody = { old_device_id: oldDeviceId, new_device_id: newDeviceId };
+  } else {
     return noStoreJson({ ok: false, error: "invalid_registration_operation" }, 400);
   }
+
   const result = await fleetStateCall(env, `/aot/registration/${operation}`, {
     method: "POST",
-    body: parsed.value,
+    body: canonicalBody,
   });
   return noStoreJson(result.data, result.response.status);
 }

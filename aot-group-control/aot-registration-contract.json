@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AotRegistrationContract",
+  "description": "Canonical machine-checkable contract for AOT Fleet registration endpoints",
+  "$id": "https://aotscript.internal/schemas/aot-registration-contract.json",
+  "type": "object",
+  "required": [
+    "identity_model",
+    "forbidden_fields",
+    "operations"
+  ],
+  "properties": {
+    "identity_model": {
+      "type": "string",
+      "const": "device_id_only"
+    },
+    "forbidden_fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "operations": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "DeviceId": {
+      "type": "string",
+      "pattern": "^m[1-9][0-9]{0,5}$"
+    },
+    "DiscoverRequest": {
+      "type": "object",
+      "required": [
+        "device_id"
+      ],
+      "properties": {
+        "device_id": {
+          "$ref": "#/$defs/DeviceId"
+        },
+        "previous_device_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^m[1-9][0-9]{0,5}$"
+        },
+        "device_group": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DiscoverResponseSuccess": {
+      "type": "object",
+      "required": [
+        "ok",
+        "device_id"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "device_id": {
+          "$ref": "#/$defs/DeviceId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VerifyRequest": {
+      "type": "object",
+      "required": [
+        "device_id"
+      ],
+      "properties": {
+        "device_id": {
+          "$ref": "#/$defs/DeviceId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VerifyResponseSuccess": {
+      "type": "object",
+      "required": [
+        "ok",
+        "device_id",
+        "online",
+        "visible_in_hub"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "device_id": {
+          "$ref": "#/$defs/DeviceId"
+        },
+        "online": {
+          "type": "boolean",
+          "const": true
+        },
+        "visible_in_hub": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResetRequest": {
+      "type": "object",
+      "required": [
+        "old_device_id",
+        "new_device_id"
+      ],
+      "properties": {
+        "old_device_id": {
+          "$ref": "#/$defs/DeviceId"
+        },
+        "new_device_id": {
+          "$ref": "#/$defs/DeviceId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResetResponseSuccess": {
+      "type": "object",
+      "required": [
+        "ok",
+        "old_device_id",
+        "new_device_id"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "old_device_id": {
+          "$ref": "#/$defs/DeviceId"
+        },
+        "new_device_id": {
+          "$ref": "#/$defs/DeviceId"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "forbidden_fields": [
+    "role",
+    "session_id",
+    "reference_device_id"
+  ],
+  "operations": {
+    "discover": {
+      "path": "/aot/control/registration/discover",
+      "method": "POST",
+      "request_schema": "#/$defs/DiscoverRequest",
+      "response_schema": "#/$defs/DiscoverResponseSuccess"
+    },
+    "verify": {
+      "path": "/aot/control/registration/verify",
+      "method": "POST",
+      "request_schema": "#/$defs/VerifyRequest",
+      "response_schema": "#/$defs/VerifyResponseSuccess"
+    },
+    "reset": {
+      "path": "/aot/control/registration/reset",
+      "method": "POST",
+      "request_schema": "#/$defs/ResetRequest",
+      "response_schema": "#/$defs/ResetResponseSuccess"
+    }
+  },
+  "identity_model": "device_id_only"
+}

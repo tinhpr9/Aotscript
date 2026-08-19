@@ -83,7 +83,7 @@ def post_json(origin: str, secret: str, operation: str, body: dict[str, Any]) ->
 
 
 def assignment_config(device_id: str, response: dict[str, Any]) -> dict[str, Any]:
-    if normalize_device_id(response.get("device_id")) != device_id:
+    if not isinstance(response, dict) or normalize_device_id(response.get("device_id")) != device_id:
         raise RegistrationError("registration_assignment_invalid")
     return {
         "version": CONFIG_VERSION,
