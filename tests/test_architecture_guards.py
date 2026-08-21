@@ -60,16 +60,19 @@ def extract_python_imports(source_code: str, filename: str = "<string>") -> List
 
 
 def extract_js_imports(source_code: str, filename: str = "<string>") -> List[Tuple[str, int]]:
+    # Remove block comments
     cleaned = re.sub(r"/\*[\s\S]*?\*/", "", source_code)
+    # Remove line comments
     cleaned = re.sub(r"//.*$", "", cleaned, flags=re.MULTILINE)
 
     imports: List[Tuple[str, int]] = []
-    pattern = r"""(?:import\s+(?:[\w\s{},*]+from\s+)?|require\s*\(\s*)["']([^"']+)["']"""
-    import_regex = re.compile(pattern)
-    for lineno, line in enumerate(cleaned.splitlines(), start=1):
-        for match in import_regex.finditer(line):
-            target = match.group(1)
-            imports.append((target, lineno))
+    # Match ES imports (single or multiline) and CommonJS require calls across the entire file
+    pattern = r"""(?:import\s+(?:(?:[\w\s{},*]+|\{[^}]*\})\s+from\s+)?|require\s*\(\s*)["']([^"']+)["']"""
+    import_regex = re.compile(pattern, flags=re.DOTALL)
+    for match in import_regex.finditer(cleaned):
+        target = match.group(1)
+        lineno = cleaned[:match.start()].count("\n") + 1
+        imports.append((target, lineno))
     return imports
 
 
@@ -194,9 +197,10 @@ class TestJavaScriptArchitectureGuards(unittest.TestCase):
 
         imports = extract_js_imports(source, filename="fleet-state.js")
         for target, lineno in imports:
+            norm_target = pathlib.Path(target).name
             self.assertNotIn(
-                "worker",
-                target.lower(),
+                norm_target,
+                {"worker.js", "worker"},
                 f"fleet-state.js:{lineno} forbidden reverse import of {target!r}"
             )
 
@@ -207,8 +211,9 @@ class TestJavaScriptArchitectureGuards(unittest.TestCase):
         source = rollout_path.read_text(encoding="utf-8")
         imports = extract_js_imports(source, filename="rollout.js")
         for target, lineno in imports:
-            self.assertNotIn("worker", target.lower(), f"rollout.js:{lineno} imports worker")
-            self.assertNotIn("fleet-state", target.lower(), f"rollout.js:{lineno} imports fleet-state")
+            norm_target = pathlib.Path(target).name
+            self.assertNotIn(norm_target, {"worker.js", "worker"}, f"rollout.js:{lineno} imports worker")
+            self.assertNotIn(norm_target, {"fleet-state.js", "fleet-state"}, f"rollout.js:{lineno} imports fleet-state")
 
     def test_js_modules_have_no_circular_dependencies(self) -> None:
         js_files = {"worker.js", "fleet-state.js", "rollout.js"}
@@ -291,18 +296,32 @@ class TestAdversarialArchitectureGuards(unittest.TestCase):
         violations = check_boundary_rules(valid_relay_code, {"forbidden_foreign_module"}, filename="relay.py")
         self.assertEqual(violations, [])
 
-    def test_adversarial_js_comment_immunity(self) -> None:
-        clean_js = (
-            "// import { handleRequest } from './worker.js';\n"
-            "/*\n"
-            " * import { FleetState } from './worker.js';\n"
-            " */\n"
-            "import { DurableObject } from 'cloudflare:workers';\n"
+    def test_adversarial_js_multiline_import_parsing(self) -> None:
+        multiline_js = (
+            "import {\n"
+            "  DurableObject,\n"
+            "  WorkerEntrypoint,\n"
+            "} from 'cloudflare:workers';\n"
+            "import {\n"
+            "  calculateRolloutGroup\n"
+            "} from './rollout.js';\n"
         )
-        imports = extract_js_imports(clean_js, "fleet-state.js")
+        imports = extract_js_imports(multiline_js, "worker.js")
         targets = [t for t, _ in imports]
-        self.assertNotIn("./worker.js", targets)
         self.assertIn("cloudflare:workers", targets)
+        self.assertIn("./rollout.js", targets)
+        # Line number of second import is at line 5
+        rollout_entry = next((item for item in imports if item[0] == "./rollout.js"), None)
+        self.assertIsNotNone(rollout_entry)
+        self.assertEqual(rollout_entry[1], 5)
+
+    def test_adversarial_js_exact_name_matching_vs_cloudflare_workers(self) -> None:
+        # cloudflare:workers contains substring "worker" but must NOT trigger false positive
+        valid_fleet_js = "import { DurableObject } from 'cloudflare:workers';\n"
+        imports = extract_js_imports(valid_fleet_js, "fleet-state.js")
+        for target, lineno in imports:
+            norm = pathlib.Path(target).name
+            self.assertNotIn(norm, {"worker.js", "worker"})
 
 
 if __name__ == "__main__":
