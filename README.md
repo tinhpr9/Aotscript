@@ -157,6 +157,9 @@ Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo v
 - **Milestone M1**: Architecture Visibility & Enforceable Layer Boundary Guards (`tests/test_architecture_guards.py`).
   - Python: `controller.py` & `runtime.py` là leaf execution/state boundaries; `updater.py` một chiều; không có circular dependency.
   - JavaScript: `rollout.js` độc lập; `fleet-state.js` không import ngược `worker.js`; đồ thị DAG không chu trình.
+- **Milestone M2**: Targeted Mutation Testing & Test-Strength Hardening (`tests/test_mutation_hardening.py`).
+  - Phân Server: Kiểm thử bảo mật URL (host whitelist, hex link code), thứ tự package, allocation bounds (1..10), rollback khi launch lỗi.
+  - Architecture Guards: Kiểm thử mutation sensitivity của AST boundary guards đối với static/dynamic imports.
 
 ## CURRENT CHECKPOINTS
 | Project | Last known milestone | Status | Next step | Relevant PR |
@@ -164,7 +167,8 @@ Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo v
 | PROJECT 1 (OmniControl) | Remove dead Python omnicontrol | Merged | Discord frontend/control surface (reuse core) | #45 |
 | PROJECT 2 (Phân Server) | Batch PHÂN SERVER 2PC & Telegram flow | Merged | Hoàn tất tích hợp & selftest | #46, #49, #51, #61, #64, #67, #68, #73 |
 | PROJECT 4 (Swift Backup) | BACKUP_RESTORE_DATA state machine | Open | Review & Merge PR #42 | #42 |
-| PROJECT 8 (Maintainability) | M1: Architecture Visibility & Layer Boundary Guards | In Progress | Enforce layer boundaries with AST test suite | maint/architecture-guards-m1 |
+| PROJECT 8 (Maintainability) | M1: Architecture Visibility & Layer Boundary Guards | Merged | M2: Targeted Mutation Testing | #74 |
+| PROJECT 8 (Maintainability) | M2: Targeted Mutation Testing & Test Hardening | In Progress | Mutation test verification & PR | maint/targeted-mutation-testing-m2 |
 
 ## FILE OWNERSHIP / ROUTING
 | Path | Project | Purpose | Read when... |
