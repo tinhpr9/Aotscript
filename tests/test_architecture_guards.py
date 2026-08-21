@@ -60,18 +60,18 @@ def extract_python_imports(source_code: str, filename: str = "<string>") -> List
 
 
 def extract_js_imports(source_code: str, filename: str = "<string>") -> List[Tuple[str, int]]:
-    # Remove block comments
-    cleaned = re.sub(r"/\*[\s\S]*?\*/", "", source_code)
-    # Remove line comments
-    cleaned = re.sub(r"//.*$", "", cleaned, flags=re.MULTILINE)
+    # Replace block comments with exact equivalent newline counts to preserve line numbering
+    cleaned = re.sub(r"/\*[\s\S]*?\*/", lambda m: "\n" * m.group(0).count("\n"), source_code)
+    # Remove single line comments
+    cleaned = re.sub(r"//[^\n]*", "", cleaned)
 
     imports: List[Tuple[str, int]] = []
-    # Match ES imports (single or multiline) and CommonJS require calls across the entire file
-    pattern = r"""(?:import\s+(?:(?:[\w\s{},*]+|\{[^}]*\})\s+from\s+)?|require\s*\(\s*)["']([^"']+)["']"""
+    # Match ES imports (single or multiline), side-effect imports, export from, dynamic imports and CommonJS require
+    pattern = r"""(?:\bimport\s+(?:(?:[\w\s{},*]+|\{[^}]*\})\s+from\s+)?|\bexport\s+(?:(?:[\w\s{},*]+|\{[^}]*\})\s+from\s+)|\brequire\s*\(\s*|\bimport\s*\(\s*)["']([^"']+)["']"""
     import_regex = re.compile(pattern, flags=re.DOTALL)
     for match in import_regex.finditer(cleaned):
         target = match.group(1)
-        lineno = cleaned[:match.start()].count("\n") + 1
+        lineno = 1 + cleaned.count("\n", 0, match.start())
         imports.append((target, lineno))
     return imports
 
@@ -310,18 +310,30 @@ class TestAdversarialArchitectureGuards(unittest.TestCase):
         targets = [t for t, _ in imports]
         self.assertIn("cloudflare:workers", targets)
         self.assertIn("./rollout.js", targets)
-        # Line number of second import is at line 5
         rollout_entry = next((item for item in imports if item[0] == "./rollout.js"), None)
         self.assertIsNotNone(rollout_entry)
         self.assertEqual(rollout_entry[1], 5)
 
     def test_adversarial_js_exact_name_matching_vs_cloudflare_workers(self) -> None:
-        # cloudflare:workers contains substring "worker" but must NOT trigger false positive
         valid_fleet_js = "import { DurableObject } from 'cloudflare:workers';\n"
         imports = extract_js_imports(valid_fleet_js, "fleet-state.js")
         for target, lineno in imports:
             norm = pathlib.Path(target).name
             self.assertNotIn(norm, {"worker.js", "worker"})
+
+    def test_adversarial_js_block_comment_line_number_preservation(self) -> None:
+        code_with_block_comment = (
+            "/*\n"
+            " * Multi-line banner\n"
+            " * line 3\n"
+            " * line 4\n"
+            " */\n"
+            "import { FleetState } from './fleet-state.js';\n"
+        )
+        imports = extract_js_imports(code_with_block_comment, "test.js")
+        self.assertEqual(len(imports), 1)
+        self.assertEqual(imports[0][0], "./fleet-state.js")
+        self.assertEqual(imports[0][1], 6, f"Expected line 6, got line {imports[0][1]}")
 
 
 if __name__ == "__main__":
