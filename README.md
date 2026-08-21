@@ -165,6 +165,8 @@ Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo v
   - Conformance runners: `cloudflare-worker/contract-conformance-selftest.mjs` & `tests/test_contract_conformance.py`.
 - **Milestone M4**: Dead Weight / Legacy Cleanup.
   - Loại bỏ các file rác, file log CI cũ, script vá một lần và artifact zip PR lịch sử không còn consumer (`changed_files.txt`, `checks.txt`, `workflow_log.txt`, `patch_discord.js`, `pr46_changes.zip`, `pr_discord.zip`).
+- **Milestone M5**: Targeted Module Extraction / God-File Reduction (`cloudflare-worker/fleet-state-client.js`).
+  - Trích xuất pure transport & low-level Durable Object client cho FleetState ra khỏi `worker.js`, giảm causal surface và ngăn chặn circular dependency.
 
 ## CURRENT CHECKPOINTS
 | Project | Last known milestone | Status | Next step | Relevant PR |
@@ -175,7 +177,8 @@ Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo v
 | PROJECT 8 (Maintainability) | M1: Architecture Visibility & Layer Boundary Guards | Merged | M2: Targeted Mutation Testing | #74 |
 | PROJECT 8 (Maintainability) | M2: Targeted Mutation Testing & Test Hardening | Merged | M3: Cross-Language Contract Guard | #75 |
 | PROJECT 8 (Maintainability) | M3: Cross-Language Contract Guard | Merged | M4: Dead Weight & Legacy Cleanup | #76 |
-| PROJECT 8 (Maintainability) | M4: Dead Weight & Legacy Cleanup | In Progress | Safe dead weight cleanup & verification PR | maint/dead-weight-cleanup-m4 |
+| PROJECT 8 (Maintainability) | M4: Dead Weight & Legacy Cleanup | Merged | M5: Module Extraction (FleetState Client) | #77 |
+| PROJECT 8 (Maintainability) | M5: Module Extraction (FleetState Client) | In Progress | Module extraction & verification PR | maint/fleet-client-extraction-m5 |
 
 ## FILE OWNERSHIP / ROUTING
 | Path | Project | Purpose | Read when... |
