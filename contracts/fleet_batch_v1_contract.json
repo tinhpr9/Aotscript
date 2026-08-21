@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FleetBatchV1CrossLanguageContract",
+  "description": "Canonical cross-language contract between Cloudflare Worker (FleetState DO) and Python Relay (Device)",
+  "protocol_version": "fleet-batch-v1",
+  "package_mapping": {
+    "prefix": "com.tinh.vv.h",
+    "suffixes": ["i", "j", "k", "l", "m", "n", "o", "p", "q", "r"],
+    "min_tabs": 1,
+    "max_tabs": 10
+  },
+  "url_rules": {
+    "canonical_param": "privateServerLinkCode",
+    "supported_hosts": ["www.roblox.com", "roblox.com"],
+    "path_prefix": "/games/",
+    "regex": "^https://(?:www\\.)?roblox\\.com/games/(\\d+)\\?(?:privateServerLinkCode|PrivateServerLinkCode)=([0-9a-fA-F]+)$"
+  },
+  "batch_action_enums": [
+    "PREPARE_ALLOCATE_SERVER",
+    "COMMIT_ALLOCATE_SERVER",
+    "ABORT_ALLOCATE_SERVER",
+    "OPEN_SWIFT_BACKUP",
+    "OPEN_SWIFT_APPS",
+    "BACKUP_RESTORE_DATA",
+    "UPDATE_WORKER"
+  ],
+  "batch_ack_action_enums": [
+    "ALLOCATE_SERVER",
+    "OPEN_SWIFT_BACKUP",
+    "OPEN_SWIFT_APPS",
+    "BACKUP_RESTORE_DATA",
+    "UPDATE_WORKER"
+  ],
+  "batch_ack_status_enums": [
+    "ACCEPTED",
+    "PREPARE_SENT",
+    "PREPARE_READY",
+    "PREPARE_FAILED",
+    "COMMIT_SENT",
+    "ABORT_SENT",
+    "ALLOCATED",
+    "OPENED",
+    "APPS_OPENED",
+    "SWIFT_OPENED",
+    "FILTERED",
+    "SELECTED",
+    "OPTIONS_VERIFIED",
+    "BACKUP_STARTED",
+    "DOWNLOADING",
+    "VERIFIED",
+    "INSTALLING",
+    "RESTARTING",
+    "HEALTHY",
+    "ROLLED_BACK",
+    "FAILED",
+    "FAILED_NOT_INSTALLED",
+    "TIMEOUT",
+    "DUPLICATE"
+  ],
+  "schemas": {
+    "BatchActionEnvelope": {
+      "type": "object",
+      "required": ["type", "protocol", "action", "action_id", "target_device_ids", "expires_at"],
+      "properties": {
+        "type": { "type": "string", "const": "aot_batch_action" },
+        "protocol": { "type": "string", "const": "fleet-batch-v1" },
+        "action": {
+          "type": "string",
+          "enum": [
+            "PREPARE_ALLOCATE_SERVER",
+            "COMMIT_ALLOCATE_SERVER",
+            "ABORT_ALLOCATE_SERVER",
+            "OPEN_SWIFT_BACKUP",
+            "OPEN_SWIFT_APPS",
+            "BACKUP_RESTORE_DATA",
+            "UPDATE_WORKER"
+          ]
+        },
+        "action_id": { "type": "string", "minLength": 1 },
+        "target_device_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        },
+        "expires_at": { "type": "integer" },
+        "allocation": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "required": ["pkg", "url"],
+            "properties": {
+              "pkg": { "type": "string", "pattern": "^com\\.tinh\\.vv\\.h[i-r]$" },
+              "url": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "BatchAckEnvelope": {
+      "type": "object",
+      "required": ["protocol", "device_id", "action_id", "batch_action", "status"],
+      "properties": {
+        "protocol": { "type": "string", "const": "fleet-batch-v1" },
+        "device_id": { "type": "string", "minLength": 1 },
+        "action_id": { "type": "string", "minLength": 1 },
+        "batch_action": {
+          "type": "string",
+          "enum": [
+            "ALLOCATE_SERVER",
+            "OPEN_SWIFT_BACKUP",
+            "OPEN_SWIFT_APPS",
+            "BACKUP_RESTORE_DATA",
+            "UPDATE_WORKER"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ACCEPTED",
+            "PREPARE_SENT",
+            "PREPARE_READY",
+            "PREPARE_FAILED",
+            "COMMIT_SENT",
+            "ABORT_SENT",
+            "ALLOCATED",
+            "OPENED",
+            "APPS_OPENED",
+            "SWIFT_OPENED",
+            "FILTERED",
+            "SELECTED",
+            "OPTIONS_VERIFIED",
+            "BACKUP_STARTED",
+            "DOWNLOADING",
+            "VERIFIED",
+            "INSTALLING",
+            "RESTARTING",
+            "HEALTHY",
+            "ROLLED_BACK",
+            "FAILED",
+            "FAILED_NOT_INSTALLED",
+            "TIMEOUT",
+            "DUPLICATE"
+          ]
+        },
+        "executed": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

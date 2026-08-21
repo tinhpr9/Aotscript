@@ -160,6 +160,9 @@ Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo v
 - **Milestone M2**: Targeted Mutation Testing & Test-Strength Hardening (`tests/test_mutation_hardening.py`).
   - Phân Server: Kiểm thử bảo mật URL (host whitelist, hex link code), thứ tự package, allocation bounds (1..10), rollback khi launch lỗi.
   - Architecture Guards: Kiểm thử mutation sensitivity của AST boundary guards đối với static/dynamic imports.
+- **Milestone M3**: Cross-Language Contract Guard (`contracts/fleet_batch_v1_contract.json`).
+  - Đảm bảo Cloudflare Worker / FleetState DO (JS) và Device Relay (Python) tuân thủ chính xác single source of truth cho giao thức `fleet-batch-v1`.
+  - Conformance runners: `cloudflare-worker/contract-conformance-selftest.mjs` & `tests/test_contract_conformance.py`.
 
 ## CURRENT CHECKPOINTS
 | Project | Last known milestone | Status | Next step | Relevant PR |
@@ -168,11 +171,13 @@ Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo v
 | PROJECT 2 (Phân Server) | Batch PHÂN SERVER 2PC & Telegram flow | Merged | Hoàn tất tích hợp & selftest | #46, #49, #51, #61, #64, #67, #68, #73 |
 | PROJECT 4 (Swift Backup) | BACKUP_RESTORE_DATA state machine | Open | Review & Merge PR #42 | #42 |
 | PROJECT 8 (Maintainability) | M1: Architecture Visibility & Layer Boundary Guards | Merged | M2: Targeted Mutation Testing | #74 |
-| PROJECT 8 (Maintainability) | M2: Targeted Mutation Testing & Test Hardening | In Progress | Mutation test verification & PR | maint/targeted-mutation-testing-m2 |
+| PROJECT 8 (Maintainability) | M2: Targeted Mutation Testing & Test Hardening | Merged | M3: Cross-Language Contract Guard | #75 |
+| PROJECT 8 (Maintainability) | M3: Cross-Language Contract Guard | In Progress | Contract conformance verification & PR | maint/cross-language-contract-m3 |
 
 ## FILE OWNERSHIP / ROUTING
 | Path | Project | Purpose | Read when... |
 | --- | --- | --- | --- |
+| `contracts/` | Project 8 | Canonical cross-language protocol schemas & contracts | Modifying cross-language wire protocols or action schemas |
 | `cloudflare-worker/` | Project 1, 2, 8 | AOT Hub, Telegram, Phân server 2PC, state management | Modifying server, worker, or Telegram bot logic |
 | `aot-group-control/` | Project 1, 2, 4, 5, 8 | Python client for Worker, Phân server relay/controller | Modifying device worker actions, relay, backup/restore, allocate |
 | `tests/` | Project 3, 5, 8 | Architecture guards, integration & unit tests | Adding architecture guards, regression testing |
