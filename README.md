@@ -163,6 +163,8 @@ Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo v
 - **Milestone M3**: Cross-Language Contract Guard (`contracts/fleet_batch_v1_contract.json`).
   - Đảm bảo Cloudflare Worker / FleetState DO (JS) và Device Relay (Python) tuân thủ chính xác single source of truth cho giao thức `fleet-batch-v1`.
   - Conformance runners: `cloudflare-worker/contract-conformance-selftest.mjs` & `tests/test_contract_conformance.py`.
+- **Milestone M4**: Dead Weight / Legacy Cleanup.
+  - Loại bỏ các file rác, file log CI cũ, script vá một lần và artifact zip PR lịch sử không còn consumer (`changed_files.txt`, `checks.txt`, `workflow_log.txt`, `patch_discord.js`, `pr46_changes.zip`, `pr_discord.zip`).
 
 ## CURRENT CHECKPOINTS
 | Project | Last known milestone | Status | Next step | Relevant PR |
@@ -172,7 +174,8 @@ Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo v
 | PROJECT 4 (Swift Backup) | BACKUP_RESTORE_DATA state machine | Open | Review & Merge PR #42 | #42 |
 | PROJECT 8 (Maintainability) | M1: Architecture Visibility & Layer Boundary Guards | Merged | M2: Targeted Mutation Testing | #74 |
 | PROJECT 8 (Maintainability) | M2: Targeted Mutation Testing & Test Hardening | Merged | M3: Cross-Language Contract Guard | #75 |
-| PROJECT 8 (Maintainability) | M3: Cross-Language Contract Guard | In Progress | Contract conformance verification & PR | maint/cross-language-contract-m3 |
+| PROJECT 8 (Maintainability) | M3: Cross-Language Contract Guard | Merged | M4: Dead Weight & Legacy Cleanup | #76 |
+| PROJECT 8 (Maintainability) | M4: Dead Weight & Legacy Cleanup | In Progress | Safe dead weight cleanup & verification PR | maint/dead-weight-cleanup-m4 |
 
 ## FILE OWNERSHIP / ROUTING
 | Path | Project | Purpose | Read when... |
