@@ -152,23 +152,29 @@ Các path chính:
 - `rejoin-tool/rejoin_daemon.py`
 - `rejoin-tool/tests/`
 
-(Nếu auto-rejoin cần tham khảo source cũ thì xem `agent` tại root repo).
+## PROJECT 8 — Maintainability Hardening
+Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo vệ ranh giới kiến trúc (zero runtime dependencies).
+- **Milestone M1**: Architecture Visibility & Enforceable Layer Boundary Guards (`tests/test_architecture_guards.py`).
+  - Python: `controller.py` & `runtime.py` là leaf execution/state boundaries; `updater.py` một chiều; không có circular dependency.
+  - JavaScript: `rollout.js` độc lập; `fleet-state.js` không import ngược `worker.js`; đồ thị DAG không chu trình.
 
 ## CURRENT CHECKPOINTS
 | Project | Last known milestone | Status | Next step | Relevant PR |
 | --- | --- | --- | --- | --- |
 | PROJECT 1 (OmniControl) | Remove dead Python omnicontrol | Merged | Discord frontend/control surface (reuse core) | #45 |
-| PROJECT 2 (Phân Server) | Batch PHÂN SERVER 2PC & Telegram flow | Hoàn tất | Duy trì kiểm thử & theo dõi vận hành | #46, #49, #51, #61, #64, #67, #68 |
+| PROJECT 2 (Phân Server) | Batch PHÂN SERVER 2PC & Telegram flow | Merged | Hoàn tất tích hợp & selftest | #46, #49, #51, #61, #64, #67, #68, #73 |
 | PROJECT 4 (Swift Backup) | BACKUP_RESTORE_DATA state machine | Open | Review & Merge PR #42 | #42 |
+| PROJECT 8 (Maintainability) | M1: Architecture Visibility & Layer Boundary Guards | In Progress | Enforce layer boundaries with AST test suite | maint/architecture-guards-m1 |
 
 ## FILE OWNERSHIP / ROUTING
 | Path | Project | Purpose | Read when... |
 | --- | --- | --- | --- |
-| `cloudflare-worker/` | Project 1, 2 | AOT Hub, Telegram, Phân server 2PC, state management | Modifying server, worker, or Telegram bot logic |
-| `aot-group-control/` | Project 1, 2, 4, 5 | Python client for Worker, Phân server relay/controller | Modifying device worker actions, relay, backup/restore, allocate |
+| `cloudflare-worker/` | Project 1, 2, 8 | AOT Hub, Telegram, Phân server 2PC, state management | Modifying server, worker, or Telegram bot logic |
+| `aot-group-control/` | Project 1, 2, 4, 5, 8 | Python client for Worker, Phân server relay/controller | Modifying device worker actions, relay, backup/restore, allocate |
+| `tests/` | Project 3, 5, 8 | Architecture guards, integration & unit tests | Adding architecture guards, regression testing |
 | `tong_hop_link.txt` | Project 2 | Server source links | Working on Batch Phân Server |
 | `setup.sh`, `provision-device.sh`, vv | Project 3 | Device Setup, migration | Updating setup checkpoint, Termux bootstrap |
-| `aot-group-control/controller.py` | Project 2, 4 | Swift Backup & Roblox server opening automation | Fixing backup/restore UI automation steps, server links launch |
+| `aot-group-control/controller.py` | Project 2, 4, 8 | Swift Backup & Roblox server opening automation | Fixing backup/restore UI automation steps, server links launch |
 | `.github/workflows/`, `scripts/` | Project 5 | Release packaging | Troubleshooting worker release CI/CD |
 | `AGENTS.md` | Project 1, 5 | Release / Safety Rules | ALWAYS read before touching `aot-group-control` or `cloudflare-worker` |
 | `agent`, `Marmotgag2`, `Updatedelta` | Project 6 | Misc device scripts, solver | Updating solvers or Delta tools |
