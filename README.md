@@ -46,10 +46,26 @@ Mục tiêu:
 - mapping package hi..hr
 - không trùng server
 - fail-closed nếu thiếu/sai
+- 2PC transaction (PREPARE, COMMIT, ABORT) bảo vệ rollback khi mở game lỗi
+- Telegram UI (/phanserver, preview, confirm, cancel, offline gating)
+- single-flight lock tránh ghi đè batch đồng thời
 - đây là task riêng, không trộn với Discord/OmniControl core.
 
 Các path chính:
 - `tong_hop_link.txt`
+- `cloudflare-worker/worker.js` (parseTongHopLink, /phanserver command & callbacks)
+- `cloudflare-worker/fleet-state.js` (dispatchFleetBatch, 2PC state machine, single-flight gating)
+- `cloudflare-worker/allocate-server-selftest.mjs`
+- `cloudflare-worker/telegram-phanserver-selftest.mjs`
+- `cloudflare-worker/fleet-state-selftest.mjs`
+- `aot-group-control/relay.py` (PREPARE/COMMIT/ABORT 2PC handlers, rollback & journal)
+- `aot-group-control/controller.py` (open_roblox_servers)
+- `aot-group-control/allocate_server_selftest.py`
+- `aot-group-control/test_allocate_server.py`
+
+Checkpoint hiện tại:
+- PR #46, #49, #51, #61, #64, #67, #68 đã merge: Hoàn tất toàn bộ luồng PHÂN SERVER từ Telegram /phanserver qua 2PC FleetState đến Relay và Controller trên device.
+- Hệ thống đã được kiểm chứng bằng adversarial test suites trên Cloudflare Worker và Relay/Controller edges.
 
 ## PROJECT 3 — Device Setup / Provision / Clone Migration
 Mục tiêu:
@@ -142,17 +158,17 @@ Các path chính:
 | Project | Last known milestone | Status | Next step | Relevant PR |
 | --- | --- | --- | --- | --- |
 | PROJECT 1 (OmniControl) | Remove dead Python omnicontrol | Merged | Discord frontend/control surface (reuse core) | #45 |
-| PROJECT 2 (Phân Server) | Allocate Server feature | N/A | Implement unique server allocation | N/A |
+| PROJECT 2 (Phân Server) | Batch PHÂN SERVER 2PC & Telegram flow | Hoàn tất | Duy trì kiểm thử & theo dõi vận hành | #46, #49, #51, #61, #64, #67, #68 |
 | PROJECT 4 (Swift Backup) | BACKUP_RESTORE_DATA state machine | Open | Review & Merge PR #42 | #42 |
 
 ## FILE OWNERSHIP / ROUTING
 | Path | Project | Purpose | Read when... |
 | --- | --- | --- | --- |
-| `cloudflare-worker/` | Project 1 | AOT Hub, Telegram, state management | Modifying server, worker, or Telegram bot logic |
-| `aot-group-control/` | Project 1, 4, 5 | Python client for Worker | Modifying device worker actions, relay, backup/restore |
+| `cloudflare-worker/` | Project 1, 2 | AOT Hub, Telegram, Phân server 2PC, state management | Modifying server, worker, or Telegram bot logic |
+| `aot-group-control/` | Project 1, 2, 4, 5 | Python client for Worker, Phân server relay/controller | Modifying device worker actions, relay, backup/restore, allocate |
 | `tong_hop_link.txt` | Project 2 | Server source links | Working on Batch Phân Server |
 | `setup.sh`, `provision-device.sh`, vv | Project 3 | Device Setup, migration | Updating setup checkpoint, Termux bootstrap |
-| `aot-group-control/controller.py` | Project 4 | Swift Backup automation | Fixing backup/restore UI automation steps |
+| `aot-group-control/controller.py` | Project 2, 4 | Swift Backup & Roblox server opening automation | Fixing backup/restore UI automation steps, server links launch |
 | `.github/workflows/`, `scripts/` | Project 5 | Release packaging | Troubleshooting worker release CI/CD |
 | `AGENTS.md` | Project 1, 5 | Release / Safety Rules | ALWAYS read before touching `aot-group-control` or `cloudflare-worker` |
 | `agent`, `Marmotgag2`, `Updatedelta` | Project 6 | Misc device scripts, solver | Updating solvers or Delta tools |
