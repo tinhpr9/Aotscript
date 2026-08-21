@@ -523,10 +523,13 @@ links_path3 = str(relay.SERVER_LINKS_PATH)
 state3 = {}
 relay.STATE_PATH = pathlib.Path(temp_dir3.name) / "aot_group_state.json"
 
-# Wire the real controller.open_roblox_servers function
-relay.controller.open_roblox_servers = controller.open_roblox_servers
+orig_root_run = controller._root_run
+orig_relay_open = relay.controller.open_roblox_servers
+orig_sleep = time.sleep
 
 recorded_root_commands = []
+sleep_calls = []
+
 class RootRunMock:
     def __init__(self):
         self.should_fail = False
@@ -537,96 +540,125 @@ class RootRunMock:
         return "OK"
 
 mock_root_run = RootRunMock()
-controller._root_run = mock_root_run
 
-alloc_edge = [
-    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111"},
-    {"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=22222222222222222222222222222222"},
-    {"pkg": "com.tinh.vv.hk", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=33333333333333333333333333333333"}
-]
+try:
+    relay.controller.open_roblox_servers = controller.open_roblox_servers
+    controller._root_run = mock_root_run
+    time.sleep = lambda s: sleep_calls.append(s)
 
-msg20_prep = {
-    "type": "aot_batch_action",
-    "protocol": "fleet-batch-v1",
-    "target_device_ids": ["m1"],
-    "action_id": "act-20-edge",
-    "action": "PREPARE_ALLOCATE_SERVER",
-    "allocation": alloc_edge,
-    "expires_at": int(time.time() * 1000) + 10000
-}
-acks.clear()
-assert relay._handle_batch_action(cfg, state3, local_id="m1", message=msg20_prep) is True
-assert acks[-1]["status"] == "PREPARE_READY"
-assert os.path.exists(f"{links_path3}.prep.act-20-edge")
-assert not os.path.exists(links_path3)
+    alloc_edge = [
+        {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111"},
+        {"pkg": "com.tinh.vv.hj", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=22222222222222222222222222222222"},
+        {"pkg": "com.tinh.vv.hk", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=33333333333333333333333333333333"}
+    ]
 
-msg20_commit = {
-    "type": "aot_batch_action",
-    "protocol": "fleet-batch-v1",
-    "target_device_ids": ["m1"],
-    "action_id": "act-20-edge",
-    "action": "COMMIT_ALLOCATE_SERVER",
-    "expires_at": int(time.time() * 1000) + 10000
-}
-acks.clear()
-recorded_root_commands.clear()
-assert relay._handle_batch_action(cfg, state3, local_id="m1", message=msg20_commit) is True
-assert acks[-2]["status"] == "ALLOCATED"
-assert acks[-1]["status"] == "OPENED"
-assert not os.path.exists(f"{links_path3}.prep.act-20-edge")
-assert os.path.exists(links_path3)
-with open(links_path3, "r", encoding="utf-8") as f:
-    installed_lines = f.read().strip().split("\n")
-assert len(installed_lines) == 3
-assert installed_lines[0] == "com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111"
-assert installed_lines[1] == "com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateServerLinkCode=22222222222222222222222222222222"
-assert installed_lines[2] == "com.tinh.vv.hk,https://www.roblox.com/games/97598239454123?privateServerLinkCode=33333333333333333333333333333333"
+    msg20_prep = {
+        "type": "aot_batch_action",
+        "protocol": "fleet-batch-v1",
+        "target_device_ids": ["m1"],
+        "action_id": "act-20-edge",
+        "action": "PREPARE_ALLOCATE_SERVER",
+        "allocation": alloc_edge,
+        "expires_at": int(time.time() * 1000) + 10000
+    }
+    acks.clear()
+    assert relay._handle_batch_action(cfg, state3, local_id="m1", message=msg20_prep) is True
+    assert acks[-1]["status"] == "PREPARE_READY"
+    assert os.path.exists(f"{links_path3}.prep.act-20-edge")
+    assert not os.path.exists(links_path3)
 
-# Verify actual Android am start commands triggered via _root_run
-assert len(recorded_root_commands) == 3
-assert "com.tinh.vv.hi/com.roblox.client.ActivityProtocolLaunch" in recorded_root_commands[0]
-assert "com.tinh.vv.hj/com.roblox.client.ActivityProtocolLaunch" in recorded_root_commands[1]
-assert "com.tinh.vv.hk/com.roblox.client.ActivityProtocolLaunch" in recorded_root_commands[2]
+    msg20_commit = {
+        "type": "aot_batch_action",
+        "protocol": "fleet-batch-v1",
+        "target_device_ids": ["m1"],
+        "action_id": "act-20-edge",
+        "action": "COMMIT_ALLOCATE_SERVER",
+        "expires_at": int(time.time() * 1000) + 10000
+    }
+    acks.clear()
+    recorded_root_commands.clear()
+    sleep_calls.clear()
+    assert relay._handle_batch_action(cfg, state3, local_id="m1", message=msg20_commit) is True
+    assert acks[-2]["status"] == "ALLOCATED"
+    assert acks[-1]["status"] == "OPENED"
+    assert not os.path.exists(f"{links_path3}.prep.act-20-edge")
+    assert os.path.exists(links_path3)
+    with open(links_path3, "r", encoding="utf-8") as f:
+        installed_lines = f.read().strip().split("\n")
+    assert len(installed_lines) == 3
+    assert installed_lines[0] == "com.tinh.vv.hi,https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111"
+    assert installed_lines[1] == "com.tinh.vv.hj,https://www.roblox.com/games/97598239454123?privateServerLinkCode=22222222222222222222222222222222"
+    assert installed_lines[2] == "com.tinh.vv.hk,https://www.roblox.com/games/97598239454123?privateServerLinkCode=33333333333333333333333333333333"
 
-# Verify failure rollback at _root_run boundary
-mock_root_run.should_fail = True
-alloc_fail = [
-    {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=44444444444444444444444444444444"}
-]
-msg20_fail_prep = {
-    "type": "aot_batch_action",
-    "protocol": "fleet-batch-v1",
-    "target_device_ids": ["m1"],
-    "action_id": "act-20-fail",
-    "action": "PREPARE_ALLOCATE_SERVER",
-    "allocation": alloc_fail,
-    "expires_at": int(time.time() * 1000) + 10000
-}
-acks.clear()
-assert relay._handle_batch_action(cfg, state3, local_id="m1", message=msg20_fail_prep) is True
-assert acks[-1]["status"] == "PREPARE_READY"
+    # Verify exact Android am start commands, VIEW intent, -d flag, exact URL mapping and no URL reuse
+    import re
+    import shlex
+    assert len(recorded_root_commands) == len(alloc_edge)
+    assert len(sleep_calls) == len(alloc_edge)
+    for idx, expected_item in enumerate(alloc_edge):
+        cmd = recorded_root_commands[idx]
+        assert cmd.startswith("am start -a android.intent.action.VIEW"), f"Missing VIEW intent: {cmd}"
+        assert f"-n {shlex.quote(expected_item['pkg'])}/com.roblox.client.ActivityProtocolLaunch" in cmd, f"Missing package component: {cmd}"
+        assert f"-d {shlex.quote(expected_item['url'])}" in cmd, f"Missing/mangled -d URL: {cmd}"
+        assert cmd.endswith(" >/dev/null"), f"Missing stdout redirect: {cmd}"
 
-msg20_fail_commit = {
-    "type": "aot_batch_action",
-    "protocol": "fleet-batch-v1",
-    "target_device_ids": ["m1"],
-    "action_id": "act-20-fail",
-    "action": "COMMIT_ALLOCATE_SERVER",
-    "expires_at": int(time.time() * 1000) + 10000
-}
-acks.clear()
-assert relay._handle_batch_action(cfg, state3, local_id="m1", message=msg20_fail_commit) is True
-assert acks[-1]["status"] == "FAILED"
-assert "open_servers_failed" in acks[-1]["reason"]
+    launched_urls = []
+    for cmd in recorded_root_commands:
+        match = re.search(r"-d\s+(?:'([^']+)'|([^\s>]+))", cmd)
+        assert match is not None, f"Could not extract -d URL from command: {cmd}"
+        launched_urls.append(match.group(1) or match.group(2))
+    assert launched_urls == [x["url"] for x in alloc_edge], "Launched URLs do not match 1-to-1 with allocation"
+    assert len(set(launched_urls)) == len(alloc_edge), "Duplicate/reused URLs detected in launch commands"
 
-# Verify server_links.txt was rolled back to previous valid content
-with open(links_path3, "r", encoding="utf-8") as f:
-    rolled_back_lines = f.read().strip().split("\n")
-assert len(rolled_back_lines) == 3
-assert rolled_back_lines == installed_lines
+    # Verify failure rollback at _root_run boundary
+    mock_root_run.should_fail = True
+    alloc_fail = [
+        {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=44444444444444444444444444444444"}
+    ]
+    msg20_fail_prep = {
+        "type": "aot_batch_action",
+        "protocol": "fleet-batch-v1",
+        "target_device_ids": ["m1"],
+        "action_id": "act-20-fail",
+        "action": "PREPARE_ALLOCATE_SERVER",
+        "allocation": alloc_fail,
+        "expires_at": int(time.time() * 1000) + 10000
+    }
+    acks.clear()
+    assert relay._handle_batch_action(cfg, state3, local_id="m1", message=msg20_fail_prep) is True
+    assert acks[-1]["status"] == "PREPARE_READY"
 
-temp_dir3.cleanup()
-relay.SERVER_LINKS_PATH = temp_path / "server_links.txt"
-relay.STATE_PATH = temp_path / "aot_group_state.json"
+    msg20_fail_commit = {
+        "type": "aot_batch_action",
+        "protocol": "fleet-batch-v1",
+        "target_device_ids": ["m1"],
+        "action_id": "act-20-fail",
+        "action": "COMMIT_ALLOCATE_SERVER",
+        "expires_at": int(time.time() * 1000) + 10000
+    }
+    acks.clear()
+    assert relay._handle_batch_action(cfg, state3, local_id="m1", message=msg20_fail_commit) is True
+    assert acks[-1]["status"] == "FAILED"
+    assert "open_servers_failed" in acks[-1]["reason"]
+
+    # Verify server_links.txt was rolled back to previous valid content
+    with open(links_path3, "r", encoding="utf-8") as f:
+        rolled_back_lines = f.read().strip().split("\n")
+    assert len(rolled_back_lines) == 3
+    assert rolled_back_lines == installed_lines
+
+finally:
+    controller._root_run = orig_root_run
+    relay.controller.open_roblox_servers = orig_relay_open
+    time.sleep = orig_sleep
+    mock_root_run.should_fail = False
+    temp_dir3.cleanup()
+    relay.SERVER_LINKS_PATH = temp_path / "server_links.txt"
+    relay.STATE_PATH = temp_path / "aot_group_state.json"
+
+# Assert no monkeypatch leaks
+assert controller._root_run is orig_root_run
+assert relay.controller.open_roblox_servers is orig_relay_open
+assert time.sleep is orig_sleep
 
 print("AOT_ALLOCATE_SERVER_RELAY_TEST=OK")
