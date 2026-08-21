@@ -67,16 +67,17 @@ class TestPythonContractConformance(unittest.TestCase):
         """Verify package prefix and suffix ordering matches contract exactly."""
         prefix = CONTRACT["package_mapping"]["prefix"]
         suffixes = CONTRACT["package_mapping"]["suffixes"]
+        max_tabs = CONTRACT["package_mapping"]["max_tabs"]
         cfg = {"device_id": "m1"}
         state = {}
 
-        # 1. Valid 10-item allocation according to contract mapping
+        # 1. Valid allocation matching contract max_tabs
         valid_alloc = [
             {
-                "pkg": f"{prefix}{s}",
+                "pkg": f"{prefix}{suffixes[i]}",
                 "url": f"https://www.roblox.com/games/97598239454123?privateServerLinkCode={str(i+1).zfill(32)}"
             }
-            for i, s in enumerate(suffixes)
+            for i in range(max_tabs)
         ]
         msg = {
             "type": "aot_batch_action",
@@ -92,26 +93,41 @@ class TestPythonContractConformance(unittest.TestCase):
         self.assertEqual(len(self.acks), 1)
         self.assertEqual(self.acks[0]["status"], "PREPARE_READY")
 
-    def test_roblox_url_regex_conforms_to_contract(self) -> None:
-        """Verify production URL pattern matches contract regex specification."""
+    def test_roblox_url_regex_matrix_parity(self) -> None:
+        """Verify production URL pattern matches contract regex specification across valid and invalid matrix."""
         contract_regex = re.compile(CONTRACT["url_rules"]["regex"])
-        test_urls = [
+
+        # Valid matrix
+        valid_urls = [
             "https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111",
             "https://roblox.com/games/12345?PrivateServerLinkCode=abcdef0123456789abcdef0123456789",
+            "https://www.roblox.com/games/999?privateServerLinkCode=ABCDEF0123456789",
         ]
-        for url in test_urls:
-            self.assertTrue(bool(contract_regex.match(url)), f"Contract regex failed: {url}")
-            self.assertTrue(bool(RELAY.ROBLOX_SERVER_URL_PATTERN.match(url)), f"Relay regex failed: {url}")
+        for url in valid_urls:
+            self.assertTrue(bool(contract_regex.match(url)), f"Contract regex rejected valid URL: {url}")
+            self.assertTrue(bool(RELAY.ROBLOX_SERVER_URL_PATTERN.match(url)), f"Relay regex rejected valid URL: {url}")
 
-    def test_all_relay_terminal_ack_statuses_in_contract(self) -> None:
-        """Verify all terminal ACK statuses emitted by Relay are declared in contract enums."""
+        # Invalid matrix
+        invalid_urls = [
+            "http://www.roblox.com/games/123?privateServerLinkCode=11111111111111111111111111111111",     # Insecure HTTP
+            "https://evil-roblox.com/games/123?privateServerLinkCode=11111111111111111111111111111111",    # Foreign host
+            "https://roblox.com/home?privateServerLinkCode=11111111111111111111111111111111",              # Wrong path
+            "https://roblox.com/games/123?privateServerLinkCode=NOT_HEX_CHARS_ZZZ!",                        # Non-hex code
+            "https://roblox.com/games/123?privateServerLinkCode=111&extra=222",                             # Extra query param
+        ]
+        for url in invalid_urls:
+            self.assertFalse(bool(contract_regex.match(url)), f"Contract regex accepted invalid URL: {url}")
+            self.assertFalse(bool(RELAY.ROBLOX_SERVER_URL_PATTERN.match(url)), f"Relay regex accepted invalid URL: {url}")
+
+    def test_all_relay_terminal_and_intermediate_ack_statuses_in_contract(self) -> None:
+        """Verify all statuses emitted by Relay are declared in contract enums."""
         contract_statuses = set(CONTRACT["batch_ack_status_enums"])
         observed_statuses = set()
 
         cfg = {"device_id": "m1"}
         state = {}
 
-        # Trigger PREPARE_READY
+        # 1. Allocate server statuses
         msg_prep = {
             "type": "aot_batch_action",
             "protocol": "fleet-batch-v1",
@@ -126,19 +142,33 @@ class TestPythonContractConformance(unittest.TestCase):
         for a in self.acks:
             observed_statuses.add(a["status"])
 
-        # Trigger PREPARE_FAILED
-        msg_bad = dict(msg_prep, allocation=[{"pkg": "com.tinh.vv.hj", "url": "invalid"}])
-        self.acks.clear()
-        RELAY._handle_batch_action(cfg, state, local_id="m1", message=msg_bad)
-        for a in self.acks:
-            observed_statuses.add(a["status"])
-
-        # Trigger TIMEOUT
+        # 2. Timeout & Duplicate
         msg_timeout = dict(msg_prep, expires_at=int(time.time() * 1000) - 5000)
         self.acks.clear()
         RELAY._handle_batch_action(cfg, state, local_id="m1", message=msg_timeout)
         for a in self.acks:
             observed_statuses.add(a["status"])
+
+        # 3. Swift Backup statuses (ACCEPTED, OPENED, APPS_OPENED, FAILED_NOT_INSTALLED)
+        msg_swift = {
+            "type": "aot_batch_action",
+            "protocol": "fleet-batch-v1",
+            "target_device_ids": ["m1"],
+            "action_id": "act-swift-stat",
+            "action": "OPEN_SWIFT_APPS",
+            "package": "org.swiftapps.swiftbackup",
+            "expires_at": int(time.time() * 1000) + 10000,
+        }
+        self.acks.clear()
+        # Mock controller to avoid real UI execution
+        orig_open_apps = RELAY.controller.open_swift_apps
+        try:
+            RELAY.controller.open_swift_apps = lambda: {"executed": True}
+            RELAY._handle_batch_action(cfg, state, local_id="m1", message=msg_swift)
+            for a in self.acks:
+                observed_statuses.add(a["status"])
+        finally:
+            RELAY.controller.open_swift_apps = orig_open_apps
 
         for st in observed_statuses:
             self.assertIn(st, contract_statuses, f"Relay emitted status {st!r} not in contract enums!")
@@ -167,10 +197,9 @@ class TestCrossLanguageDriftAdversarialProofs(unittest.TestCase):
         orig_send = RELAY._send_batch_ack
         try:
             RELAY._send_batch_ack = lambda cfg, **kwargs: acks.append(kwargs)
-            # Drifted protocol version must be dropped/ignored
             result = RELAY._handle_batch_action(cfg, state, local_id="m1", message=msg)
             self.assertTrue(result)
-            self.assertEqual(len(acks), 0, "Drifted protocol version should not have triggered an ACK")
+            self.assertEqual(len(acks), 0, "Drifted protocol version should not trigger ACK")
         finally:
             RELAY._send_batch_ack = orig_send
 

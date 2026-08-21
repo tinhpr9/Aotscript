@@ -13,26 +13,47 @@
     "canonical_param": "privateServerLinkCode",
     "supported_hosts": ["www.roblox.com", "roblox.com"],
     "path_prefix": "/games/",
-    "regex": "^https?://(?:www\\.)?roblox\\.com/games/(\\d+)\\?(?:.*&)?(?:privateServerLinkCode|PrivateServerLinkCode)=([a-zA-Z0-9_-]+)(?:&.*)?$"
+    "regex": "^https://(?:www\\.)?roblox\\.com/games/(\\d+)\\?(?:privateServerLinkCode|PrivateServerLinkCode)=([0-9a-fA-F]+)$"
   },
   "batch_action_enums": [
     "PREPARE_ALLOCATE_SERVER",
     "COMMIT_ALLOCATE_SERVER",
     "ABORT_ALLOCATE_SERVER",
     "OPEN_SWIFT_BACKUP",
-    "RUN_BACKUP_APPOPS",
-    "RUN_RESTORE_APPOPS",
-    "STOP_ROBLOX",
-    "OPEN_ROBLOX",
-    "RUN_DISCORD_COMMAND",
+    "OPEN_SWIFT_APPS",
+    "BACKUP_RESTORE_DATA",
+    "UPDATE_WORKER"
+  ],
+  "batch_ack_action_enums": [
+    "ALLOCATE_SERVER",
+    "OPEN_SWIFT_BACKUP",
+    "OPEN_SWIFT_APPS",
+    "BACKUP_RESTORE_DATA",
     "UPDATE_WORKER"
   ],
   "batch_ack_status_enums": [
+    "ACCEPTED",
+    "PREPARE_SENT",
     "PREPARE_READY",
     "PREPARE_FAILED",
+    "COMMIT_SENT",
+    "ABORT_SENT",
     "ALLOCATED",
     "OPENED",
+    "APPS_OPENED",
+    "SWIFT_OPENED",
+    "FILTERED",
+    "SELECTED",
+    "OPTIONS_VERIFIED",
+    "BACKUP_STARTED",
+    "DOWNLOADING",
+    "VERIFIED",
+    "INSTALLING",
+    "RESTARTING",
+    "HEALTHY",
+    "ROLLED_BACK",
     "FAILED",
+    "FAILED_NOT_INSTALLED",
     "TIMEOUT",
     "DUPLICATE"
   ],
@@ -43,7 +64,18 @@
       "properties": {
         "type": { "type": "string", "const": "aot_batch_action" },
         "protocol": { "type": "string", "const": "fleet-batch-v1" },
-        "action": { "type": "string" },
+        "action": {
+          "type": "string",
+          "enum": [
+            "PREPARE_ALLOCATE_SERVER",
+            "COMMIT_ALLOCATE_SERVER",
+            "ABORT_ALLOCATE_SERVER",
+            "OPEN_SWIFT_BACKUP",
+            "OPEN_SWIFT_APPS",
+            "BACKUP_RESTORE_DATA",
+            "UPDATE_WORKER"
+          ]
+        },
         "action_id": { "type": "string", "minLength": 1 },
         "target_device_ids": {
           "type": "array",
@@ -73,15 +105,41 @@
         "protocol": { "type": "string", "const": "fleet-batch-v1" },
         "device_id": { "type": "string", "minLength": 1 },
         "action_id": { "type": "string", "minLength": 1 },
-        "batch_action": { "type": "string" },
+        "batch_action": {
+          "type": "string",
+          "enum": [
+            "ALLOCATE_SERVER",
+            "OPEN_SWIFT_BACKUP",
+            "OPEN_SWIFT_APPS",
+            "BACKUP_RESTORE_DATA",
+            "UPDATE_WORKER"
+          ]
+        },
         "status": {
           "type": "string",
           "enum": [
+            "ACCEPTED",
+            "PREPARE_SENT",
             "PREPARE_READY",
             "PREPARE_FAILED",
+            "COMMIT_SENT",
+            "ABORT_SENT",
             "ALLOCATED",
             "OPENED",
+            "APPS_OPENED",
+            "SWIFT_OPENED",
+            "FILTERED",
+            "SELECTED",
+            "OPTIONS_VERIFIED",
+            "BACKUP_STARTED",
+            "DOWNLOADING",
+            "VERIFIED",
+            "INSTALLING",
+            "RESTARTING",
+            "HEALTHY",
+            "ROLLED_BACK",
             "FAILED",
+            "FAILED_NOT_INSTALLED",
             "TIMEOUT",
             "DUPLICATE"
           ]
