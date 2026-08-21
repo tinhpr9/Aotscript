@@ -213,6 +213,8 @@ class TestJavaScriptArchitectureGuards(unittest.TestCase):
         for target, lineno in imports:
             norm_target = pathlib.Path(target).name
             self.assertNotIn(norm_target, {"worker.js", "worker"}, f"rollout.js:{lineno} imports worker")
+            self.assertNotIn(norm_target, {"fleet-state.js", "fleet-state"}, f"rollout.js:{lineno} imports fleet-state")
+
     def test_fleet_state_client_is_pure_transport_boundary(self) -> None:
         client_path = CLOUDFLARE_WORKER / "fleet-state-client.js"
         self.assertTrue(client_path.exists(), f"Missing {client_path}")
@@ -344,6 +346,25 @@ class TestAdversarialArchitectureGuards(unittest.TestCase):
         self.assertEqual(len(imports), 1)
         self.assertEqual(imports[0][0], "./fleet-state.js")
         self.assertEqual(imports[0][1], 6, f"Expected line 6, got line {imports[0][1]}")
+
+    def test_adversarial_rollout_boundary_rejection(self) -> None:
+        forbidden = {"worker.js", "worker", "fleet-state.js", "fleet-state"}
+        
+        # 1. Importing ./fleet-state.js -> rejected
+        imports_fs = extract_js_imports("import { FleetState } from './fleet-state.js';", "rollout.js")
+        self.assertTrue(any(pathlib.Path(t).name in forbidden for t, _ in imports_fs))
+
+        # 2. Importing ../fleet-state.js -> rejected
+        imports_parent_fs = extract_js_imports("import { FleetState } from '../fleet-state.js';", "rollout.js")
+        self.assertTrue(any(pathlib.Path(t).name in forbidden for t, _ in imports_parent_fs))
+
+        # 3. Importing ./worker.js -> rejected
+        imports_worker = extract_js_imports("import { handleUpdate } from './worker.js';", "rollout.js")
+        self.assertTrue(any(pathlib.Path(t).name in forbidden for t, _ in imports_worker))
+
+        # 4. Importing cloudflare:workers -> accepted
+        imports_cf = extract_js_imports("import { DurableObject } from 'cloudflare:workers';", "rollout.js")
+        self.assertFalse(any(pathlib.Path(t).name in forbidden for t, _ in imports_cf))
 
 
 if __name__ == "__main__":
