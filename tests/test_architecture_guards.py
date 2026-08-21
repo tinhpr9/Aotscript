@@ -213,10 +213,18 @@ class TestJavaScriptArchitectureGuards(unittest.TestCase):
         for target, lineno in imports:
             norm_target = pathlib.Path(target).name
             self.assertNotIn(norm_target, {"worker.js", "worker"}, f"rollout.js:{lineno} imports worker")
-            self.assertNotIn(norm_target, {"fleet-state.js", "fleet-state"}, f"rollout.js:{lineno} imports fleet-state")
+    def test_fleet_state_client_is_pure_transport_boundary(self) -> None:
+        client_path = CLOUDFLARE_WORKER / "fleet-state-client.js"
+        self.assertTrue(client_path.exists(), f"Missing {client_path}")
+        source = client_path.read_text(encoding="utf-8")
+        imports = extract_js_imports(source, filename="fleet-state-client.js")
+        for target, lineno in imports:
+            norm_target = pathlib.Path(target).name
+            self.assertNotIn(norm_target, {"worker.js", "worker"}, f"fleet-state-client.js:{lineno} imports worker")
+            self.assertNotIn(norm_target, {"fleet-state.js", "fleet-state"}, f"fleet-state-client.js:{lineno} imports fleet-state")
 
     def test_js_modules_have_no_circular_dependencies(self) -> None:
-        js_files = {"worker.js", "fleet-state.js", "rollout.js"}
+        js_files = {"worker.js", "fleet-state.js", "rollout.js", "fleet-state-client.js"}
         graph: Dict[str, Set[str]] = {f: set() for f in js_files}
 
         for js_file in js_files:
@@ -226,6 +234,8 @@ class TestJavaScriptArchitectureGuards(unittest.TestCase):
             source = fpath.read_text(encoding="utf-8")
             for target, _ in extract_js_imports(source, filename=js_file):
                 target_name = pathlib.Path(target).name
+                if not target_name.endswith(".js"):
+                    target_name += ".js"
                 if target_name in js_files and target_name != js_file:
                     graph[js_file].add(target_name)
 
