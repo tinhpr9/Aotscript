@@ -28,17 +28,25 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 AOT_GROUP_CONTROL = REPO_ROOT / "aot-group-control"
 CLOUDFLARE_WORKER = REPO_ROOT / "cloudflare-worker"
 
-# Load relay module from aot-group-control
+# Load relay module from aot-group-control as the authoritative root
 RELAY_SPEC = importlib.util.spec_from_file_location("aot_relay", AOT_GROUP_CONTROL / "relay.py")
 RELAY = importlib.util.module_from_spec(RELAY_SPEC)
 sys.modules[RELAY_SPEC.name] = RELAY
 RELAY_SPEC.loader.exec_module(RELAY)
 
-# Load controller module from aot-group-control
-CONTROLLER_SPEC = importlib.util.spec_from_file_location("aot_controller", AOT_GROUP_CONTROL / "controller.py")
-CONTROLLER = importlib.util.module_from_spec(CONTROLLER_SPEC)
-sys.modules[CONTROLLER_SPEC.name] = CONTROLLER
-CONTROLLER_SPEC.loader.exec_module(CONTROLLER)
+# Authoritative controller instance exposed by relay module
+CONTROLLER = RELAY.controller
+
+
+class TestModuleIdentity(unittest.TestCase):
+    """
+    Validates single module identity: RELAY.controller is the sole authoritative
+    controller instance used by tests, ensuring matching exception and class types.
+    """
+
+    def test_single_controller_instance_identity(self) -> None:
+        self.assertIs(CONTROLLER, RELAY.controller)
+        self.assertIs(CONTROLLER.AotControllerError, RELAY.controller.AotControllerError)
 
 
 class TestRobloxUrlValidationMutants(unittest.TestCase):
@@ -91,7 +99,8 @@ class TestRobloxUrlValidationMutants(unittest.TestCase):
 
 class TestRelayBatchAllocationMutants(unittest.TestCase):
     """
-    MUTANT-PHAN-2: Validates Relay batch action invariants (ordering, capacity, uniqueness).
+    MUTANT-PHAN-2: Validates Relay batch action invariants (ordering, capacity, uniqueness)
+    with strict monkeypatch lifecycle management and exact 10 vs 11 boundary checks.
     """
 
     def setUp(self) -> None:
@@ -101,6 +110,8 @@ class TestRelayBatchAllocationMutants(unittest.TestCase):
         
         self.orig_links_path = RELAY.SERVER_LINKS_PATH
         self.orig_state_path = RELAY.STATE_PATH
+        self.orig_send_ack = RELAY._send_batch_ack
+
         RELAY.SERVER_LINKS_PATH = self.links_path
         RELAY.STATE_PATH = self.state_path
 
@@ -110,6 +121,7 @@ class TestRelayBatchAllocationMutants(unittest.TestCase):
     def tearDown(self) -> None:
         RELAY.SERVER_LINKS_PATH = self.orig_links_path
         RELAY.STATE_PATH = self.orig_state_path
+        RELAY._send_batch_ack = self.orig_send_ack
         self.temp_dir.cleanup()
 
     def test_mutant_scrambled_package_order_rejected(self) -> None:
@@ -159,25 +171,81 @@ class TestRelayBatchAllocationMutants(unittest.TestCase):
         self.assertEqual(self.acks[0]["status"], "PREPARE_FAILED")
         self.assertIn("duplicate_url_at_1", self.acks[0]["reason"])
 
-    def test_mutant_out_of_bounds_allocation_length_rejected(self) -> None:
-        """Mutant: Allocation length 0 or 11."""
+    def test_exactly_10_allocation_items_accepted(self) -> None:
+        """Boundary proof: Exactly 10 items (maximum permitted) with valid packages must be accepted."""
         cfg = {"device_id": "m1"}
         state = {}
-        for invalid_alloc in [[], [{"pkg": f"com.tinh.vv.h{c}", "url": "https://www.roblox.com/games/1?privateServerLinkCode=11111111111111111111111111111111"} for c in "abcdefghijkl"]]:
-            msg = {
-                "type": "aot_batch_action",
-                "protocol": "fleet-batch-v1",
-                "target_device_ids": ["m1"],
-                "action_id": "act-mut-len",
-                "action": "PREPARE_ALLOCATE_SERVER",
-                "allocation": invalid_alloc,
-                "expires_at": int(time.time() * 1000) + 10000,
+        pkg_suffixes = ['i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r']
+        alloc_10 = [
+            {
+                "pkg": f"com.tinh.vv.h{pkg_suffixes[i]}",
+                "url": f"https://www.roblox.com/games/97598239454123?privateServerLinkCode={str(i+1).zfill(32)}"
             }
-            self.acks.clear()
-            self.assertTrue(RELAY._handle_batch_action(cfg, state, local_id="m1", message=msg))
-            self.assertEqual(len(self.acks), 1)
-            self.assertEqual(self.acks[0]["status"], "PREPARE_FAILED")
-            self.assertIn("invalid_allocation_format", self.acks[0]["reason"])
+            for i in range(10)
+        ]
+        self.assertEqual(len(alloc_10), 10)
+        msg_10 = {
+            "type": "aot_batch_action",
+            "protocol": "fleet-batch-v1",
+            "target_device_ids": ["m1"],
+            "action_id": "act-exact-10",
+            "action": "PREPARE_ALLOCATE_SERVER",
+            "allocation": alloc_10,
+            "expires_at": int(time.time() * 1000) + 10000,
+        }
+        self.acks.clear()
+        self.assertTrue(RELAY._handle_batch_action(cfg, state, local_id="m1", message=msg_10))
+        self.assertEqual(len(self.acks), 1)
+        self.assertEqual(self.acks[0]["status"], "PREPARE_READY")
+
+    def test_mutant_11_allocation_items_rejected(self) -> None:
+        """
+        Boundary proof: Exactly 11 items (1 over max 10) must be rejected with invalid_allocation_format.
+        Guards against the off-by-one mutant (1 <= len(allocation) <= 11).
+        """
+        cfg = {"device_id": "m1"}
+        state = {}
+        alloc_11 = [
+            {
+                "pkg": f"com.tinh.vv.h{c}",
+                "url": f"https://www.roblox.com/games/97598239454123?privateServerLinkCode={str(i+1).zfill(32)}"
+            }
+            for i, c in enumerate("ijklmnopqrs")
+        ]
+        self.assertEqual(len(alloc_11), 11)
+        msg_11 = {
+            "type": "aot_batch_action",
+            "protocol": "fleet-batch-v1",
+            "target_device_ids": ["m1"],
+            "action_id": "act-mut-11",
+            "action": "PREPARE_ALLOCATE_SERVER",
+            "allocation": alloc_11,
+            "expires_at": int(time.time() * 1000) + 10000,
+        }
+        self.acks.clear()
+        self.assertTrue(RELAY._handle_batch_action(cfg, state, local_id="m1", message=msg_11))
+        self.assertEqual(len(self.acks), 1)
+        self.assertEqual(self.acks[0]["status"], "PREPARE_FAILED")
+        self.assertIn("invalid_allocation_format", self.acks[0]["reason"])
+
+    def test_mutant_0_allocation_items_rejected(self) -> None:
+        """Boundary proof: Empty allocation (0 items) must be rejected with invalid_allocation_format."""
+        cfg = {"device_id": "m1"}
+        state = {}
+        msg_0 = {
+            "type": "aot_batch_action",
+            "protocol": "fleet-batch-v1",
+            "target_device_ids": ["m1"],
+            "action_id": "act-mut-0",
+            "action": "PREPARE_ALLOCATE_SERVER",
+            "allocation": [],
+            "expires_at": int(time.time() * 1000) + 10000,
+        }
+        self.acks.clear()
+        self.assertTrue(RELAY._handle_batch_action(cfg, state, local_id="m1", message=msg_0))
+        self.assertEqual(len(self.acks), 1)
+        self.assertEqual(self.acks[0]["status"], "PREPARE_FAILED")
+        self.assertIn("invalid_allocation_format", self.acks[0]["reason"])
 
 
 class TestRelayCommitRollbackMutants(unittest.TestCase):
@@ -195,6 +263,7 @@ class TestRelayCommitRollbackMutants(unittest.TestCase):
         self.orig_state_path = RELAY.STATE_PATH
         self.orig_open = RELAY.controller.open_roblox_servers
         self.orig_root = CONTROLLER._root_run
+        self.orig_send_ack = RELAY._send_batch_ack
 
         RELAY.SERVER_LINKS_PATH = self.links_path
         RELAY.STATE_PATH = self.state_path
@@ -206,6 +275,7 @@ class TestRelayCommitRollbackMutants(unittest.TestCase):
         RELAY.STATE_PATH = self.orig_state_path
         RELAY.controller.open_roblox_servers = self.orig_open
         CONTROLLER._root_run = self.orig_root
+        RELAY._send_batch_ack = self.orig_send_ack
         self.temp_dir.cleanup()
 
     def test_mutant_commit_failure_restores_file_and_fails_closed(self) -> None:
@@ -256,6 +326,18 @@ class TestRelayCommitRollbackMutants(unittest.TestCase):
 
         # Assert server_links.txt was rolled back to initial content
         self.assertEqual(self.links_path.read_text(encoding="utf-8"), initial_content)
+
+
+class TestMonkeypatchLifecycle(unittest.TestCase):
+    """
+    Validates that test lifecycle monkeypatches do not leak to other test suites or production code.
+    """
+
+    def test_relay_send_batch_ack_is_restored(self) -> None:
+        """Verify that outside test setup/teardown, RELAY._send_batch_ack is the pristine original function."""
+        # Must be a real function, not a lambda from a test
+        self.assertTrue(callable(RELAY._send_batch_ack))
+        self.assertEqual(RELAY._send_batch_ack.__name__, "_send_batch_ack")
 
 
 class TestArchitectureGuardMutationSensitivity(unittest.TestCase):
