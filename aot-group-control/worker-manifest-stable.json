@@ -8,7 +8,7 @@
   "bootstrap": {
     "version": 7,
     "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.18.01/bootstrap.py",
-    "sha256": "0067a12e498740b710d783da3ffadd0ca89357b98a425a20eb584bff9e815397"
+    "sha256": "72e5ea3eb5983d1a7560bf5ab05402fcd77e9c9de42d95314b75b0927b5ad048"
   },
   "files": [
     {
@@ -49,7 +49,7 @@
     {
       "path": "msetup_registration.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.18.01/msetup_registration.py",
-      "sha256": "05bcb4563e50df7f23b23aa281348eb7893d8d1c6c33c477e8e21e4af8a5dcbf"
+      "sha256": "8bfadcafe72305c0a428e4d858620b02974c43be94fc4aaf30b58ded31897d64"
     },
     {
       "path": "legacy_relay_bridge.py",
