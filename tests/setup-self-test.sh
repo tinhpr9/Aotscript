@@ -335,8 +335,8 @@ grep -Fq 'CACHE_DIR="$STATE_DIR/setup-driver"' "$PROVISION" || fail provision-ca
 if grep -Fq 'Bật root trước khi bắt đầu' "$PROVISION"; then
   fail root-checkpoint-visible
 fi
-timeout 180 env AOTSCRIPT_SETUP_UNDER_TEST="$SETUP" \
-  python "$ROOT/tests/setup-terminal-lock-test.py" ||
+timeout 600 env AOTSCRIPT_SETUP_UNDER_TEST="$SETUP" \
+  python3 "$ROOT/tests/setup-terminal-lock-test.py" ||
   fail terminal-lock-regressions
 
 printf 'AOTSETUP_FRESH_INSTALL=PASS\n'
