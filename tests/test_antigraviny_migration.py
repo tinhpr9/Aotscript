@@ -807,6 +807,16 @@ class TestAntigravinyMigration(unittest.TestCase):
 
     def test_22_bootstrap_is_idempotent_with_core_materialize(self):
         """11. Bootstrap is idempotent with core materialization."""
+        repo_root = os.path.join(self.new_env_dir, "data", "data", "com.termux", "files", "home", "Aotscript-ecc-production")
+        os.makedirs(repo_root, exist_ok=True)
+        with open(os.path.join(repo_root, "ANTIGRAVINY_CORE.lock"), "w") as f:
+            json.dump({
+                "schema_version": "1.0",
+                "core_repo": self.mock_core_dir,
+                "core_sha": self.mock_core_sha,
+                "core_version": "1.0.0",
+                "compatibility_schema": "antigraviny-core/v1"
+            }, f)
 
         boot = AgyBootstrapEngine(
             target_root=self.new_env_dir,
