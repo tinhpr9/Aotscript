@@ -46,10 +46,26 @@ Mục tiêu:
 - mapping package hi..hr
 - không trùng server
 - fail-closed nếu thiếu/sai
+- 2PC transaction (PREPARE, COMMIT, ABORT) bảo vệ rollback khi mở game lỗi
+- Telegram UI (/phanserver, preview, confirm, cancel, offline gating)
+- single-flight lock tránh ghi đè batch đồng thời
 - đây là task riêng, không trộn với Discord/OmniControl core.
 
 Các path chính:
 - `tong_hop_link.txt`
+- `cloudflare-worker/worker.js` (parseTongHopLink, /phanserver command & callbacks)
+- `cloudflare-worker/fleet-state.js` (dispatchFleetBatch, 2PC state machine, single-flight gating)
+- `cloudflare-worker/allocate-server-selftest.mjs`
+- `cloudflare-worker/telegram-phanserver-selftest.mjs`
+- `cloudflare-worker/fleet-state-selftest.mjs`
+- `aot-group-control/relay.py` (PREPARE/COMMIT/ABORT 2PC handlers, rollback & journal)
+- `aot-group-control/controller.py` (open_roblox_servers)
+- `aot-group-control/allocate_server_selftest.py`
+- `aot-group-control/test_allocate_server.py`
+
+Checkpoint hiện tại:
+- PR #46, #49, #51, #61, #64, #67, #68 đã merge: Hoàn tất toàn bộ luồng PHÂN SERVER từ Telegram /phanserver qua 2PC FleetState đến Relay và Controller trên device.
+- Hệ thống đã được kiểm chứng bằng adversarial test suites trên Cloudflare Worker và Relay/Controller edges.
 
 ## PROJECT 3 — Device Setup / Provision / Clone Migration
 Mục tiêu:
@@ -136,23 +152,44 @@ Các path chính:
 - `rejoin-tool/rejoin_daemon.py`
 - `rejoin-tool/tests/`
 
-(Nếu auto-rejoin cần tham khảo source cũ thì xem `agent` tại root repo).
+## PROJECT 8 — Maintainability Hardening
+Mục tiêu: Giảm surface kết nối, ngăn chặn drift giao thức, bảo vệ ranh giới kiến trúc (zero runtime dependencies).
+- **Milestone M1**: Architecture Visibility & Enforceable Layer Boundary Guards (`tests/test_architecture_guards.py`).
+  - Python: `controller.py` & `runtime.py` là leaf execution/state boundaries; `updater.py` một chiều; không có circular dependency.
+  - JavaScript: `rollout.js` độc lập; `fleet-state.js` không import ngược `worker.js`; đồ thị DAG không chu trình.
+- **Milestone M2**: Targeted Mutation Testing & Test-Strength Hardening (`tests/test_mutation_hardening.py`).
+  - Phân Server: Kiểm thử bảo mật URL (host whitelist, hex link code), thứ tự package, allocation bounds (1..10), rollback khi launch lỗi.
+  - Architecture Guards: Kiểm thử mutation sensitivity của AST boundary guards đối với static/dynamic imports.
+- **Milestone M3**: Cross-Language Contract Guard (`contracts/fleet_batch_v1_contract.json`).
+  - Đảm bảo Cloudflare Worker / FleetState DO (JS) và Device Relay (Python) tuân thủ chính xác single source of truth cho giao thức `fleet-batch-v1`.
+  - Conformance runners: `cloudflare-worker/contract-conformance-selftest.mjs` & `tests/test_contract_conformance.py`.
+- **Milestone M4**: Dead Weight / Legacy Cleanup.
+  - Loại bỏ các file rác, file log CI cũ, script vá một lần và artifact zip PR lịch sử không còn consumer (`changed_files.txt`, `checks.txt`, `workflow_log.txt`, `patch_discord.js`, `pr46_changes.zip`, `pr_discord.zip`).
+- **Milestone M5**: Targeted Module Extraction / God-File Reduction (`cloudflare-worker/fleet-state-client.js`).
+  - Trích xuất pure transport & low-level Durable Object client cho FleetState ra khỏi `worker.js`, giảm causal surface và ngăn chặn circular dependency.
 
 ## CURRENT CHECKPOINTS
 | Project | Last known milestone | Status | Next step | Relevant PR |
 | --- | --- | --- | --- | --- |
 | PROJECT 1 (OmniControl) | Remove dead Python omnicontrol | Merged | Discord frontend/control surface (reuse core) | #45 |
-| PROJECT 2 (Phân Server) | Allocate Server feature | N/A | Implement unique server allocation | N/A |
+| PROJECT 2 (Phân Server) | Batch PHÂN SERVER 2PC & Telegram flow | Merged | Hoàn tất tích hợp & selftest | #46, #49, #51, #61, #64, #67, #68, #73 |
 | PROJECT 4 (Swift Backup) | BACKUP_RESTORE_DATA state machine | Open | Review & Merge PR #42 | #42 |
+| PROJECT 8 (Maintainability) | M1: Architecture Visibility & Layer Boundary Guards | Merged | M2: Targeted Mutation Testing | #74 |
+| PROJECT 8 (Maintainability) | M2: Targeted Mutation Testing & Test Hardening | Merged | M3: Cross-Language Contract Guard | #75 |
+| PROJECT 8 (Maintainability) | M3: Cross-Language Contract Guard | Merged | M4: Dead Weight & Legacy Cleanup | #76 |
+| PROJECT 8 (Maintainability) | M4: Dead Weight & Legacy Cleanup | Merged | M5: Module Extraction (FleetState Client) | #77 |
+| PROJECT 8 (Maintainability) | M5: Module Extraction (FleetState Client) | In Progress | Module extraction & verification PR | maint/fleet-client-extraction-m5 |
 
 ## FILE OWNERSHIP / ROUTING
 | Path | Project | Purpose | Read when... |
 | --- | --- | --- | --- |
-| `cloudflare-worker/` | Project 1 | AOT Hub, Telegram, state management | Modifying server, worker, or Telegram bot logic |
-| `aot-group-control/` | Project 1, 4, 5 | Python client for Worker | Modifying device worker actions, relay, backup/restore |
+| `contracts/` | Project 8 | Canonical cross-language protocol schemas & contracts | Modifying cross-language wire protocols or action schemas |
+| `cloudflare-worker/` | Project 1, 2, 8 | AOT Hub, Telegram, Phân server 2PC, state management | Modifying server, worker, or Telegram bot logic |
+| `aot-group-control/` | Project 1, 2, 4, 5, 8 | Python client for Worker, Phân server relay/controller | Modifying device worker actions, relay, backup/restore, allocate |
+| `tests/` | Project 3, 5, 8 | Architecture guards, integration & unit tests | Adding architecture guards, regression testing |
 | `tong_hop_link.txt` | Project 2 | Server source links | Working on Batch Phân Server |
 | `setup.sh`, `provision-device.sh`, vv | Project 3 | Device Setup, migration | Updating setup checkpoint, Termux bootstrap |
-| `aot-group-control/controller.py` | Project 4 | Swift Backup automation | Fixing backup/restore UI automation steps |
+| `aot-group-control/controller.py` | Project 2, 4, 8 | Swift Backup & Roblox server opening automation | Fixing backup/restore UI automation steps, server links launch |
 | `.github/workflows/`, `scripts/` | Project 5 | Release packaging | Troubleshooting worker release CI/CD |
 | `AGENTS.md` | Project 1, 5 | Release / Safety Rules | ALWAYS read before touching `aot-group-control` or `cloudflare-worker` |
 | `agent`, `Marmotgag2`, `Updatedelta` | Project 6 | Misc device scripts, solver | Updating solvers or Delta tools |
