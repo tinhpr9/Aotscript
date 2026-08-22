@@ -517,10 +517,12 @@ if [ "$HAVE_ROOT" = 1 ]; then
     fi
     DENSITY=$(( (SHORT * 160 + 350) / 700 ))
     [ "$DENSITY" -lt 72 ] && DENSITY=72
-    root "wm density $DENSITY" ||
+    if root "wm density $DENSITY"; then
+      sleep 2
+      ok "Đã đặt density=$DENSITY, gần 700 dp"
+    else
       warn "Không đặt được density (bỏ qua)"
-    sleep 2
-    ok "Đã đặt density=$DENSITY, gần 700 dp"
+    fi
   else
     warn "Không đọc được Physical size; chưa đổi density"
   fi
@@ -1230,7 +1232,7 @@ install_termux_boot_app() {
   local version_code=""
 
   # Non-root check: pm list packages does not require root
-  if pm list packages 2>/dev/null | grep -qx "package:$package"; then
+  if pm list packages 2>/dev/null | grep -Fqx "package:$package"; then
     ok "Termux:Boot đã được cài"
     return 0
   fi
