@@ -91,7 +91,7 @@ SWIFT_OPEN_TIMEOUT_SECONDS = 45.0
 SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
-WORKER_VERSION = "aot-worker-2026.08.23.01"
+WORKER_VERSION = "aot-worker-2026.08.23.02"
 WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
 
 
@@ -2239,8 +2239,6 @@ def fleet_loop(*, open_package: str | None = None) -> int:
         raise AotRelayError("invalid_local_device_id")
     if group not in {"NOVA", "MARMOT"}:
         raise AotRelayError("invalid_local_device_group")
-    if not controller.root_available():
-        raise AotRelayError("root_not_available")
     if open_package:
         _launch_package(open_package)
     cfg = load_agent_config()
