@@ -40,6 +40,7 @@ jobs:
           fi
           python3 scripts/prepare_worker_release.py --check
           python3 -m py_compile aot-group-control/*.py scripts/build-worker-release.py scripts/verify_worker_release.py scripts/release_version.py scripts/prepare_worker_release.py
+          python3 aot-group-control/worker_smoke_test.py
           for test in aot-group-control/*selftest.py; do timeout 180 python3 "$test"; done
           (cd cloudflare-worker && npm test)
           python3 -m unittest discover -s tests -v

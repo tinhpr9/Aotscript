@@ -235,6 +235,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('test "$RELEASE_VERSION" = "$CANONICAL_VERSION"', text)
         self.assertIn("prepare_worker_release.py --check", text)
+        self.assertIn("aot-group-control/worker_smoke_test.py", text)
         self.assertIn("https://uploads.github.com/repos/${GITHUB_REPOSITORY}", text)
         self.assertNotIn("/immutable-releases", text)
         self.assertNotIn("len(data[\"assets\"])", text)
