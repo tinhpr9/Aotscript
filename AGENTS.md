@@ -75,7 +75,5 @@ worker actions in `cloudflare-worker/`.
 - `BACKUP_RESTORE_DATA` (introduced in PR #34) and `ALLOCATE_SERVER` are the explicitly permitted exceptions.
   `BACKUP_RESTORE_DATA` is a fixed, allowlisted, fail-closed, 11-step bounded semantic state machine.
   `ALLOCATE_SERVER` securely fetches a globally managed link list to issue server allocations directly to explicit target devices.
-  Neither accepts arbitrary labels, packages, or tap instructions from the browser. The server dispatches opaque action tokens or strictly server-validated URL allocations to selected ONLINE fleet members.  All safety gates, exactly-once
-  guarantees, and monotonic stage ACKs are enforced device-side.  This action
-  may only be extended, renamed, or removed through a future maintainer-
-  approved PR that updates this policy and the smoke-test guard consistently.
+  On rooted devices, `ALLOCATE_SERVER` executes via root intent dispatch. On non-root devices, only the intended Android userspace `am start` view intent dispatch with fixed Roblox package and URL validation is permitted; all root-required controller operations remain fail-closed.
+  Neither accepts arbitrary labels, packages, or tap instructions from the browser. The server dispatches opaque action tokens or strictly server-validated URL allocations to selected ONLINE fleet members. All safety gates, argument validations, fail-closed timeout/returncode handling, exactly-once guarantees, and monotonic stage ACKs are enforced device-side. This action may only be extended, renamed, or removed through a future maintainer-approved PR that updates this policy and the smoke-test guard consistently.

@@ -482,6 +482,8 @@ class RootRunMock:
     def __call__(self, command, *args, **kwargs):
         if self.should_fail:
             raise controller.AotControllerError("Simulated root run error")
+        if command == "id":
+            return "uid=0(root) gid=0(root)"
         recorded_root_commands.append(command)
         return "OK"
 
@@ -602,8 +604,80 @@ finally:
     relay.SERVER_LINKS_PATH = temp_path / "server_links.txt"
     relay.STATE_PATH = temp_path / "aot_group_state.json"
 
+# T21: Non-Root Execution Integration Test (Relay -> Controller.open_roblox_servers -> userspace am start)
+temp_dir4 = tempfile.TemporaryDirectory()
+relay.SERVER_LINKS_PATH = pathlib.Path(temp_dir4.name) / "server_links.txt"
+links_path4 = str(relay.SERVER_LINKS_PATH)
+state4 = {}
+relay.STATE_PATH = pathlib.Path(temp_dir4.name) / "aot_group_state.json"
+
+orig_subprocess_run = controller.subprocess.run
+orig_root_avail = controller.root_available
+userspace_commands = []
+
+class SubprocessRunMock:
+    def __init__(self):
+        self.should_fail = False
+    def __call__(self, argv, *args, **kwargs):
+        userspace_commands.append(argv)
+        class CompletedProc:
+            returncode = 1 if self.should_fail else 0
+            stdout = ""
+            stderr = "am start mock failure" if self.should_fail else ""
+        return CompletedProc()
+
+mock_subproc = SubprocessRunMock()
+
+try:
+    controller.root_available = lambda: False
+    controller.subprocess.run = mock_subproc
+    relay.controller.open_roblox_servers = controller.open_roblox_servers
+
+    alloc_nonroot = [
+        {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111"}
+    ]
+
+    msg21_prep = {
+        "type": "aot_batch_action",
+        "protocol": "fleet-batch-v1",
+        "target_device_ids": ["m1"],
+        "action_id": "act-21-nonroot",
+        "action": "PREPARE_ALLOCATE_SERVER",
+        "allocation": alloc_nonroot,
+        "expires_at": int(time.time() * 1000) + 10000
+    }
+    acks.clear()
+    assert relay._handle_batch_action(cfg, state4, local_id="m1", message=msg21_prep) is True
+    assert acks[-1]["status"] == "PREPARE_READY"
+
+    msg21_commit = {
+        "type": "aot_batch_action",
+        "protocol": "fleet-batch-v1",
+        "target_device_ids": ["m1"],
+        "action_id": "act-21-nonroot",
+        "action": "COMMIT_ALLOCATE_SERVER",
+        "expires_at": int(time.time() * 1000) + 10000
+    }
+    acks.clear()
+    userspace_commands.clear()
+    assert relay._handle_batch_action(cfg, state4, local_id="m1", message=msg21_commit) is True
+    assert acks[-2]["status"] == "ALLOCATED"
+    assert acks[-1]["status"] == "OPENED"
+    assert len(userspace_commands) == 1
+    assert userspace_commands[0][:4] == ["am", "start", "-a", "android.intent.action.VIEW"]
+
+finally:
+    controller.root_available = orig_root_avail
+    controller.subprocess.run = orig_subprocess_run
+    relay.controller.open_roblox_servers = orig_relay_open
+    temp_dir4.cleanup()
+    relay.SERVER_LINKS_PATH = temp_path / "server_links.txt"
+    relay.STATE_PATH = temp_path / "aot_group_state.json"
+
 # Assert no monkeypatch leaks
 assert controller._root_run is orig_root_run
+assert controller.root_available is orig_root_avail
+assert controller.subprocess.run is orig_subprocess_run
 assert relay.controller.open_roblox_servers is orig_relay_open
 assert time.sleep is orig_sleep
 
