@@ -126,8 +126,9 @@ install_local_launcher() {
       rm -f "$stage"
       return 0
     else
+      local bootstrap_url="${AOTSCRIPT_SETUP_URL:-$RAW_BASE/setup.sh}"
       curl -fsSL --retry 3 --connect-timeout 15 </dev/null \
-        "$MAIN_SETUP_URL?t=$(date +%s)" -o "$stage" || {
+        "$bootstrap_url?t=$(date +%s)" -o "$stage" || {
           rm -f "$stage"
           die "Không tải được setup.sh cho local launcher."
         }

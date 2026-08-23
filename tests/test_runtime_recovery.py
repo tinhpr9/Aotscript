@@ -561,6 +561,10 @@ class TestFingerprintHardwareVerificationAndCloneDetection(unittest.TestCase):
         setup_sh = (REPO_ROOT / "setup.sh").read_text(encoding="utf-8")
         self.assertIn('AOTSCRIPT_SETUP_M166_URL:-$RAW_BASE/setup-m166.sh', setup_sh)
 
+    def test_install_local_launcher_uses_raw_base_for_bootstrap_url(self) -> None:
+        setup_sh = (REPO_ROOT / "setup.sh").read_text(encoding="utf-8")
+        self.assertIn('AOTSCRIPT_SETUP_URL:-$RAW_BASE/setup.sh', setup_sh)
+
 
 if __name__ == "__main__":
     unittest.main()
