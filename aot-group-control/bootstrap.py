@@ -347,17 +347,29 @@ def ensure_legacy_release() -> pathlib.Path | None:
     if current:
         return current
     legacy_names = {"relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py"}
-    if not all((ROOT / name).is_file() for name in legacy_names):
+    if all((ROOT / name).is_file() for name in legacy_names):
+        legacy = RELEASES / "legacy-pr13"
+        legacy.mkdir(parents=True, exist_ok=True)
+        for name in legacy_names:
+            destination = legacy / name
+            if not destination.exists():
+                destination.write_bytes((ROOT / name).read_bytes())
+        _atomic_link(CURRENT, legacy)
+        _atomic_link(LAST_GOOD, legacy)
+        return legacy
+    try:
+        manifest_url = "https://raw.githubusercontent.com/tinhpr9/Aotscript/main/aot-group-control/worker-manifest-stable.json"
+        with tempfile.TemporaryDirectory(prefix="aot-init-manifest-") as tmpdir:
+            manifest_file = pathlib.Path(tmpdir) / "worker-manifest-stable.json"
+            _download(manifest_url, manifest_file)
+            raw = _read_json(manifest_file)
+            manifest = validate_manifest(raw, DEFAULT_STARTUP_CHANNEL)
+            release_dir = stage_release(manifest, manifest["version"])
+            _atomic_link(CURRENT, release_dir)
+            _atomic_link(LAST_GOOD, release_dir)
+            return release_dir
+    except Exception:
         return None
-    legacy = RELEASES / "legacy-pr13"
-    legacy.mkdir(parents=True, exist_ok=True)
-    for name in legacy_names:
-        destination = legacy / name
-        if not destination.exists():
-            destination.write_bytes((ROOT / name).read_bytes())
-    _atomic_link(CURRENT, legacy)
-    _atomic_link(LAST_GOOD, legacy)
-    return legacy
 
 
 def _config() -> tuple[dict[str, Any], str]:
