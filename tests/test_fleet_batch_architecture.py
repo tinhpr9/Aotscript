@@ -591,5 +591,43 @@ class TestFleetLoopResilience(unittest.TestCase):
                 self.assertEqual(resolved, supervisor_root / "current" / "relay.py")
                 self.assertEqual(resolved.resolve(), (releases_dir / "relay.py").resolve())
 
+    @mock.patch("fleet_relay.load_agent_config")
+    @mock.patch("fleet_relay._read_small")
+    @mock.patch("fleet_relay.controller.root_available", return_value=False)
+    @mock.patch("fleet_relay.ws_connect")
+    def test_non_root_fleet_loop_startup_and_fallback_status(
+        self, mock_ws_connect, mock_root, mock_read, mock_cfg
+    ):
+        mock_read.side_effect = lambda p: "m74" if "device_id" in str(p) else "NOVA"
+        mock_cfg.return_value = {
+            "worker_report_url": "https://hub.example.com/report",
+            "agent_report_secret": "sec",
+        }
+        mock_sock = mock.MagicMock()
+        mock_ws_connect.return_value = mock_sock
+
+        with mock.patch.object(self.RELAY.controller, "snapshot", side_effect=self.RELAY.controller.AotControllerError("no_root")), \
+             mock.patch.object(self.RELAY, "_ws_recv_frame", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.RELAY.fleet_loop()
+
+        self.assertEqual(mock_ws_connect.call_count, 1)
+
+    @mock.patch("fleet_relay._read_small")
+    @mock.patch("fleet_relay.controller.root_available", return_value=False)
+    def test_root_required_actions_fail_closed_without_root(self, mock_root, mock_read):
+        mock_read.side_effect = lambda p: "m74" if "device_id" in str(p) else "NOVA"
+        with self.assertRaises(self.RELAY.AotRelayError) as ctx1:
+            self.RELAY.reference_loop(session_id="s1", open_package=None)
+        self.assertEqual("root_not_available", str(ctx1.exception))
+
+        with self.assertRaises(self.RELAY.AotRelayError) as ctx2:
+            self.RELAY.follower_loop(session_id="s1", reference_device="m1", open_package=None)
+        self.assertEqual("root_not_available", str(ctx2.exception))
+
+        with self.assertRaises(self.RELAY.AotRelayError) as ctx3:
+            self.RELAY.reference_test(session_id="s1", follower_id="m99", selector="sel", open_package="com.pkg")
+        self.assertEqual("root_not_available", str(ctx3.exception))
+
 
 if __name__ == "__main__": unittest.main()

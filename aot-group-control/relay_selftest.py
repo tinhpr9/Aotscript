@@ -3,7 +3,7 @@ import importlib.util, pathlib, sys, tempfile, time
 root = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("relay", root / "relay.py")
 module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
-assert module.WORKER_VERSION == "aot-worker-2026.08.23.01"
+assert module.WORKER_VERSION == "aot-worker-2026.08.23.02"
 assert module.websocket_url("https://example.test/report", device_id="m301") == "wss://example.test/aot/control/ws?device_id=m301"
 assert module.build_parser().parse_args(["fleet"]).command == "fleet"
 assert "backup_restore_data_semantic" in module.WORKER_CAPABILITIES
@@ -189,12 +189,25 @@ assert len(sent_status) == 0, "No status frame should be sent when snapshot fail
 
 # When previous_fingerprint is None (initial connect): sends fallback frame with worker_version & capabilities
 sent_status.clear()
+module.controller.root_available = lambda: False
 res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
 assert res is None
 assert len(sent_status) == 1
 assert sent_status[0]["fallback"] is True
-assert sent_status[0]["worker_version"] == "aot-worker-2026.08.23.01"
+assert sent_status[0]["worker_version"] == "aot-worker-2026.08.23.02"
 assert "allocate_server_2pc" in sent_status[0]["capabilities"]
+assert "dynamic_update_channel" in sent_status[0]["capabilities"]
+assert "fleet_batch_v1" in sent_status[0]["capabilities"]
+assert "swift_apps_semantic" not in sent_status[0]["capabilities"]
+assert "backup_restore_data_semantic" not in sent_status[0]["capabilities"]
+
+# With root available: capabilities include root-only semantic capabilities
+module.controller.root_available = lambda: True
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
+assert "swift_apps_semantic" in sent_status[0]["capabilities"]
+assert "backup_restore_data_semantic" in sent_status[0]["capabilities"]
+module.controller.root_available = lambda: False
 
 # Transport error propagation: any OSError from _ws_send_json must propagate unsuppressed
 def failing_send(sock, payload):
@@ -213,6 +226,107 @@ sent_status.clear()
 res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
 assert res == "fp1"
 assert "preview_sha256" in sent_status[-1]
+
+# Non-root fleet_loop startup contract:
+# Prove fleet_loop connects and runs without root_available()
+orig_root_avail = module.controller.root_available
+orig_ws_connect = module.ws_connect
+orig_recv_frame = module._ws_recv_frame
+orig_read_small = module._read_small
+orig_agent_cfg = module.load_agent_config
+
+class DummySocket:
+    def settimeout(self, _t): pass
+    def close(self): pass
+
+try:
+    module.controller.root_available = lambda: False
+    module._read_small = lambda path: "m74" if "device_id" in str(path) else "NOVA"
+    module.load_agent_config = lambda: {"worker_report_url": "https://example.test/agent/report", "agent_report_secret": "test-secret"}
+    connected_urls = []
+    def fake_connect(url, secret):
+        connected_urls.append(url)
+        return DummySocket()
+    module.ws_connect = fake_connect
+    def fake_recv_stop(sock):
+        raise KeyboardInterrupt()
+    module._ws_recv_frame = fake_recv_stop
+    try:
+        module.fleet_loop()
+        assert False, "Expected KeyboardInterrupt from loop"
+    except KeyboardInterrupt:
+        pass
+    # open_package non-root launch and error resilience tests:
+    # 1. Invalid package format rejected
+    try:
+        module._launch_package("com.invalid; rm -rf /")
+        assert False, "invalid package name must be rejected"
+    except module.AotRelayError as exc:
+        assert str(exc) == "invalid_package"
+
+    # 2. Userspace package launch executed without root
+    launched_cmds = []
+    def fake_subprocess_run(cmd, **_kw):
+        launched_cmds.append(cmd)
+        class Res:
+            returncode = 0
+            stdout = "com.test.pkg/.MainActivity\n"
+            stderr = ""
+        return Res()
+
+    orig_sub_run = module.subprocess.run
+    orig_sleep = module.time.sleep
+    try:
+        module.subprocess.run = fake_subprocess_run
+        module.time.sleep = lambda _t: None
+        module._launch_package("com.test.pkg")
+        assert any("am" in cmd and "com.test.pkg" in str(cmd) for cmd in launched_cmds), "Userspace am start must be invoked"
+
+        # 3. fleet_loop continues to connect WebSocket even if optional open_package fails/times out
+        def fake_failing_run(cmd, **_kw):
+            class Res:
+                returncode = 1
+                stdout = ""
+                stderr = "Activity not found"
+            return Res()
+
+        module.subprocess.run = fake_failing_run
+        connected_urls.clear()
+        try:
+            module.fleet_loop(open_package="com.test.failing")
+            assert False, "Expected KeyboardInterrupt from loop"
+        except KeyboardInterrupt:
+            pass
+        assert len(connected_urls) == 1, "fleet_loop must still connect WebSocket after optional open_package failure"
+
+        # 4. Root-required actions must remain strictly fail-closed when root is unavailable
+        try:
+            module.reference_loop(session_id="s1", open_package=None)
+            assert False, "reference_loop must fail closed without root"
+        except module.AotRelayError as exc:
+            assert str(exc) == "root_not_available"
+
+        try:
+            module.follower_loop(session_id="s1", reference_device="m1", open_package=None)
+            assert False, "follower_loop must fail closed without root"
+        except module.AotRelayError as exc:
+            assert str(exc) == "root_not_available"
+
+        try:
+            module.reference_test(session_id="s1", follower_id="m99", selector="sel", open_package="com.pkg")
+            assert False, "reference_test must fail closed without root"
+        except module.AotRelayError as exc:
+            assert str(exc) == "root_not_available"
+    finally:
+        module.subprocess.run = orig_sub_run
+        module.time.sleep = orig_sleep
+
+finally:
+    module.controller.root_available = orig_root_avail
+    module.ws_connect = orig_ws_connect
+    module._ws_recv_frame = orig_recv_frame
+    module._read_small = orig_read_small
+    module.load_agent_config = orig_agent_cfg
 
 print("AOT_RELAY_SELFTEST=OK")
 
