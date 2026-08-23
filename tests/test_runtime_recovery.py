@@ -300,6 +300,31 @@ class TestFingerprintStrategyPersistence(unittest.TestCase):
         expected = hashlib.sha256(b"myandroidid|myserial").hexdigest()
         self.assertEqual(expected, res.stdout.strip())
 
+    def test_strategy_not_persisted_before_binding(self) -> None:
+        # Before binding, host_fingerprint must not create host_fingerprint_signals file
+        cmd = """
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "myandroidid" ;;
+            *"getprop ro.boot.serialno"*) echo "myserial" ;;
+            *) echo "" ;;
+          esac
+        }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertEqual(0, res.returncode, res.stderr)
+        signals_file = self.state_dir / "host_fingerprint_signals"
+        self.assertFalse(signals_file.exists(), "Strategy file must not be persisted before binding")
+
+        # After binding, host_fingerprint persists host_fingerprint_signals file
+        fp = res.stdout.strip()
+        (self.state_dir / "host_fingerprint").write_text(fp + "\n", encoding="utf-8")
+        res2 = self._run_sourced(cmd)
+        self.assertEqual(0, res2.returncode, res2.stderr)
+        self.assertTrue(signals_file.exists(), "Strategy file must be persisted after binding")
+        self.assertEqual("both", signals_file.read_text().strip())
+
     def test_token_binding_preserved_when_root_becomes_available(self) -> None:
         # First run: no root → token binding created
         cmd_no_root = """

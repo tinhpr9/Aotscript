@@ -488,11 +488,11 @@ host_fingerprint() {
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     raw="${AOTSCRIPT_SETUP_HOST_ID:-test-host}"
   else
-    if [ -f "$binding_file" ]; then
+    if [ -s "$binding_file" ]; then
       bound_hash="$(cat "$binding_file" 2>/dev/null | tr -d '\r\n ' || true)"
-    fi
-    if [ -f "$signals_file" ]; then
-      signals="$(cat "$signals_file" 2>/dev/null | tr -d '\r\n ' || true)"
+      if [ -s "$signals_file" ]; then
+        signals="$(cat "$signals_file" 2>/dev/null | tr -d '\r\n ' || true)"
+      fi
     fi
     token_file="$SETUP_STATE_DIR/host_token"
     if [ -f "$token_file" ]; then
@@ -507,7 +507,7 @@ host_fingerprint() {
     if [ "$signals" = "token" ] || { [ -n "$token" ] && [ -n "$bound_hash" ] && [ "$(printf '%s' "token:$token" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; }; then
       if [ -n "$token" ]; then
         raw="token:$token"
-        [ -n "$signals" ] || { mkdir -p "$SETUP_STATE_DIR"; printf 'token\n' > "$signals_file"; }
+        [ -z "$bound_hash" ] || { mkdir -p "$SETUP_STATE_DIR"; printf 'token\n' > "$signals_file"; }
       fi
     fi
 
@@ -560,18 +560,14 @@ host_fingerprint() {
         fi
         [ -z "$signals" ] || { mkdir -p "$SETUP_STATE_DIR"; printf '%s\n' "$signals" > "$signals_file"; }
       else
-        # Fresh first bind: detect available signals and pin composition
+        # Fresh first bind (unbound): detect available signals for initial inspection
         if [ -n "$android_id" ] && [ -n "$serial" ]; then
-          signals="both"
           raw="$android_id|$serial"
         elif [ -n "$android_id" ]; then
-          signals="android_id"
           raw="$android_id|"
         elif [ -n "$serial" ]; then
-          signals="serial"
           raw="|$serial"
         else
-          signals="token"
           if [ -z "$token" ]; then
             token="$(python -c 'import uuid, time; print(f"{uuid.uuid4().hex}-{int(time.time()*1000)}")' 2>/dev/null || date +%s%N 2>/dev/null || date +%s)-$$"
             mkdir -p "$SETUP_STATE_DIR"
@@ -582,8 +578,6 @@ host_fingerprint() {
           [ -n "$token" ] || die "Không tạo được token host bền vững."
           raw="token:$token"
         fi
-        mkdir -p "$SETUP_STATE_DIR"
-        printf '%s\n' "$signals" > "$signals_file"
       fi
     fi
   fi
@@ -1255,6 +1249,7 @@ choose_identity() {
     fi
     confirm_once "Xác nhận identity $device_id / $group"
     identity_call bind "$device_id" "$group" "$host_hash" >/dev/null || die "Không bind được identity."
+    host_fingerprint >/dev/null || true
     SELECTED_DEVICE_ID="$device_id"
     SELECTED_DEVICE_GROUP="$group"
     return 0
@@ -1264,6 +1259,7 @@ choose_identity() {
   identity_call plan "$source_id" "$device_id" "$group" "$host_hash" >/dev/null ||
     die "Clone state không đủ điều kiện migration an toàn."
   if resume_pending_migration "$host_hash"; then
+    host_fingerprint >/dev/null || true
     SELECTED_DEVICE_ID="$device_id"
     SELECTED_DEVICE_GROUP="$group"
     return 0
