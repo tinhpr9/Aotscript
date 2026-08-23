@@ -561,20 +561,25 @@ download_zip() {
   local id="$1"
   local out="$2"
   local part="${out}.part.$$"
+  if [ -f "$out" ] && unzip -t "$out" >/dev/null 2>&1; then
+    ok "ZIP đã có sẵn và hợp lệ: $(basename "$out")"
+    return 0
+  fi
   echo
   echo "[*] Đang tải: $(basename "$out")"
   rm -f "$part"
-  if ! gdown "$id" -O "$part"; then
+  local try_count=0
+  while [ "$try_count" -lt 3 ]; do
+    if gdown "$id" -O "$part" && [ -s "$part" ] && unzip -t "$part" >/dev/null 2>&1; then
+      break
+    fi
+    try_count=$((try_count + 1))
     rm -f "$part"
-    die "Tải thất bại: $(basename "$out")"
-  fi
-  [ -s "$part" ] || {
+    [ "$try_count" -lt 3 ] && sleep 2
+  done
+  if [ ! -s "$part" ] || ! unzip -t "$part" >/dev/null 2>&1; then
     rm -f "$part"
-    die "File tải về trống: $(basename "$out")"
-  }
-  if ! unzip -t "$part" >/dev/null 2>&1; then
-    rm -f "$part"
-    die "ZIP bị lỗi: $(basename "$out")"
+    die "Tải thất bại hoặc ZIP bị lỗi: $(basename "$out")"
   fi
   mv -f "$part" "$out" ||
     die "Không lưu được: $(basename "$out")"
@@ -1348,13 +1353,15 @@ PY
   unzip -t "$apk_part" >/dev/null 2>&1 ||
     die "APK Termux:Boot không hợp lệ"
 
-  mv -f "$apk_part" "$apk"
+  if ! root "pm install -r '$apk'" >/dev/null 2>&1; then
+    warn "Cài Termux:Boot tự động thất bại; relay vẫn hoạt động bình thường qua Termux session"
+    return 0
+  fi
 
-  root "pm install -r '$apk'" >/dev/null ||
-    die "Cài Termux:Boot thất bại; hãy dùng APK cùng nguồn ký với ứng dụng Termux"
-
-  root "pm path $package" >/dev/null 2>&1 ||
-    die "Không xác nhận được Termux:Boot sau khi cài"
+  if ! root "pm path $package" >/dev/null 2>&1; then
+    warn "Không xác nhận được Termux:Boot sau khi cài; bỏ qua"
+    return 0
+  fi
 
   root "monkey -p $package -c android.intent.category.LAUNCHER 1" \
     >/dev/null 2>&1 || true
@@ -1622,9 +1629,19 @@ printf '%s\n' "$BOOTSTRAP_STATUS" |
     die "AOT Bootstrap không phải version 2"
   }
 
-RUNTIME_STATUS="$(
-  python "$HOME/.aot-group-control/current/runtime.py" status 2>&1
-)" || {
+RUNTIME_STATUS=""
+for i in $(seq 1 15); do
+  RUNTIME_STATUS="$(
+    python "$HOME/.aot-group-control/current/runtime.py" status 2>&1
+  )" || true
+  if printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' &&
+     printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$'; then
+    break
+  fi
+  sleep 1
+done
+
+[ -n "$RUNTIME_STATUS" ] || {
   rm -f "$AOT_REGISTER_HELPER"
   die "AOT runtime status thất bại"
 }

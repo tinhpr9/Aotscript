@@ -444,7 +444,7 @@ ensure_packages() {
 }
 
 host_fingerprint() {
-  local raw="" android_id="" serial=""
+  local raw="" android_id="" serial="" fallback_id=""
   if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     raw="${AOTSCRIPT_SETUP_HOST_ID:-test-host}"
@@ -453,7 +453,25 @@ host_fingerprint() {
     serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
     case "$android_id" in null|unknown) android_id="" ;; esac
     case "$serial" in null|unknown) serial="" ;; esac
-    [ -n "$android_id$serial" ] && raw="$android_id|$serial"
+    if [ -n "$android_id$serial" ]; then
+      raw="$android_id|$serial"
+    else
+      fallback_id="$(getprop ro.build.display.id 2>/dev/null | tr -d '\r\n ' || true)|$(getprop ro.product.model 2>/dev/null | tr -d '\r\n ' || true)|$(getprop ro.build.id 2>/dev/null | tr -d '\r\n ' || true)"
+      if [ "$fallback_id" = "||" ]; then
+        fallback_id=""
+      fi
+      if [ -n "$fallback_id" ]; then
+        raw="prop:$fallback_id"
+      elif [ -f "$SETUP_STATE_DIR/host_token" ]; then
+        raw="token:$(cat "$SETUP_STATE_DIR/host_token" 2>/dev/null | tr -d '\r\n ' || true)"
+      else
+        local token
+        token="$(date +%s%N 2>/dev/null || date +%s)-$$"
+        mkdir -p "$SETUP_STATE_DIR"
+        printf '%s\n' "$token" > "$SETUP_STATE_DIR/host_token"
+        raw="token:$token"
+      fi
+    fi
   fi
   [ -n "$raw" ] || die "Không tạo được fingerprint ổn định cho máy hiện tại."
   printf '%s' "$raw" | sha256sum | awk '{print $1}'
