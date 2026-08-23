@@ -458,7 +458,12 @@ class Phase4DependencyAutomationGuards(unittest.TestCase):
         # Match real promptfoo workflow
         match = re.search(py_match_pattern, promptfoo_content)
         self.assertIsNotNone(match, f"Custom regex {match_pattern} must match promptfoo installation")
-        self.assertEqual("0.122.0", match.group("currentValue"))
+        extracted_version = match.group("currentValue")
+        self.assertTrue(
+            bool(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", extracted_version)),
+            f"Extracted version {extracted_version} must be a valid semver string"
+        )
+        self.assertIn(f"npm install -g promptfoo@{extracted_version}", promptfoo_content)
         
         # Failure test: Must NOT match unrelated npm install
         unrelated_npm = "npm install -g other-tool@1.0.0"
