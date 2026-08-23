@@ -14,6 +14,8 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import release_version
 SCRIPT = ROOT / "scripts/verify_worker_release.py"
 WORKFLOW = ROOT / ".github/workflows/release-worker.yml"
 SPEC = importlib.util.spec_from_file_location("verify_worker_release", SCRIPT)
@@ -198,11 +200,12 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
     def test_resume_rebuild_reproduces_all_release_assets_from_source(self) -> None:
         first = self.root / "first-build"
         rebuilt = self.root / "rebuilt"
+        canonical_ver = release_version.load_canonical_version(ROOT / "aot-group-control/worker-release.json")["version"]
         command = [
             sys.executable,
             str(ROOT / "scripts/build-worker-release.py"),
             "--version",
-            "2026.08.23.03",
+            canonical_ver,
             "--commit",
             self.commit,
             "--source-root",
@@ -353,7 +356,7 @@ class DeterministicReleaseBuilderTests(unittest.TestCase):
             out1 = pathlib.Path(d1) / "release"
             out2 = pathlib.Path(d2) / "release"
             commit = "c" * 40
-            ver = "2026.08.23.03"
+            ver = release_version.load_canonical_version(ROOT / "aot-group-control/worker-release.json")["version"]
             cmd = [
                 sys.executable,
                 str(ROOT / "scripts/build-worker-release.py"),
