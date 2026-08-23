@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "node --experimental-vm-modules allocate-server-selftest.mjs && node --experimental-vm-modules aot-ack-selftest.mjs && node --experimental-vm-modules contract-conformance-selftest.mjs && node --experimental-vm-modules discord-targets-selftest.mjs && node --experimental-vm-modules fleet-state-client-selftest.mjs && node --experimental-vm-modules fleet-state-selftest.mjs && node --experimental-vm-modules registration-contract-selftest.mjs && node --experimental-vm-modules telegram-phanserver-selftest.mjs && node --experimental-vm-modules telegram-targets-selftest.mjs",
+    "test": "node run-selftests.mjs",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

@@ -34,6 +34,10 @@ jobs:
       - name: Run Python unit tests
         run: python3 -m unittest discover -s tests -v
 
+      - name: Run rejoin-tool tests
+        working-directory: rejoin-tool
+        run: python3 -m unittest discover -s tests -v
+
       - name: Run AOT Group Control selftests
         run: |
           python3 aot-group-control/updater_selftest.py
@@ -81,10 +85,10 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install dependencies
+        working-directory: cloudflare-worker
+        run: npm ci
+
       - name: Run Cloudflare Worker selftests
         working-directory: cloudflare-worker
-        run: |
-          for f in *-selftest.mjs; do
-            echo "=== RUNNING $f ==="
-            node --experimental-vm-modules "$f"
-          done
+        run: npm test
