@@ -1,0 +1,70 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Aotscript safe automated dependency management configuration",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "enabledManagers": [
+    "npm",
+    "github-actions",
+    "custom.regex"
+  ],
+  "automerge": false,
+  "platformAutomerge": false,
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Dependency Dashboard",
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 1,
+  "packageRules": [
+    {
+      "description": "Require dashboard approval for all major updates",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Apply 3-day minimum release age buffer for npm dependencies",
+      "matchManagers": ["npm"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Isolate high-risk production deployment tooling into dedicated PRs",
+      "matchPackageNames": [
+        "wrangler",
+        "cloudflare/wrangler-action"
+      ],
+      "groupName": null,
+      "labels": ["dependencies", "production-deploy-tool"]
+    },
+    {
+      "description": "Isolate release supply chain attestation action into dedicated PRs",
+      "matchPackageNames": [
+        "actions/attest-build-provenance"
+      ],
+      "groupName": null,
+      "labels": ["dependencies", "release-supply-chain"]
+    },
+    {
+      "description": "Require dashboard approval for runtime Node and Python version bumps",
+      "matchDepTypes": ["engines", "action-node-version"],
+      "dependencyDashboardApproval": true,
+      "labels": ["dependencies", "runtime-version"]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Manage pinned Promptfoo CLI version in promptfoo benchmark workflow",
+      "fileMatch": [
+        "^\\.github/workflows/promptfoo-benchmark\\.yml$"
+      ],
+      "matchStrings": [
+        "npm install -g promptfoo@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "depNameTemplate": "promptfoo",
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "npm"
+    }
+  ]
+}
