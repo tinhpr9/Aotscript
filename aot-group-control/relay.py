@@ -92,7 +92,16 @@ SWIFT_OPEN_RETRY_SECONDS = 15.0
 SWIFT_OPEN_POLL_SECONDS = 0.5
 UPDATE_WORKER_ACTION = "UPDATE_WORKER"
 WORKER_VERSION = "aot-worker-2026.08.23.02"
-WORKER_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "swift_apps_semantic", "backup_restore_data_semantic", "allocate_server_2pc")
+BASE_CAPABILITIES = ("dynamic_update_channel", "fleet_batch_v1", "allocate_server_2pc")
+ROOT_CAPABILITIES = ("swift_apps_semantic", "backup_restore_data_semantic")
+WORKER_CAPABILITIES = BASE_CAPABILITIES + ROOT_CAPABILITIES
+
+
+def _active_capabilities() -> list[str]:
+    caps = list(BASE_CAPABILITIES)
+    if controller.root_available():
+        caps.extend(ROOT_CAPABILITIES)
+    return caps
 
 
 class AotRelayError(RuntimeError):
@@ -1362,7 +1371,7 @@ def _live_status_payload(
         "protocol": HUB_PROTOCOL_VERSION,
         "device_id": device_id,
         "worker_version": WORKER_VERSION,
-        "capabilities": list(WORKER_CAPABILITIES),
+        "capabilities": _active_capabilities(),
         "updated_at": int(time.time() * 1000),
     }
     if role:

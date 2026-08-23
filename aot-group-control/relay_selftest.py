@@ -189,12 +189,25 @@ assert len(sent_status) == 0, "No status frame should be sent when snapshot fail
 
 # When previous_fingerprint is None (initial connect): sends fallback frame with worker_version & capabilities
 sent_status.clear()
+module.controller.root_available = lambda: False
 res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
 assert res is None
 assert len(sent_status) == 1
 assert sent_status[0]["fallback"] is True
 assert sent_status[0]["worker_version"] == "aot-worker-2026.08.23.02"
 assert "allocate_server_2pc" in sent_status[0]["capabilities"]
+assert "dynamic_update_channel" in sent_status[0]["capabilities"]
+assert "fleet_batch_v1" in sent_status[0]["capabilities"]
+assert "swift_apps_semantic" not in sent_status[0]["capabilities"]
+assert "backup_restore_data_semantic" not in sent_status[0]["capabilities"]
+
+# With root available: capabilities include root-only semantic capabilities
+module.controller.root_available = lambda: True
+sent_status.clear()
+res = module._send_live_status(None, device_id="d1", previous_fingerprint=None, force_preview=False)
+assert "swift_apps_semantic" in sent_status[0]["capabilities"]
+assert "backup_restore_data_semantic" in sent_status[0]["capabilities"]
+module.controller.root_available = lambda: False
 
 # Transport error propagation: any OSError from _ws_send_json must propagate unsuppressed
 def failing_send(sock, payload):
