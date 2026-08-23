@@ -38,6 +38,9 @@ jobs:
         working-directory: rejoin-tool
         run: python3 -m unittest discover -s tests -v
 
+      - name: Verify worker release coherence
+        run: python3 scripts/prepare_worker_release.py --check
+
       - name: Run AOT Group Control selftests
         run: |
           python3 aot-group-control/updater_selftest.py
