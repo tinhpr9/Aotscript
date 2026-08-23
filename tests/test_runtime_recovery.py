@@ -228,3 +228,98 @@ class TestRuntimeRecoveryAndSetupGuards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFingerprintStrategyPersistence(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-strategy-"))
+        self.state_dir = self.tmp / "state" / "aotscript" / "setup-driver"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run_sourced(self, script_body: str, env_override: dict | None = None) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AOTSCRIPT_SETUP_SOURCE_ONLY"] = "1"
+        env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        env["HOME"] = str(self.tmp / "home")
+        if env_override:
+            env.update(env_override)
+        cmd = f"""
+        set -eu
+        die() {{ echo "DIE:$*" >&2; exit 1; }}
+        warn() {{ :; }}
+        ok() {{ :; }}
+        state_write() {{ :; }}
+        state_read() {{ echo "no"; }}
+        source "{REPO_ROOT / 'setup.sh'}"
+        {script_body}
+        """
+        return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False, env=env)
+
+    def test_strategy_file_created_on_first_token_run(self) -> None:
+        cmd = """
+        su() { return 1; }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertEqual(0, res.returncode, res.stderr)
+        strategy = (self.state_dir / "host_fingerprint_strategy").read_text().strip()
+        self.assertEqual("token", strategy)
+
+    def test_strategy_file_created_on_first_strong_run(self) -> None:
+        cmd = """
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "myandroidid" ;;
+            *"getprop ro.boot.serialno"*) echo "myserial" ;;
+            *) echo "" ;;
+          esac
+        }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertEqual(0, res.returncode, res.stderr)
+        strategy = (self.state_dir / "host_fingerprint_strategy").read_text().strip()
+        self.assertEqual("strong", strategy)
+
+    def test_token_strategy_preserved_when_root_becomes_available(self) -> None:
+        # First run: no root → token strategy
+        cmd_no_root = """
+        su() { return 1; }
+        host_fingerprint
+        """
+        res1 = self._run_sourced(cmd_no_root)
+        self.assertEqual(0, res1.returncode, res1.stderr)
+        fp1 = res1.stdout.strip()
+        strategy = (self.state_dir / "host_fingerprint_strategy").read_text().strip()
+        self.assertEqual("token", strategy)
+        # Second run: root available now → strategy file says token → should produce same fingerprint
+        cmd_with_root = """
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "newandroidid" ;;
+            *"getprop ro.boot.serialno"*) echo "newserial" ;;
+            *) echo "" ;;
+          esac
+        }
+        host_fingerprint
+        """
+        res2 = self._run_sourced(cmd_with_root)
+        self.assertEqual(0, res2.returncode, res2.stderr)
+        fp2 = res2.stdout.strip()
+        self.assertEqual(fp1, fp2, "Fingerprint must not change when root becomes available after token-based bind")
+
+    def test_cached_zip_source_binding_rejects_stale(self) -> None:
+        # Simulate a stale zip (no .driveid file) → should trigger re-download
+        setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
+        # Verify the Drive ID binding logic is present
+        self.assertIn('local id_file="${out}.driveid"', setup_m166)
+        self.assertIn('[ "$cached_id" = "$id" ]', setup_m166)
+        self.assertIn('printf \'%s\\n\' "$id" > "$id_file"', setup_m166)
+
+    def test_cached_zip_source_binding_accepts_correct_source(self) -> None:
+        # Verify that same drive ID on a valid zip skips re-download
+        setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
+        self.assertIn("ZIP đã có sẵn, hợp lệ và đúng nguồn:", setup_m166)

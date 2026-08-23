@@ -561,10 +561,16 @@ download_zip() {
   local id="$1"
   local out="$2"
   local part="${out}.part.$$"
-  if [ -f "$out" ] && unzip -t "$out" >/dev/null 2>&1; then
-    ok "ZIP đã có sẵn và hợp lệ: $(basename "$out")"
+  local id_file="${out}.driveid"
+  # Validate cache: must be structurally valid AND sourced from the same Drive ID
+  local cached_id=""
+  [ -f "$id_file" ] && cached_id="$(cat "$id_file" 2>/dev/null | tr -d '\r\n ' || true)"
+  if [ -f "$out" ] && [ "$cached_id" = "$id" ] && unzip -t "$out" >/dev/null 2>&1; then
+    ok "ZIP đã có sẵn, hợp lệ và đúng nguồn: $(basename "$out")"
     return 0
   fi
+  # Cache invalid: wrong/missing source ID or structurally corrupt
+  [ -f "$out" ] && rm -f "$out" "$id_file"
   echo
   echo "[*] Đang tải: $(basename "$out")"
   rm -f "$part"
@@ -583,6 +589,8 @@ download_zip() {
   fi
   mv -f "$part" "$out" ||
     die "Không lưu được: $(basename "$out")"
+  # Record Drive ID binding alongside the downloaded ZIP
+  printf '%s\n' "$id" > "$id_file"
   ok "ZIP hợp lệ: $(basename "$out")"
 }
 

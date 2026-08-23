@@ -445,16 +445,34 @@ ensure_packages() {
 
 host_fingerprint() {
   local raw="" android_id="" serial="" token_file="" token="" token_tmp=""
+  local strategy_file="$SETUP_STATE_DIR/host_fingerprint_strategy"
   if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     raw="${AOTSCRIPT_SETUP_HOST_ID:-test-host}"
   else
-    android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-    serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-    case "$android_id" in null|unknown|"") android_id="" ;; esac
-    case "$serial" in null|unknown|"") serial="" ;; esac
+    # If device is already bound, honour the strategy used at bind time
+    # to prevent root-availability changes from generating a different hash.
+    local existing_strategy=""
+    if [ -f "$strategy_file" ]; then
+      existing_strategy="$(cat "$strategy_file" 2>/dev/null | tr -d '\r\n ' || true)"
+    fi
+    if [ "$existing_strategy" = "token" ]; then
+      # Was bound using token fallback — continue using it even if root now available
+      android_id=""
+      serial=""
+    else
+      android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+      serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+      case "$android_id" in null|unknown|"") android_id="" ;; esac
+      case "$serial" in null|unknown|"") serial="" ;; esac
+    fi
     if [ -n "$android_id$serial" ]; then
       raw="$android_id|$serial"
+      # Persist strategy if not yet recorded
+      if [ -z "$existing_strategy" ]; then
+        mkdir -p "$SETUP_STATE_DIR"
+        printf 'strong\n' > "$strategy_file"
+      fi
     else
       token_file="$SETUP_STATE_DIR/host_token"
       if [ -f "$token_file" ]; then
@@ -473,6 +491,11 @@ host_fingerprint() {
       fi
       [ -n "$token" ] || die "Không tạo được token host bền vững."
       raw="token:$token"
+      # Persist strategy if not yet recorded
+      if [ -z "$existing_strategy" ]; then
+        mkdir -p "$SETUP_STATE_DIR"
+        printf 'token\n' > "$strategy_file"
+      fi
     fi
   fi
   [ -n "$raw" ] || die "Không tạo được fingerprint ổn định cho máy hiện tại."
