@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: worker-release-${{ inputs.version }}
@@ -122,7 +124,8 @@ jobs:
               --commit "$TARGET_COMMIT" --output dist
           fi
 
-      - name: Create or verify draft by ID, then publish by ID
+      - name: Create draft or verify populated draft, then upload assets
+        id: draft
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: worker-v${{ inputs.version }}
@@ -156,10 +159,14 @@ jobs:
             RELEASE_ID="$RESUME_RELEASE_ID"
             gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > resume-draft.json
             asset_count="$(python3 -c 'import json; print(len(json.load(open("resume-draft.json")).get("assets", [])))')"
-            [[ "$asset_count" == 0 ]] || { echo "resume_draft_assets_not_empty" >&2; exit 67; }
-            for asset in dist/*; do
-              upload_asset "$asset"
-            done
+            if [[ "$asset_count" -gt 0 ]]; then
+              python3 scripts/verify_worker_release.py verify \
+                "$TARGET_COMMIT" "$TAG" dist resume-draft.json - draft
+            else
+              for asset in dist/*; do
+                upload_asset "$asset"
+              done
+            fi
           fi
           gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > draft.json
           gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > release-pages.json
@@ -168,15 +175,57 @@ jobs:
           [[ "$verified_target" == "$TARGET_COMMIT" ]] || { echo "draft target changed" >&2; exit 66; }
           python3 scripts/verify_worker_release.py verify \
             "$TARGET_COMMIT" "$TAG" dist draft.json - draft
-          cp draft.json verified-draft.json
+          printf 'release_id=%s\n' "$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Generate signed artifact attestations (SLSA provenance)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'dist/*'
+
+      - name: Verify artifact attestations against pinned target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_COMMIT: ${{ steps.prepare.outputs.target_commit }}
+        run: |
+          set -euo pipefail
+          for asset in dist/*; do
+            echo "Verifying attestation for $asset against source digest $TARGET_COMMIT..."
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}" --source-digest "${TARGET_COMMIT}"
+          done
+
+      - name: Final pre-publish recheck and immediate publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: worker-v${{ inputs.version }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          TARGET_COMMIT: ${{ steps.prepare.outputs.target_commit }}
+        run: |
+          set -euo pipefail
+          # 1. Re-fetch exact draft state immediately before publication
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > pre-publish-draft.json
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > release-pages.json
+          verified_target="$(python3 scripts/verify_worker_release.py validate-draft \
+            pre-publish-draft.json release-pages.json "$RELEASE_ID" "$TAG")"
+          [[ "$verified_target" == "$TARGET_COMMIT" ]] || { echo "pre-publish draft target changed" >&2; exit 66; }
+          python3 scripts/verify_worker_release.py verify \
+            "$TARGET_COMMIT" "$TAG" dist pre-publish-draft.json - draft
+
+          # 2. Re-verify attestations right before publish
+          for asset in dist/*; do
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}" --source-digest "${TARGET_COMMIT}"
+          done
+
+          # 3. Publish immediately (zero mutation gap)
           gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false > /dev/null
+
+          # 4. Post-publish verification
           gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > published-by-id.json
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > published-by-tag.json
           gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > published-ref.json
           python3 scripts/verify_worker_release.py verify \
-            "$TARGET_COMMIT" "$TAG" dist published-by-id.json published-ref.json published verified-draft.json
+            "$TARGET_COMMIT" "$TAG" dist published-by-id.json published-ref.json published pre-publish-draft.json
           python3 scripts/verify_worker_release.py verify \
-            "$TARGET_COMMIT" "$TAG" dist published-by-tag.json published-ref.json published verified-draft.json
+            "$TARGET_COMMIT" "$TAG" dist published-by-tag.json published-ref.json published pre-publish-draft.json
           python3 - "$RELEASE_ID" <<'PY'
           import json, sys
           expected = int(sys.argv[1])
@@ -185,3 +234,6 @@ jobs:
           if by_id.get("id") != expected or by_tag.get("id") != expected:
               raise SystemExit("published_release_identity_mismatch")
           PY
+          for asset in dist/*; do
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}" --source-digest "${TARGET_COMMIT}"
+          done

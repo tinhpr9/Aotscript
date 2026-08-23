@@ -251,14 +251,45 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("scripts/verify_worker_release.py verify"), 3)
         self.assertLess(text.index('upload_asset "$asset"'), text.index("-F draft=false"))
 
-    def test_resume_mode_only_uploads_an_empty_draft(self) -> None:
+    def test_resume_mode_verifies_populated_draft_or_uploads_empty(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         create_block = text[text.index('if [[ "$RELEASE_MODE" == create ]]'):]
         resume_start = create_block.index('          else\n            RELEASE_ID="$RESUME_RELEASE_ID"')
         resume_end = create_block.index('          fi\n          gh api', resume_start)
         resume_branch = create_block[resume_start:resume_end]
-        self.assertIn('[[ "$asset_count" == 0 ]]', resume_branch)
+        self.assertIn('[[ "$asset_count" -gt 0 ]]', resume_branch)
+        self.assertIn('verify_worker_release.py verify', resume_branch)
         self.assertIn('upload_asset "$asset"', resume_branch)
+
+    def test_workflow_has_final_prepublish_recheck(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("Final pre-publish recheck and immediate publication", text)
+        self.assertIn("pre-publish-draft.json", text)
+        self.assertIn("validate-draft", text)
+        self.assertIn("gh api --method PATCH", text)
+        self.assertLess(text.index("pre-publish-draft.json"), text.index("-F draft=false"))
+
+    def test_workflow_has_artifact_attestation_and_pinned_action(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2", text)
+        self.assertIn("subject-path: 'dist/*'", text)
+        self.assertIn("id-token: write", text)
+        self.assertIn("attestations: write", text)
+        self.assertIn('gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}" --source-digest "${TARGET_COMMIT}"', text)
+        self.assertLess(text.index("actions/attest-build-provenance"), text.index("-F draft=false"))
+        self.assertLess(text.index('gh attestation verify "$asset"'), text.index("-F draft=false"))
+
+    def test_wrong_source_digest_blocks_verification(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        # Assert that verification does not omit the source-digest binding
+        self.assertNotIn('gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}"\n', text)
+        self.assertIn('--source-digest "${TARGET_COMMIT}"', text)
+
+    def test_ci_workflow_has_no_attestation_signing_permissions(self) -> None:
+        ci_text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertNotIn("id-token: write", ci_text)
+        self.assertNotIn("attestations: write", ci_text)
+        self.assertNotIn("actions/attest", ci_text)
 
 
 class CalVerEngineTests(unittest.TestCase):
