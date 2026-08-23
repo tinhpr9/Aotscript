@@ -254,17 +254,19 @@ class TestFingerprintStrategyPersistence(unittest.TestCase):
         """
         return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False, env=env)
 
-    def test_strategy_file_created_on_first_token_run(self) -> None:
+    def test_token_file_created_on_first_token_run(self) -> None:
         cmd = """
         su() { return 1; }
         host_fingerprint
         """
         res = self._run_sourced(cmd)
         self.assertEqual(0, res.returncode, res.stderr)
-        strategy = (self.state_dir / "host_fingerprint_strategy").read_text().strip()
-        self.assertEqual("token", strategy)
+        token_file = self.state_dir / "host_token"
+        self.assertTrue(token_file.exists())
+        token = token_file.read_text().strip()
+        self.assertGreaterEqual(len(token), 8)
 
-    def test_strategy_file_created_on_first_strong_run(self) -> None:
+    def test_strong_fingerprint_computed_on_first_strong_run(self) -> None:
         cmd = """
         su() {
           case "$*" in
@@ -277,11 +279,11 @@ class TestFingerprintStrategyPersistence(unittest.TestCase):
         """
         res = self._run_sourced(cmd)
         self.assertEqual(0, res.returncode, res.stderr)
-        strategy = (self.state_dir / "host_fingerprint_strategy").read_text().strip()
-        self.assertEqual("strong", strategy)
+        expected = hashlib.sha256(b"myandroidid|myserial").hexdigest()
+        self.assertEqual(expected, res.stdout.strip())
 
-    def test_token_strategy_preserved_when_root_becomes_available(self) -> None:
-        # First run: no root → token strategy
+    def test_token_binding_preserved_when_root_becomes_available(self) -> None:
+        # First run: no root → token binding created
         cmd_no_root = """
         su() { return 1; }
         host_fingerprint
@@ -289,9 +291,10 @@ class TestFingerprintStrategyPersistence(unittest.TestCase):
         res1 = self._run_sourced(cmd_no_root)
         self.assertEqual(0, res1.returncode, res1.stderr)
         fp1 = res1.stdout.strip()
-        strategy = (self.state_dir / "host_fingerprint_strategy").read_text().strip()
-        self.assertEqual("token", strategy)
-        # Second run: root available now → strategy file says token → should produce same fingerprint
+        # Simulate bind operation by writing host_fingerprint
+        (self.state_dir / "host_fingerprint").write_text(fp1 + "\n", encoding="utf-8")
+
+        # Second run: root becomes available → token binding preserved because bound hash matches token
         cmd_with_root = """
         su() {
           case "$*" in
@@ -348,21 +351,23 @@ class TestFingerprintStrongStrategyFallbackBlocked(unittest.TestCase):
         return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False, env=env)
 
     def test_strong_strategy_fails_closed_when_root_unavailable(self) -> None:
-        # First: bind with strong strategy
-        strategy_file = self.state_dir / "host_fingerprint_strategy"
-        strategy_file.write_text("strong\n", encoding="utf-8")
-        # Simulate root unavailable on second run
+        # First: simulate hardware binding exists
+        binding_file = self.state_dir / "host_fingerprint"
+        bound_hash = hashlib.sha256(b"myid|myserial").hexdigest()
+        binding_file.write_text(bound_hash + "\n", encoding="utf-8")
+        # Simulate root unavailable on second run without token file
         cmd = """
         su() { return 1; }
         host_fingerprint
         """
         res = self._run_sourced(cmd)
-        self.assertNotEqual(0, res.returncode, "Should die when strong-bound device loses root access")
+        self.assertNotEqual(0, res.returncode, "Should die when hardware-bound device loses root access")
         self.assertIn("su/Binder", res.stderr)
 
     def test_strong_strategy_still_works_when_root_available(self) -> None:
-        strategy_file = self.state_dir / "host_fingerprint_strategy"
-        strategy_file.write_text("strong\n", encoding="utf-8")
+        binding_file = self.state_dir / "host_fingerprint"
+        bound_hash = hashlib.sha256(b"myid|myserial").hexdigest()
+        binding_file.write_text(bound_hash + "\n", encoding="utf-8")
         cmd = """
         su() {
           case "$*" in
@@ -375,8 +380,7 @@ class TestFingerprintStrongStrategyFallbackBlocked(unittest.TestCase):
         """
         res = self._run_sourced(cmd)
         self.assertEqual(0, res.returncode, res.stderr)
-        expected = hashlib.sha256(b"myid|myserial").hexdigest()
-        self.assertEqual(expected, res.stdout.strip())
+        self.assertEqual(bound_hash, res.stdout.strip())
 
     def test_zip_sha256_sidecar_stored_and_verified(self) -> None:
         setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
@@ -386,13 +390,9 @@ class TestFingerprintStrongStrategyFallbackBlocked(unittest.TestCase):
         self.assertIn('[ "$stored_sha" = "$current_sha" ]', setup_m166)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-class TestFingerprintSeedPinning(unittest.TestCase):
+class TestFingerprintHardwareVerificationAndCloneDetection(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-seed-pin-"))
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-hw-clone-"))
         self.state_dir = self.tmp / "state" / "aotscript" / "setup-driver"
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -418,39 +418,51 @@ class TestFingerprintSeedPinning(unittest.TestCase):
         """
         return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False, env=env)
 
-    def test_seed_file_created_on_first_bind(self) -> None:
-        cmd = """
-        su() { return 1; }
-        host_fingerprint
-        """
-        res = self._run_sourced(cmd)
-        self.assertEqual(0, res.returncode, res.stderr)
-        seed_file = self.state_dir / "host_fingerprint_seed"
-        self.assertTrue(seed_file.exists(), "Seed file must be created on first bind")
-        seed = seed_file.read_text().strip()
-        self.assertTrue(seed.startswith("token:"), "Token-based seed must start with 'token:'")
+    def test_rooted_clone_detected_via_live_hardware_probe(self) -> None:
+        # Original device bound with aid1|sno1
+        orig_hash = hashlib.sha256(b"aid1|sno1").hexdigest()
+        binding_file = self.state_dir / "host_fingerprint"
+        binding_file.write_text(orig_hash + "\n", encoding="utf-8")
 
-    def test_seed_pinned_across_runs_even_if_more_signals_appear(self) -> None:
-        # First run: only android_id available (partial strong signal)
-        cmd_partial = """
+        # Cloned device runs with aid2|sno2
+        cmd = """
         su() {
           case "$*" in
-            *"settings get secure android_id"*) echo "myandroidid" ;;
-            *"getprop ro.boot.serialno"*) echo "" ;;
+            *"settings get secure android_id"*) echo "aid2" ;;
+            *"getprop ro.boot.serialno"*) echo "sno2" ;;
             *) echo "" ;;
           esac
         }
         host_fingerprint
         """
-        res1 = self._run_sourced(cmd_partial)
-        self.assertEqual(0, res1.returncode, res1.stderr)
-        fp1 = res1.stdout.strip()
-        seed_file = self.state_dir / "host_fingerprint_seed"
-        stored_seed = seed_file.read_text().strip()
-        self.assertEqual("myandroidid|", stored_seed)
+        res = self._run_sourced(cmd)
+        self.assertEqual(0, res.returncode, res.stderr)
+        clone_hash = res.stdout.strip()
+        expected_clone_hash = hashlib.sha256(b"aid2|sno2").hexdigest()
+        self.assertEqual(expected_clone_hash, clone_hash)
+        self.assertNotEqual(orig_hash, clone_hash, "Clone must produce its own live hardware hash to trigger NEEDS_CONFIRM")
 
-        # Second run: now serial also available → must NOT change fingerprint
-        cmd_full = """
+    def test_legacy_hardware_binding_fails_closed_without_root(self) -> None:
+        # Legacy installation with only host_fingerprint (no strategy or token file)
+        legacy_hash = hashlib.sha256(b"legacy_aid|legacy_sno").hexdigest()
+        (self.state_dir / "host_fingerprint").write_text(legacy_hash + "\n", encoding="utf-8")
+
+        cmd = """
+        su() { return 1; }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertNotEqual(0, res.returncode, "Legacy hardware binding must fail closed when root is unavailable")
+        self.assertIn("su/Binder", res.stderr)
+        self.assertFalse((self.state_dir / "host_token").exists(), "Must not generate a spurious token file on failed hardware binding")
+
+    def test_partial_hardware_binding_stability(self) -> None:
+        # Device was originally bound when only android_id was available
+        partial_hash = hashlib.sha256(b"myandroidid|").hexdigest()
+        (self.state_dir / "host_fingerprint").write_text(partial_hash + "\n", encoding="utf-8")
+
+        # On subsequent run, serial also becomes readable
+        cmd = """
         su() {
           case "$*" in
             *"settings get secure android_id"*) echo "myandroidid" ;;
@@ -460,22 +472,32 @@ class TestFingerprintSeedPinning(unittest.TestCase):
         }
         host_fingerprint
         """
-        res2 = self._run_sourced(cmd_full)
-        self.assertEqual(0, res2.returncode, res2.stderr)
-        fp2 = res2.stdout.strip()
-        self.assertEqual(fp1, fp2, "Fingerprint must not change when additional hardware signals appear after first bind")
+        res = self._run_sourced(cmd)
+        self.assertEqual(0, res.returncode, res.stderr)
+        self.assertEqual(partial_hash, res.stdout.strip(), "Partial hardware binding must be preserved when additional signals appear")
 
-    def test_seed_used_directly_skips_su_calls(self) -> None:
-        # Pre-populate seed file (simulates already-bound device)
-        seed_file = self.state_dir / "host_fingerprint_seed"
-        seed_file.write_text("myandroidid|myserial\n", encoding="utf-8")
-        # su should never be called since seed is already available
+    def test_token_binding_preserved_when_root_installed_later(self) -> None:
+        # Device originally bound using token
+        token = "test-persistent-token-12345"
+        (self.state_dir / "host_token").write_text(token + "\n", encoding="utf-8")
+        token_hash = hashlib.sha256(f"token:{token}".encode("utf-8")).hexdigest()
+        (self.state_dir / "host_fingerprint").write_text(token_hash + "\n", encoding="utf-8")
+
+        # Root becomes available later
         cmd = """
-        su() { echo "SU_CALLED" >&2; return 1; }
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "newaid" ;;
+            *"getprop ro.boot.serialno"*) echo "newsno" ;;
+            *) echo "" ;;
+          esac
+        }
         host_fingerprint
         """
         res = self._run_sourced(cmd)
         self.assertEqual(0, res.returncode, res.stderr)
-        self.assertNotIn("SU_CALLED", res.stderr, "su must not be called when seed file exists")
-        expected = hashlib.sha256(b"myandroidid|myserial").hexdigest()
-        self.assertEqual(expected, res.stdout.strip())
+        self.assertEqual(token_hash, res.stdout.strip(), "Token binding must be preserved even if root becomes available later")
+
+
+if __name__ == "__main__":
+    unittest.main()

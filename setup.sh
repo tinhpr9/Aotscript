@@ -445,61 +445,74 @@ ensure_packages() {
 
 host_fingerprint() {
   local raw="" android_id="" serial="" token_file="" token="" token_tmp=""
-  local seed_file="$SETUP_STATE_DIR/host_fingerprint_seed"
-  local strategy_file="$SETUP_STATE_DIR/host_fingerprint_strategy"
+  local binding_file="$SETUP_STATE_DIR/host_fingerprint"
+  local bound_hash=""
+
   if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     raw="${AOTSCRIPT_SETUP_HOST_ID:-test-host}"
   else
-    # Primary path: reuse the exact raw seed stored at first bind so that
-    # partial hardware availability at bind time does not create a different
-    # hash if additional signals become readable on later runs.
-    if [ -f "$seed_file" ]; then
-      raw="$(cat "$seed_file" 2>/dev/null | tr -d '\r\n' || true)"
+    if [ -f "$binding_file" ]; then
+      bound_hash="$(cat "$binding_file" 2>/dev/null | tr -d '\r\n ' || true)"
+    fi
+    token_file="$SETUP_STATE_DIR/host_token"
+    if [ -f "$token_file" ]; then
+      token="$(cat "$token_file" 2>/dev/null | tr -d '\r\n ' || true)"
+      if [ ${#token} -lt 8 ]; then
+        token=""
+        rm -f "$token_file"
+      fi
+    fi
+
+    # Check if this device was already bound with a valid token
+    if [ -n "$token" ] && [ -n "$bound_hash" ]; then
+      local token_hash
+      token_hash="$(printf '%s' "token:$token" | sha256sum | awk '{print $1}')"
+      if [ "$token_hash" = "$bound_hash" ]; then
+        raw="token:$token"
+      fi
     fi
 
     if [ -z "$raw" ]; then
-      # Seed missing: fresh bind, or migration from older installs that only
-      # have a strategy file.  Compute raw using existing or detected strategy.
-      local existing_strategy=""
-      if [ -f "$strategy_file" ]; then
-        existing_strategy="$(cat "$strategy_file" 2>/dev/null | tr -d '\r\n ' || true)"
-      fi
-
-      if [ "$existing_strategy" = "token" ]; then
-        # Migrating from strategy-only state: restore token fingerprint
-        android_id=""
-        serial=""
-      elif [ "$existing_strategy" = "strong" ]; then
-        # Migrating from strategy-only state: root must be available
-        android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-        serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-        case "$android_id" in null|unknown|"") android_id="" ;; esac
-        case "$serial" in null|unknown|"") serial="" ;; esac
-        if [ -z "$android_id$serial" ]; then
-          die "Thiết bị này đã bind bằng tín hiệu phần cứng (android_id/serial) nhưng su/Binder hiện không khả dụng. Kiểm tra quyền root và thử lại."
-        fi
-      else
-        # Fresh first bind: detect available signals
-        android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-        serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-        case "$android_id" in null|unknown|"") android_id="" ;; esac
-        case "$serial" in null|unknown|"") serial="" ;; esac
-      fi
+      # Probe live hardware signals to detect cloned instances and fresh devices
+      android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+      serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+      case "$android_id" in null|unknown|"") android_id="" ;; esac
+      case "$serial" in null|unknown|"") serial="" ;; esac
 
       if [ -n "$android_id$serial" ]; then
-        raw="$android_id|$serial"
-        mkdir -p "$SETUP_STATE_DIR"
-        [ -f "$strategy_file" ] || printf 'strong\n' > "$strategy_file"
-      else
-        token_file="$SETUP_STATE_DIR/host_token"
-        if [ -f "$token_file" ]; then
-          token="$(cat "$token_file" 2>/dev/null | tr -d '\r\n ' || true)"
-          if [ ${#token} -lt 8 ]; then
-            token=""
-            rm -f "$token_file"
+        # Live hardware signals are available.
+        # If already bound, check if bound hash matches any valid signal composition
+        # to preserve binding if one property was absent at bind time.
+        if [ -n "$bound_hash" ]; then
+          local full_h="" aid_h="" ser_h=""
+          full_h="$(printf '%s' "$android_id|$serial" | sha256sum | awk '{print $1}')"
+          [ -n "$android_id" ] && aid_h="$(printf '%s' "$android_id|" | sha256sum | awk '{print $1}')"
+          [ -n "$serial" ] && ser_h="$(printf '%s' "|$serial" | sha256sum | awk '{print $1}')"
+
+          if [ "$full_h" = "$bound_hash" ]; then
+            raw="$android_id|$serial"
+          elif [ -n "$aid_h" ] && [ "$aid_h" = "$bound_hash" ]; then
+            raw="$android_id|"
+          elif [ -n "$ser_h" ] && [ "$ser_h" = "$bound_hash" ]; then
+            raw="|$serial"
+          else
+            # Hardware signals do not match the bound hash (e.g. cloned rooted device)
+            raw="$android_id|$serial"
           fi
+        else
+          # Fresh first bind with live hardware signals
+          raw="$android_id|$serial"
         fi
+      else
+        # No live hardware signals available
+        if [ -n "$bound_hash" ] && [ -z "$token" ]; then
+          # Device was previously bound using hardware signals, but su/Binder is currently unavailable.
+          # Fail closed to prevent creating an unintended token and breaking the binding.
+          die "Thiết bị này đã bind bằng tín hiệu phần cứng (android_id/serial) nhưng su/Binder hiện không khả dụng. Kiểm tra quyền root và thử lại."
+        fi
+
+        # Non-root fallback: generate or use token
         if [ -z "$token" ]; then
           token="$(python -c 'import uuid, time; print(f"{uuid.uuid4().hex}-{int(time.time()*1000)}")' 2>/dev/null || date +%s%N 2>/dev/null || date +%s)-$$"
           mkdir -p "$SETUP_STATE_DIR"
@@ -509,13 +522,7 @@ host_fingerprint() {
         fi
         [ -n "$token" ] || die "Không tạo được token host bền vững."
         raw="token:$token"
-        mkdir -p "$SETUP_STATE_DIR"
-        [ -f "$strategy_file" ] || printf 'token\n' > "$strategy_file"
       fi
-
-      # Pin the exact raw seed for deterministic reproduction on all future runs
-      mkdir -p "$SETUP_STATE_DIR"
-      printf '%s\n' "$raw" > "$seed_file"
     fi
   fi
   [ -n "$raw" ] || die "Không tạo được fingerprint ổn định cho máy hiện tại."
