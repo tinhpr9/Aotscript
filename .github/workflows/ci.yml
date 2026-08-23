@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python Unit & Release Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: '3.12'
+
+      - name: Run Python unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Run rejoin-tool tests
+        working-directory: rejoin-tool
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Run AOT Group Control selftests
+        run: |
+          python3 aot-group-control/updater_selftest.py
+          python3 aot-group-control/selftest.py
+          python3 aot-group-control/runtime_selftest.py
+          python3 aot-group-control/release_update_selftest.py
+          python3 aot-group-control/relay_selftest.py
+          python3 aot-group-control/test_allocate_server.py
+          python3 aot-group-control/allocate_server_selftest.py
+          python3 aot-group-control/legacy_relay_bridge_selftest.py
+          python3 aot-group-control/worker_smoke_test.py
+
+  setup-tests:
+    name: Setup & Launcher Self-Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: '3.12'
+
+      - name: Run setup terminal lock and self-tests
+        run: bash tests/setup-self-test.sh
+
+  cloudflare-worker-tests:
+    name: Cloudflare Worker JS Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: cloudflare-worker
+        run: npm ci
+
+      - name: Run Cloudflare Worker selftests
+        working-directory: cloudflare-worker
+        run: npm test

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -135,10 +136,35 @@ exit 0
                         os.kill(pid, signal.SIGKILL)
                     except Exception:
                         pass
+                elif "[PID]" in line:
+                    try:
+                        pid = int(line.split("[PID]")[1].split()[0])
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+        proc_dir = pathlib.Path("/proc")
+        if proc_dir.is_dir():
+            try:
+                for entry in proc_dir.iterdir():
+                    if not entry.name.isdigit():
+                        continue
+                    try:
+                        cmdline = (entry / "cmdline").read_bytes().decode("utf-8", errors="replace")
+                        if str(self.root) in cmdline and int(entry.name) != os.getpid():
+                            os.kill(int(entry.name), signal.SIGKILL)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         self.temp.cleanup()
 
 
 class TermuxbootFallbackTests(unittest.TestCase):
+    def test_cleanup_safe_when_procfs_absent(self):
+        fixture = TermuxbootTestFixture(curl_mode="ok")
+        with unittest.mock.patch.object(pathlib.Path, "is_dir", return_value=False):
+            fixture.cleanup()
+
     def test_raw_429_with_valid_local_agent_starts(self):
         fixture = TermuxbootTestFixture(curl_mode="429")
         try:
