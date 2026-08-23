@@ -1699,6 +1699,7 @@ def save_screenshot(path: pathlib.Path) -> dict[str, Any]:
 def open_roblox_servers(allocation: list[dict[str, str]]) -> None:
     import shlex
     import time
+    is_root = root_available()
     for item in allocation:
         pkg = item["pkg"]
         url = item["url"]
@@ -1710,7 +1711,17 @@ def open_roblox_servers(allocation: list[dict[str, str]]) -> None:
         
         cmd_join = f"am start -a android.intent.action.VIEW -n {shlex.quote(pkg)}/com.roblox.client.ActivityProtocolLaunch -d {shlex.quote(formatted_url)}"
         
-        _root_run(cmd_join + " >/dev/null")
+        if is_root:
+            _root_run(cmd_join + " >/dev/null")
+        else:
+            argv = ["am", "start", "-a", "android.intent.action.VIEW", "-n", f"{pkg}/com.roblox.client.ActivityProtocolLaunch", "-d", formatted_url]
+            try:
+                proc = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=12)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise AotControllerError(f"am start execution failed: {type(exc).__name__}") from exc
+            if proc.returncode != 0:
+                detail = proc.stderr.strip()[:240]
+                raise AotControllerError(f"am start failed (rc={proc.returncode}): {detail or 'no stderr'}")
         time.sleep(1)
 
 def probe() -> dict[str, Any]:
