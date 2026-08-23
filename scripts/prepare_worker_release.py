@@ -36,9 +36,9 @@ def get_current_commit(repo_root: pathlib.Path) -> str:
         commit = proc.stdout.strip()
         if re.fullmatch(r"[0-9a-f]{40}", commit):
             return commit
-    except Exception:
-        pass
-    return "0000000000000000000000000000000000000000"
+    except Exception as exc:
+        raise RuntimeError("cannot_determine_git_head_commit") from exc
+    raise RuntimeError("cannot_determine_git_head_commit")
 
 
 def sync_release_mirrors(repo_root: pathlib.Path, version: str) -> None:
@@ -95,7 +95,7 @@ def sync_release_mirrors(repo_root: pathlib.Path, version: str) -> None:
     boot_path.write_text(boot_text, encoding="utf-8")
 
 
-def generate_manifests(repo_root: pathlib.Path, version: str, commit_sha: str) -> None:
+def generate_expected_manifests(repo_root: pathlib.Path, version: str, commit_sha: str) -> dict[str, dict]:
     worker_version = f"aot-worker-{version}"
     tag = f"worker-v{version}"
     with tempfile.TemporaryDirectory(prefix="aot-build-") as temp_dir:
@@ -120,6 +120,7 @@ def generate_manifests(repo_root: pathlib.Path, version: str, commit_sha: str) -
         )
 
         schema3_manifest = json.loads((out_path / "worker-manifest.json").read_text(encoding="utf-8"))
+        result = {}
 
         for channel in ("stable", "canary"):
             manifest_v2 = {
@@ -144,8 +145,15 @@ def generate_manifests(repo_root: pathlib.Path, version: str, commit_sha: str) -
                 ],
                 "release_version": worker_version,
             }
-            target_manifest = repo_root / "aot-group-control" / f"worker-manifest-{channel}.json"
-            target_manifest.write_text(json.dumps(manifest_v2, indent=2) + "\n", encoding="utf-8")
+            result[channel] = manifest_v2
+        return result
+
+
+def generate_manifests(repo_root: pathlib.Path, version: str, commit_sha: str) -> None:
+    expected = generate_expected_manifests(repo_root, version, commit_sha)
+    for channel, manifest_dict in expected.items():
+        target_manifest = repo_root / "aot-group-control" / f"worker-manifest-{channel}.json"
+        target_manifest.write_text(json.dumps(manifest_dict, indent=2) + "\n", encoding="utf-8")
 
 
 def check_release_coherence(repo_root: pathlib.Path) -> None:
@@ -179,18 +187,36 @@ def check_release_coherence(repo_root: pathlib.Path) -> None:
     if f'"tag": "{tag}"' not in boot_text:
         errors.append(f"bootstrap.py INITIAL_RELEASE_SPEC tag does not match canonical {tag}")
 
-    # Check manifests
-    for channel in ("stable", "canary"):
-        man_path = repo_root / "aot-group-control" / f"worker-manifest-{channel}.json"
-        if not man_path.is_file():
-            errors.append(f"Missing manifest {man_path}")
-            continue
-        try:
-            m = json.loads(man_path.read_text(encoding="utf-8"))
-            if m.get("version") != worker_version:
-                errors.append(f"{man_path.name} version {m.get('version')} != {worker_version}")
-        except Exception as e:
-            errors.append(f"Invalid JSON in {man_path}: {e}")
+    # Full manifest coherence check
+    try:
+        commit_sha = get_current_commit(repo_root)
+    except Exception:
+        commit_sha = "c" * 40
+
+    try:
+        expected_manifests = generate_expected_manifests(repo_root, version, commit_sha)
+        for channel in ("stable", "canary"):
+            man_path = repo_root / "aot-group-control" / f"worker-manifest-{channel}.json"
+            if not man_path.is_file():
+                errors.append(f"Missing manifest {man_path}")
+                continue
+            actual = json.loads(man_path.read_text(encoding="utf-8"))
+            expected = expected_manifests[channel]
+            if actual != expected:
+                errors.append(f"Manifest mismatch in {man_path.name}: actual != expected generated output")
+    except Exception as exc:
+        errors.append(f"Manifest generation/verification failed: {exc}")
+
+    # Run smoke test in check mode
+    smoke_script = repo_root / "aot-group-control" / "worker_smoke_test.py"
+    proc = subprocess.run(
+        [sys.executable, str(smoke_script)],
+        cwd=repo_root / "aot-group-control",
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        errors.append(f"worker_smoke_test.py failed: {proc.stdout} {proc.stderr}")
 
     if errors:
         print("RELEASE_COHERENCE_CHECK=FAIL")

@@ -17,15 +17,15 @@ worker actions in `cloudflare-worker/`.
   Canary again.
 
 - Treat `~/.aot-group-control/bootstrap_launcher.py` and `bootstrap.py` as the
-  external supervisor. Worker code belongs in immutable
-  `releases/<worker-version>/` directories and is selected only through the
-  atomic `current` symlink. Never restore in-place replacement of `relay.py`.
-- Every worker behavior change must bump `WORKER_VERSION`, update both channel
-  manifests, and publish the complete release file set. At minimum that set is
+  device-side external supervisor. On deployed devices, worker code belongs in immutable
+  `releases/<worker-version>/` directories and is activated only through atomic
+  `current` symlink rotation. Runtime self-replacement of `relay.py` on devices is forbidden.
+- Any worker change that is released to production must be published as a new immutable
+  release version (`worker-v<version>`). At minimum the release set contains
   `relay.py`, `runtime.py`, `controller.py`, `updater.py`, `e2e.py`,
-  `worker_smoke_test.py`, and `worker-release-schema.json`.
-  Registration changes must also publish `msetup_registration.py`.
-- Each manifest must retain schema version 2, its explicit channel, a unique
+  `worker_smoke_test.py`, `worker-release-schema.json`, and (for registration changes)
+  `msetup_registration.py`.
+- Each transition manifest must retain schema version 2, its explicit channel, a unique
   release version, `minimum_bootstrap_version`, and the URL plus SHA-256 of
   every release file. Canary targets are selected dynamically by AOT Hub from
   the current fleet's ONLINE devices; never bind a channel to Device IDs.
@@ -40,16 +40,23 @@ worker actions in `cloudflare-worker/`.
 ## Release single source of truth and generated file policy
 
 - `aot-group-control/worker-release.json` is the EXACT and ONLY canonical source of truth for the AOT worker release version.
-- Feature and bug PRs do NOT manually update release versions, manifest files, or SHA-256 digests.
-- Release preparation is automated via `python3 scripts/prepare_worker_release.py [--bump | --version <YYYY.MM.DD.NN>]`, which:
-  1. Validates CalVer format (`YYYY.MM.DD.NN`) and sequence rules.
-  2. Updates derived mirrors (`relay.py`, `fleet-state.js`, `bootstrap.py`).
-  3. Deterministically builds release artifacts and computes SHA-256 digests.
+- **Feature & Bug PRs**: Focus on behavior code and behavior tests. Do NOT manually edit release versions, transition manifests, or SHA-256 digests.
+- **Release Preparation**: Maintainers/CI execute `python3 scripts/prepare_worker_release.py [--bump | --version <YYYY.MM.DD.NN>]`, which:
+  1. Validates CalVer format (`YYYY.MM.DD.NN`) and sequence rules via `scripts/release_version.py`.
+  2. Updates derived code mirrors (`relay.py`, `cloudflare-worker/fleet-state.js`, `aot-group-control/bootstrap.py`).
+  3. Deterministically builds release artifacts and computes SHA-256 digests via `scripts/build-worker-release.py`.
   4. Generates `worker-manifest-stable.json` and `worker-manifest-canary.json`.
 - The following files are DERIVED/GENERATED from `worker-release.json` and source code; do NOT edit their release metadata manually:
   - `aot-group-control/worker-manifest-stable.json`
   - `aot-group-control/worker-manifest-canary.json`
 - CI enforces repository release consistency automatically via `python3 scripts/prepare_worker_release.py --check`.
+
+## Repository Optimization Program Roadmap
+- **Phase 1 (Completed)**: Unified PR CI pipeline and deploy gating (`.github/workflows/ci.yml`).
+- **Phase 2 (Current)**: Release single source of truth, deterministic generator, and CalVer engine.
+- **Phase 3 (Planned)**: Artifact policy and SLSA build provenance.
+- **Phase 4 (Planned)**: Automated dependency management (Renovate).
+- **Phase 5 (Planned)**: Module architecture refactoring and documentation refresh.
 
 ## Safety and compatibility
 

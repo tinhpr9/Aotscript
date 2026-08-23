@@ -9,9 +9,13 @@ import os
 import pathlib
 import re
 import shutil
+import sys
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import release_version
+
 SOURCE = ROOT / "aot-group-control"
 FILES = [
     "relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py",
@@ -19,7 +23,6 @@ FILES = [
     "msetup_registration.py", "legacy_relay_bridge.py",
 ]
 SUPERVISOR = ["bootstrap.py", "bootstrap_launcher.py"]
-CALVER_REGEX = re.compile(r"^([12]\d{3})\.(0[1-9]|1[0-2])\.(0[1-9]|[12]\d|3[01])\.([0-9]{2})$")
 
 
 def digest(path: pathlib.Path) -> str:
@@ -47,8 +50,14 @@ def resolve_built_at(args_built_at: str | None, repro_built_at: str | None) -> s
     if repro_built_at:
         return repro_built_at
     if "SOURCE_DATE_EPOCH" in os.environ:
-        epoch = int(os.environ["SOURCE_DATE_EPOCH"])
-        return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        raw_epoch = os.environ["SOURCE_DATE_EPOCH"].strip()
+        try:
+            epoch = int(raw_epoch)
+            if epoch < 0:
+                raise SystemExit("source_date_epoch_invalid")
+            return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        except (ValueError, TypeError, OverflowError):
+            raise SystemExit("source_date_epoch_invalid")
     return "1980-01-01T00:00:00Z"
 
 
@@ -61,11 +70,16 @@ def main() -> int:
     parser.add_argument("--built-at")
     parser.add_argument("--reproduce-metadata-from", type=pathlib.Path)
     args = parser.parse_args()
-    if not CALVER_REGEX.fullmatch(args.version):
+
+    try:
+        parsed_ver = release_version.parse_calver(args.version)
+        version_str = parsed_ver.serialize()
+    except Exception:
         raise SystemExit("release_version_mismatch")
+
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
         raise SystemExit("release_commit_invalid")
-    worker_version = "aot-worker-" + args.version
+    worker_version = "aot-worker-" + version_str
     source_dir = args.source_root / "aot-group-control"
     source = (source_dir / "relay.py").read_text(encoding="utf-8")
     if f'WORKER_VERSION = "{worker_version}"' not in source:
@@ -74,7 +88,7 @@ def main() -> int:
     if output.exists() and any(output.iterdir()):
         raise SystemExit("release_output_not_empty")
     output.mkdir(parents=True, exist_ok=True)
-    tag = "worker-v" + args.version
+    tag = "worker-v" + version_str
     base = f"https://github.com/tinhpr9/Aotscript/releases/download/{tag}"
     assets = []
     repro_built_at, zip_infos = _reproduction_metadata(args.reproduce_metadata_from)

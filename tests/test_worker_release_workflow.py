@@ -4,7 +4,9 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -350,6 +352,110 @@ class ReleasePreparationAndCoherenceTests(unittest.TestCase):
         )
         self.assertEqual(0, res.returncode, f"Check failed: {res.stdout}\n{res.stderr}")
         self.assertIn("RELEASE_COHERENCE_CHECK=PASS", res.stdout)
+
+    def test_prepare_worker_release_fails_on_stale_manifest_sha(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="coherence-test-") as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            shutil.copytree(ROOT / "aot-group-control", temp_root / "aot-group-control")
+            shutil.copytree(ROOT / "cloudflare-worker", temp_root / "cloudflare-worker")
+            shutil.copytree(ROOT / "scripts", temp_root / "scripts")
+            
+            # Mutate one file SHA in manifest
+            stable_manifest_path = temp_root / "aot-group-control" / "worker-manifest-stable.json"
+            data = json.loads(stable_manifest_path.read_text(encoding="utf-8"))
+            data["files"][0]["sha256"] = "0" * 64
+            stable_manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+            res = subprocess.run(
+                [sys.executable, str(temp_root / "scripts/prepare_worker_release.py"), "--check", "--repo-root", str(temp_root)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, res.returncode)
+            self.assertIn("RELEASE_COHERENCE_CHECK=FAIL", res.stdout)
+
+    def test_prepare_worker_release_fails_on_wrong_channel(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="coherence-test-") as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            shutil.copytree(ROOT / "aot-group-control", temp_root / "aot-group-control")
+            shutil.copytree(ROOT / "cloudflare-worker", temp_root / "cloudflare-worker")
+            shutil.copytree(ROOT / "scripts", temp_root / "scripts")
+            
+            # Mutate channel
+            stable_manifest_path = temp_root / "aot-group-control" / "worker-manifest-stable.json"
+            data = json.loads(stable_manifest_path.read_text(encoding="utf-8"))
+            data["channel"] = "canary"
+            stable_manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+            res = subprocess.run(
+                [sys.executable, str(temp_root / "scripts/prepare_worker_release.py"), "--check", "--repo-root", str(temp_root)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, res.returncode)
+            self.assertIn("RELEASE_COHERENCE_CHECK=FAIL", res.stdout)
+
+    def test_prepare_worker_release_fails_on_missing_file_in_manifest(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="coherence-test-") as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            shutil.copytree(ROOT / "aot-group-control", temp_root / "aot-group-control")
+            shutil.copytree(ROOT / "cloudflare-worker", temp_root / "cloudflare-worker")
+            shutil.copytree(ROOT / "scripts", temp_root / "scripts")
+            
+            stable_manifest_path = temp_root / "aot-group-control" / "worker-manifest-stable.json"
+            data = json.loads(stable_manifest_path.read_text(encoding="utf-8"))
+            data["files"].pop()
+            stable_manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+            res = subprocess.run(
+                [sys.executable, str(temp_root / "scripts/prepare_worker_release.py"), "--check", "--repo-root", str(temp_root)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, res.returncode)
+            self.assertIn("RELEASE_COHERENCE_CHECK=FAIL", res.stdout)
+
+    def test_builder_fails_on_invalid_calver_dates(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="build-invalid-") as temp_dir:
+            out = pathlib.Path(temp_dir) / "out"
+            cmd = [
+                sys.executable,
+                str(ROOT / "scripts/build-worker-release.py"),
+                "--version", "2026.02.31.01",
+                "--commit", "a" * 40,
+                "--output", str(out),
+                "--source-root", str(ROOT),
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertNotEqual(0, res.returncode)
+
+    def test_builder_fails_on_malformed_source_date_epoch(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="build-epoch-") as temp_dir:
+            out = pathlib.Path(temp_dir) / "out"
+            cmd = [
+                sys.executable,
+                str(ROOT / "scripts/build-worker-release.py"),
+                "--version", "2026.08.23.03",
+                "--commit", "a" * 40,
+                "--output", str(out),
+                "--source-root", str(ROOT),
+            ]
+            env = os.environ.copy()
+            env["SOURCE_DATE_EPOCH"] = "not-a-number"
+            res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            self.assertNotEqual(0, res.returncode)
+
+    def test_canonical_loader_validates_and_rejects_mismatched_stored_fields(self) -> None:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import release_version
+        with tempfile.TemporaryDirectory(prefix="canonical-test-") as temp_dir:
+            vfile = pathlib.Path(temp_dir) / "worker-release.json"
+            vfile.write_text(json.dumps({
+                "version": "2026.08.23.03",
+                "worker_version": "aot-worker-2026.08.23.99"
+            }), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                release_version.load_canonical_version(vfile)
 
 
 class BootstrapSupervisorReleaseTests(unittest.TestCase):

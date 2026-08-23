@@ -77,10 +77,21 @@ def load_canonical_version(path: pathlib.Path) -> dict[str, str]:
         raise ValueError("canonical_version_missing")
     parsed = parse_calver(version)
     canonical_ver = parsed.serialize()
+    expected_worker = f"aot-worker-{canonical_ver}"
+    expected_tag = f"worker-v{canonical_ver}"
+
+    stored_worker = data.get("worker_version")
+    if stored_worker is not None and stored_worker != expected_worker:
+        raise ValueError(f"stored_worker_version_mismatch:{stored_worker}_expected_{expected_worker}")
+
+    stored_tag = data.get("tag")
+    if stored_tag is not None and stored_tag != expected_tag:
+        raise ValueError(f"stored_tag_mismatch:{stored_tag}_expected_{expected_tag}")
+
     return {
         "version": canonical_ver,
-        "worker_version": f"aot-worker-{canonical_ver}",
-        "tag": f"worker-v{canonical_ver}",
+        "worker_version": expected_worker,
+        "tag": expected_tag,
     }
 
 
@@ -89,11 +100,13 @@ def save_canonical_version(path: pathlib.Path, version_str: str) -> dict[str, st
     ver = parsed.serialize()
     payload = {
         "version": ver,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return {
+        "version": ver,
         "worker_version": f"aot-worker-{ver}",
         "tag": f"worker-v{ver}",
     }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return payload
 
 
 if __name__ == "__main__":
