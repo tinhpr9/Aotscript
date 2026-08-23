@@ -226,10 +226,6 @@ class TestRuntimeRecoveryAndSetupGuards(unittest.TestCase):
         self.assertIn("PROPERLY_FAILED_CLOSED", res.stdout)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestFingerprintStrategyPersistence(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-strategy-"))
@@ -388,3 +384,7 @@ class TestFingerprintStrongStrategyFallbackBlocked(unittest.TestCase):
         self.assertIn('sha256sum "$out" > "$sha_file"', setup_m166)
         self.assertIn('stored_sha="$(cat "$sha_file"', setup_m166)
         self.assertIn('[ "$stored_sha" = "$current_sha" ]', setup_m166)
+
+
+if __name__ == "__main__":
+    unittest.main()
