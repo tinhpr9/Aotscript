@@ -1632,6 +1632,7 @@ printf '%s\n' "$BOOTSTRAP_STATUS" |
   }
 
 RUNTIME_STATUS=""
+runtime_ready=false
 poll_i=1
 while [ "$poll_i" -le 15 ]; do
   if [ -f "$HOME/.aot-group-control/current/runtime.py" ]; then
@@ -1640,6 +1641,7 @@ while [ "$poll_i" -le 15 ]; do
     )" || true
     if printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' &&
        printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$'; then
+      runtime_ready=true
       break
     fi
   fi
@@ -1647,19 +1649,12 @@ while [ "$poll_i" -le 15 ]; do
   sleep 1
 done
 
-[ -n "$RUNTIME_STATUS" ] || {
+[ "$runtime_ready" = true ] || {
+  [ -n "$RUNTIME_STATUS" ] && printf '%s\n' "$RUNTIME_STATUS"
   rm -f "$AOT_REGISTER_HELPER"
   die "AOT runtime status thất bại"
 }
 printf '%s\n' "$RUNTIME_STATUS"
-printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' || {
-  rm -f "$AOT_REGISTER_HELPER"
-  die "AOT_CONFIG chưa OK"
-}
-printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$' || {
-  rm -f "$AOT_REGISTER_HELPER"
-  die "AOT runtime không có PID relay hợp lệ"
-}
 
 AOT_SERVER_STATUS="$(
   python "$AOT_REGISTER_HELPER" verify \

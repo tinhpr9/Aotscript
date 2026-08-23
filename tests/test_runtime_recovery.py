@@ -158,7 +158,7 @@ class TestRuntimeRecoveryAndSetupGuards(unittest.TestCase):
         poll_test = """
         fake_runtime() {
           count_file="/tmp/test_poll_count_$$"
-          count=1
+          count=0
           [ -f "$count_file" ] && count="$(cat "$count_file")"
           count=$((count + 1))
           echo "$count" > "$count_file"
@@ -173,22 +173,57 @@ class TestRuntimeRecoveryAndSetupGuards(unittest.TestCase):
           fi
         }
         RUNTIME_STATUS=""
+        runtime_ready=false
         poll_i=1
         while [ "$poll_i" -le 15 ]; do
           RUNTIME_STATUS="$(fake_runtime)" || true
           if printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' &&
              printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$'; then
+            runtime_ready=true
             break
           fi
           poll_i=$((poll_i + 1))
         done
         rm -f "/tmp/test_poll_count_$$"
+        [ "$runtime_ready" = true ] || exit 1
         printf '%s\n' "$RUNTIME_STATUS"
         """
         res = subprocess.run(["bash", "-c", poll_test], capture_output=True, text=True, check=False)
         self.assertEqual(0, res.returncode)
         self.assertIn("AOT_CONFIG=OK", res.stdout)
         self.assertIn("PIDS=12345", res.stdout)
+
+    def test_malformed_runtime_status_after_polling_fails_closed(self) -> None:
+        # Simulate polling where runtime outputs malformed status (e.g. PIDS=NONE) across all iterations
+        poll_test = """
+        fake_runtime() {
+          echo "AOT_CONFIG=OK"
+          echo "PIDS=NONE"
+          return 0
+        }
+        RUNTIME_STATUS=""
+        runtime_ready=false
+        poll_i=1
+        while [ "$poll_i" -le 3 ]; do
+          RUNTIME_STATUS="$(fake_runtime)" || true
+          if printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' &&
+             printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$'; then
+            runtime_ready=true
+            break
+          fi
+          poll_i=$((poll_i + 1))
+        done
+        if [ "$runtime_ready" = true ]; then
+          echo "UNEXPECTED_PASS"
+          exit 0
+        else
+          echo "PROPERLY_FAILED_CLOSED"
+          exit 42
+        fi
+        """
+        res = subprocess.run(["bash", "-c", poll_test], capture_output=True, text=True, check=False)
+        self.assertEqual(42, res.returncode)
+        self.assertIn("PROPERLY_FAILED_CLOSED", res.stdout)
 
 
 if __name__ == "__main__":
