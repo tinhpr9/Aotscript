@@ -534,24 +534,95 @@ def mark_allocate_opened(
 def _launch_package(package: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9._]+", package):
         raise AotRelayError("invalid_package")
-    cmd = (
-        "/system/bin/cmd package resolve-activity --brief --user 0 "
-        "-a android.intent.action.MAIN "
-        "-c android.intent.category.LAUNCHER "
-        + package
-    )
-    resolved = controller._root_run(cmd).strip().splitlines()
-    activity = resolved[-1].strip() if resolved else ""
-    if not activity.startswith(package + "/"):
-        raise AotRelayError("package_activity_not_resolved")
-    controller._root_run(
-        "/system/bin/am start -W --user 0 --display 0 "
-        "-a android.intent.action.MAIN "
-        "-c android.intent.category.LAUNCHER "
-        "-n "
-        + activity
-        + " >/dev/null"
-    )
+    if controller.root_available():
+        cmd = (
+            "/system/bin/cmd package resolve-activity --brief --user 0 "
+            "-a android.intent.action.MAIN "
+            "-c android.intent.category.LAUNCHER "
+            + package
+        )
+        resolved = controller._root_run(cmd).strip().splitlines()
+        activity = resolved[-1].strip() if resolved else ""
+        if not activity.startswith(package + "/"):
+            raise AotRelayError("package_activity_not_resolved")
+        controller._root_run(
+            "/system/bin/am start -W --user 0 --display 0 "
+            "-a android.intent.action.MAIN "
+            "-c android.intent.category.LAUNCHER "
+            "-n "
+            + activity
+            + " >/dev/null"
+        )
+    else:
+        activity = ""
+        try:
+            proc = subprocess.run(
+                [
+                    "cmd",
+                    "package",
+                    "resolve-activity",
+                    "--brief",
+                    "--user",
+                    "0",
+                    "-a",
+                    "android.intent.action.MAIN",
+                    "-c",
+                    "android.intent.category.LAUNCHER",
+                    package,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            lines = proc.stdout.strip().splitlines()
+            if lines and lines[-1].strip().startswith(package + "/"):
+                activity = lines[-1].strip()
+        except Exception:
+            pass
+
+        if activity:
+            start_cmd = [
+                "am",
+                "start",
+                "-W",
+                "--user",
+                "0",
+                "-a",
+                "android.intent.action.MAIN",
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "-n",
+                activity,
+            ]
+        else:
+            start_cmd = [
+                "am",
+                "start",
+                "-a",
+                "android.intent.action.MAIN",
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "-p",
+                package,
+            ]
+        try:
+            proc = subprocess.run(
+                start_cmd,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip()
+                raise AotRelayError(
+                    f"package_launch_failed (rc={proc.returncode}): {detail or 'unknown'}"
+                )
+        except subprocess.TimeoutExpired as exc:
+            raise AotRelayError("package_launch_timeout") from exc
+        except OSError as exc:
+            raise AotRelayError(f"package_launch_os_error: {exc}") from exc
     time.sleep(2)
 
 
@@ -2240,7 +2311,10 @@ def fleet_loop(*, open_package: str | None = None) -> int:
     if group not in {"NOVA", "MARMOT"}:
         raise AotRelayError("invalid_local_device_group")
     if open_package:
-        _launch_package(open_package)
+        try:
+            _launch_package(open_package)
+        except Exception as exc:
+            print(f"AOT_PACKAGE_LAUNCH=FAILED REASON={exc}")
     cfg = load_agent_config()
     url = websocket_url(cfg["worker_report_url"], device_id=local_id)
     state = _load_state()

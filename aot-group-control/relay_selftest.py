@@ -243,26 +243,70 @@ try:
         assert False, "Expected KeyboardInterrupt from loop"
     except KeyboardInterrupt:
         pass
-    assert len(connected_urls) == 1, "fleet_loop must connect to WebSocket even on non-root"
-
-    # Root-required actions must remain strictly fail-closed when root is unavailable
+    # open_package non-root launch and error resilience tests:
+    # 1. Invalid package format rejected
     try:
-        module.reference_loop(session_id="s1", open_package=None)
-        assert False, "reference_loop must fail closed without root"
+        module._launch_package("com.invalid; rm -rf /")
+        assert False, "invalid package name must be rejected"
     except module.AotRelayError as exc:
-        assert str(exc) == "root_not_available"
+        assert str(exc) == "invalid_package"
 
-    try:
-        module.follower_loop(session_id="s1", reference_device="m1", open_package=None)
-        assert False, "follower_loop must fail closed without root"
-    except module.AotRelayError as exc:
-        assert str(exc) == "root_not_available"
+    # 2. Userspace package launch executed without root
+    launched_cmds = []
+    def fake_subprocess_run(cmd, **_kw):
+        launched_cmds.append(cmd)
+        class Res:
+            returncode = 0
+            stdout = "com.test.pkg/.MainActivity\n"
+            stderr = ""
+        return Res()
 
+    orig_sub_run = module.subprocess.run
+    orig_sleep = module.time.sleep
     try:
-        module.reference_test(session_id="s1", follower_id="m99", selector="sel", open_package="com.pkg")
-        assert False, "reference_test must fail closed without root"
-    except module.AotRelayError as exc:
-        assert str(exc) == "root_not_available"
+        module.subprocess.run = fake_subprocess_run
+        module.time.sleep = lambda _t: None
+        module._launch_package("com.test.pkg")
+        assert any("am" in cmd and "com.test.pkg" in str(cmd) for cmd in launched_cmds), "Userspace am start must be invoked"
+
+        # 3. fleet_loop continues to connect WebSocket even if optional open_package fails/times out
+        def fake_failing_run(cmd, **_kw):
+            class Res:
+                returncode = 1
+                stdout = ""
+                stderr = "Activity not found"
+            return Res()
+
+        module.subprocess.run = fake_failing_run
+        connected_urls.clear()
+        try:
+            module.fleet_loop(open_package="com.test.failing")
+            assert False, "Expected KeyboardInterrupt from loop"
+        except KeyboardInterrupt:
+            pass
+        assert len(connected_urls) == 1, "fleet_loop must still connect WebSocket after optional open_package failure"
+
+        # 4. Root-required actions must remain strictly fail-closed when root is unavailable
+        try:
+            module.reference_loop(session_id="s1", open_package=None)
+            assert False, "reference_loop must fail closed without root"
+        except module.AotRelayError as exc:
+            assert str(exc) == "root_not_available"
+
+        try:
+            module.follower_loop(session_id="s1", reference_device="m1", open_package=None)
+            assert False, "follower_loop must fail closed without root"
+        except module.AotRelayError as exc:
+            assert str(exc) == "root_not_available"
+
+        try:
+            module.reference_test(session_id="s1", follower_id="m99", selector="sel", open_package="com.pkg")
+            assert False, "reference_test must fail closed without root"
+        except module.AotRelayError as exc:
+            assert str(exc) == "root_not_available"
+    finally:
+        module.subprocess.run = orig_sub_run
+        module.time.sleep = orig_sleep
 
 finally:
     module.controller.root_available = orig_root_avail
