@@ -320,6 +320,71 @@ class TestFingerprintStrategyPersistence(unittest.TestCase):
         self.assertIn('printf \'%s\\n\' "$id" > "$id_file"', setup_m166)
 
     def test_cached_zip_source_binding_accepts_correct_source(self) -> None:
-        # Verify that same drive ID on a valid zip skips re-download
+        # Verify that same drive ID + intact digest results in cache hit message
         setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
-        self.assertIn("ZIP đã có sẵn, hợp lệ và đúng nguồn:", setup_m166)
+        self.assertIn("ZIP đã có sẵn, hợp lệ và nguyên vẹn:", setup_m166)
+
+
+class TestFingerprintStrongStrategyFallbackBlocked(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-strong-fallback-"))
+        self.state_dir = self.tmp / "state" / "aotscript" / "setup-driver"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run_sourced(self, script_body: str) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AOTSCRIPT_SETUP_SOURCE_ONLY"] = "1"
+        env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        env["HOME"] = str(self.tmp / "home")
+        cmd = f"""
+        set -eu
+        die() {{ echo "DIE:$*" >&2; exit 1; }}
+        warn() {{ :; }}
+        ok() {{ :; }}
+        state_write() {{ :; }}
+        state_read() {{ echo "no"; }}
+        source "{REPO_ROOT / 'setup.sh'}"
+        {script_body}
+        """
+        return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False, env=env)
+
+    def test_strong_strategy_fails_closed_when_root_unavailable(self) -> None:
+        # First: bind with strong strategy
+        strategy_file = self.state_dir / "host_fingerprint_strategy"
+        strategy_file.write_text("strong\n", encoding="utf-8")
+        # Simulate root unavailable on second run
+        cmd = """
+        su() { return 1; }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertNotEqual(0, res.returncode, "Should die when strong-bound device loses root access")
+        self.assertIn("su/Binder", res.stderr)
+
+    def test_strong_strategy_still_works_when_root_available(self) -> None:
+        strategy_file = self.state_dir / "host_fingerprint_strategy"
+        strategy_file.write_text("strong\n", encoding="utf-8")
+        cmd = """
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "myid" ;;
+            *"getprop ro.boot.serialno"*) echo "myserial" ;;
+            *) echo "" ;;
+          esac
+        }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertEqual(0, res.returncode, res.stderr)
+        expected = hashlib.sha256(b"myid|myserial").hexdigest()
+        self.assertEqual(expected, res.stdout.strip())
+
+    def test_zip_sha256_sidecar_stored_and_verified(self) -> None:
+        setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
+        self.assertIn('local sha_file="${out}.sha256"', setup_m166)
+        self.assertIn('sha256sum "$out" > "$sha_file"', setup_m166)
+        self.assertIn('stored_sha="$(cat "$sha_file"', setup_m166)
+        self.assertIn('[ "$stored_sha" = "$current_sha" ]', setup_m166)

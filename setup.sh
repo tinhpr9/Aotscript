@@ -474,6 +474,14 @@ host_fingerprint() {
         printf 'strong\n' > "$strategy_file"
       fi
     else
+      # Device was previously bound using strong hardware signals but those
+      # signals are now unavailable — falling through to token would produce
+      # a different hash, causing spurious NEEDS_CONFIRM / identity migration.
+      # Fail loudly so the operator can restore root access rather than
+      # silently adopting a token-derived fingerprint.
+      if [ "$existing_strategy" = "strong" ]; then
+        die "Thiết bị này đã bind bằng tín hiệu phần cứng (android_id/serial) nhưng su/Binder hiện không khả dụng. Kiểm tra quyền root và thử lại."
+      fi
       token_file="$SETUP_STATE_DIR/host_token"
       if [ -f "$token_file" ]; then
         token="$(cat "$token_file" 2>/dev/null | tr -d '\r\n ' || true)"

@@ -562,15 +562,23 @@ download_zip() {
   local out="$2"
   local part="${out}.part.$$"
   local id_file="${out}.driveid"
-  # Validate cache: must be structurally valid AND sourced from the same Drive ID
-  local cached_id=""
+  local sha_file="${out}.sha256"
+  # Validate cache: Drive ID match + content digest + structural integrity.
+  # NOTE: This guards against on-disk corruption and foreign file substitution.
+  # It cannot detect a legitimate update of the file behind the same Drive ID;
+  # such Drive-side updates require a new Drive ID or an out-of-band hash manifest.
+  local cached_id="" stored_sha="" current_sha=""
   [ -f "$id_file" ] && cached_id="$(cat "$id_file" 2>/dev/null | tr -d '\r\n ' || true)"
-  if [ -f "$out" ] && [ "$cached_id" = "$id" ] && unzip -t "$out" >/dev/null 2>&1; then
-    ok "ZIP đã có sẵn, hợp lệ và đúng nguồn: $(basename "$out")"
-    return 0
+  [ -f "$sha_file" ] && stored_sha="$(cat "$sha_file" 2>/dev/null | awk '{print $1}' || true)"
+  if [ -f "$out" ] && [ "$cached_id" = "$id" ] && [ -n "$stored_sha" ]; then
+    current_sha="$(sha256sum "$out" 2>/dev/null | awk '{print $1}' || true)"
+    if [ "$stored_sha" = "$current_sha" ] && unzip -t "$out" >/dev/null 2>&1; then
+      ok "ZIP đã có sẵn, hợp lệ và nguyên vẹn: $(basename "$out")"
+      return 0
+    fi
   fi
-  # Cache invalid: wrong/missing source ID or structurally corrupt
-  [ -f "$out" ] && rm -f "$out" "$id_file"
+  # Cache invalid: wrong Drive ID, digest mismatch, or structurally corrupt
+  [ -f "$out" ] && rm -f "$out" "$id_file" "$sha_file"
   echo
   echo "[*] Đang tải: $(basename "$out")"
   rm -f "$part"
@@ -589,8 +597,9 @@ download_zip() {
   fi
   mv -f "$part" "$out" ||
     die "Không lưu được: $(basename "$out")"
-  # Record Drive ID binding alongside the downloaded ZIP
+  # Record Drive ID and content digest for future cache validation
   printf '%s\n' "$id" > "$id_file"
+  sha256sum "$out" > "$sha_file"
   ok "ZIP hợp lệ: $(basename "$out")"
 }
 
