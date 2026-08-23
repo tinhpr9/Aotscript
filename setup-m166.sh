@@ -343,6 +343,11 @@ else
   warn "Đăng ký AOT, Agent và relay KHÔNG cần root — tiếp tục"
 fi
 
+if [ "${AOTSCRIPT_MSETUP_TEST_MODE:-0}" = "1" ]; then
+  echo "AOTSCRIPT_MSETUP_TEST_HAVE_ROOT=$HAVE_ROOT"
+  exit 0
+fi
+
 mkdir -p "$DL"
 
 if [ "$HAVE_ROOT" = 1 ]; then
