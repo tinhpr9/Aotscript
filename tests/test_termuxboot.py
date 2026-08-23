@@ -135,6 +135,21 @@ exit 0
                         os.kill(pid, signal.SIGKILL)
                     except Exception:
                         pass
+                elif "[PID]" in line:
+                    try:
+                        pid = int(line.split("[PID]")[1].split()[0])
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+        for entry in pathlib.Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                cmdline = (entry / "cmdline").read_bytes().decode("utf-8", errors="replace")
+                if str(self.root) in cmdline and int(entry.name) != os.getpid():
+                    os.kill(int(entry.name), signal.SIGKILL)
+            except Exception:
+                pass
         self.temp.cleanup()
 
 

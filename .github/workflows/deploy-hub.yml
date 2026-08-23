@@ -33,6 +33,13 @@ jobs:
       - name: Install dependencies
         working-directory: cloudflare-worker
         run: npm ci
+      - name: Run Cloudflare Worker selftests
+        working-directory: cloudflare-worker
+        run: |
+          for f in *-selftest.mjs; do
+            echo "=== RUNNING $f ==="
+            node --experimental-vm-modules "$f"
+          done
       - name: Deploy Hub to Cloudflare
         # wrangler-action v3.7.0 = 9acf94ace14e7dc412b076f2c5c20b8ce93c79cd
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd
