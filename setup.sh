@@ -107,8 +107,42 @@ install_candidate() {
 }
 
 install_local_launcher() {
+  local source="${1:-}"
   CURRENT_STEP="install-local-launcher"
-  install_candidate "$1" "$LAUNCHER"
+  if [ -n "${AOTSCRIPT_SETUP_SOURCE_PATH:-}" ] && [ -f "${AOTSCRIPT_SETUP_SOURCE_PATH:-}" ]; then
+    source="$AOTSCRIPT_SETUP_SOURCE_PATH"
+  fi
+  if [ -n "$source" ] && [ -f "$source" ]; then
+    install_candidate "$source" "$LAUNCHER"
+  else
+    # Executed from stdin pipe (curl ... | bash): download clean launcher from MAIN_SETUP_URL
+    local stage
+    stage="$(mktemp "$(dirname "$LAUNCHER")/.aotsetup.bootstrap.XXXXXX")" || die "Không tạo được launcher bootstrap tạm."
+    if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] && [ -n "${AOTSCRIPT_SETUP_UPDATE_SOURCE:-}" ]; then
+      cp -p "$AOTSCRIPT_SETUP_UPDATE_SOURCE" "$stage" || { rm -f "$stage"; die "Không copy được fixture bootstrap."; }
+    elif [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
+      # In dry-run mode without source file, install placeholder candidate
+      mkdir -p "$(dirname "$LAUNCHER")"
+      rm -f "$stage"
+      return 0
+    else
+      curl -fsSL --retry 3 --connect-timeout 15 </dev/null \
+        "$MAIN_SETUP_URL?t=$(date +%s)" -o "$stage" || {
+          rm -f "$stage"
+          die "Không tải được setup.sh cho local launcher."
+        }
+    fi
+    [ -s "$stage" ] || {
+      rm -f "$stage"
+      die "setup.sh tải về bị rỗng."
+    }
+    bash -n "$stage" && launcher_structure_check "$stage" || {
+      rm -f "$stage"
+      die "setup.sh tải về không qua syntax/structure gate."
+    }
+    install_candidate "$stage" "$LAUNCHER"
+    rm -f "$stage"
+  fi
 }
 
 update_local_launcher() {
@@ -1327,6 +1361,6 @@ main() {
   emit OK "AOT setup hoàn tất. Lần sau chỉ chạy aotsetup."
 }
 
-if [ "${AOTSCRIPT_SETUP_SOURCE_ONLY:-0}" != 1 ] && [ "${BASH_SOURCE[0]}" = "$0" ]; then
+if [ "${AOTSCRIPT_SETUP_SOURCE_ONLY:-0}" != 1 ] && [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
   main "$@"
 fi

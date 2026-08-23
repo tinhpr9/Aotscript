@@ -54,6 +54,24 @@ class TestRuntimeRecoveryAndSetupGuards(unittest.TestCase):
         self.assertEqual(0, res.returncode, f"Failed to source: {res.stderr}")
         self.assertIn("host_fingerprint is a function", res.stdout)
 
+    def test_stdin_piped_execution_runs_main_without_unbound_variable_error(self) -> None:
+        # Piping setup.sh into bash -s (e.g. curl | bash) with set -u must not fail on unbound BASH_SOURCE
+        env = os.environ.copy()
+        env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        env["HOME"] = str(self.tmp / "home")
+        setup_content = (REPO_ROOT / "setup.sh").read_text(encoding="utf-8")
+        res = subprocess.run(
+            ["bash", "-s", "--", "--validate-id", "m74"],
+            input=setup_content,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        self.assertNotIn("unbound variable", res.stderr)
+        self.assertEqual(0, res.returncode, f"Failed with stderr: {res.stderr}")
+        self.assertEqual("m74", res.stdout.strip())
+
     def test_strong_device_signal_produces_stable_fingerprint(self) -> None:
         # When strong signals are simulated
         cmd = """
