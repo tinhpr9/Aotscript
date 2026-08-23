@@ -333,22 +333,42 @@ KEYS=(
 
 echo "=== MSETUP: $DEVICE_ID / $DEVICE_GROUP_LABEL ==="
 
-root id 2>/dev/null | grep -q 'uid=0(root)' ||
-  die "ROOT không hoạt động"
-ok "ROOT hoạt động"
+if root id 2>/dev/null | grep -q 'uid=0(root)'; then
+  HAVE_ROOT=1
+  ok "ROOT hoạt động — tất cả bước sẽ chạy đầy đủ"
+else
+  HAVE_ROOT=0
+  warn "ROOT không có hoặc không hoạt động trên máy này"
+  warn "Các bước cần root (wm density, settings, Gboard, Termux:Boot cài APK) sẽ bị bỏ qua"
+  warn "Đăng ký AOT, Agent và relay KHÔNG cần root — tiếp tục"
+fi
+
+if [ "${AOTSCRIPT_MSETUP_TEST_MODE:-0}" = "1" ]; then
+  echo "AOTSCRIPT_MSETUP_TEST_HAVE_ROOT=$HAVE_ROOT"
+  exit 0
+fi
 
 mkdir -p "$DL"
 
-{
-  echo "time=$STAMP"
-  echo "device_id=$DEVICE_ID"
-  echo "device_group=$DEVICE_GROUP"
-  echo "size=$(root 'wm size' 2>&1)"
-  echo "density=$(root 'wm density' 2>&1)"
-  for key in "${KEYS[@]}"; do
-    echo "$key=$(root "settings get global $key" 2>/dev/null)"
-  done
-} > "$BACKUP" || die "Không tạo được bản sao lưu cài đặt"
+if [ "$HAVE_ROOT" = 1 ]; then
+  {
+    echo "time=$STAMP"
+    echo "device_id=$DEVICE_ID"
+    echo "device_group=$DEVICE_GROUP"
+    echo "size=$(root 'wm size' 2>&1)"
+    echo "density=$(root 'wm density' 2>&1)"
+    for key in "${KEYS[@]}"; do
+      echo "$key=$(root "settings get global $key" 2>/dev/null)"
+    done
+  } > "$BACKUP" || die "Không tạo được bản sao lưu cài đặt"
+else
+  {
+    echo "time=$STAMP"
+    echo "device_id=$DEVICE_ID"
+    echo "device_group=$DEVICE_GROUP"
+    echo "root=unavailable"
+  } > "$BACKUP" || die "Không tạo được bản sao lưu cài đặt"
+fi
 
 ok "Đã sao lưu cài đặt: $BACKUP"
 
@@ -371,13 +391,17 @@ else
   echo "[*] Giữ nguyên mọi boot script hiện tại"
 fi
 
-for key in "${KEYS[@]}"; do
-  if root "settings put global $key 1"; then
-    ok "$key=1"
-  else
-    warn "Không đặt được $key"
-  fi
-done
+if [ "$HAVE_ROOT" = 1 ]; then
+  for key in "${KEYS[@]}"; do
+    if root "settings put global $key 1"; then
+      ok "$key=1"
+    else
+      warn "Không đặt được $key"
+    fi
+  done
+else
+  warn "Bỏ qua developer settings (cần root): ${KEYS[*]}"
+fi
 
 for command in python curl unzip; do
   command -v "$command" >/dev/null 2>&1 ||
@@ -480,29 +504,35 @@ else
   ok "Đã cài lệnh: msetup"
 fi
 
-SIZE_OUT="$(root 'wm size' 2>/dev/null)"
-SIZE="$(
-  printf '%s\n' "$SIZE_OUT" |
-    sed -n 's/.*Physical size: \([0-9][0-9]*x[0-9][0-9]*\).*/\1/p' |
-    head -n 1
-)"
+if [ "$HAVE_ROOT" = 1 ]; then
+  SIZE_OUT="$(root 'wm size' 2>/dev/null)"
+  SIZE="$(
+    printf '%s\n' "$SIZE_OUT" |
+      sed -n 's/.*Physical size: \([0-9][0-9]*x[0-9][0-9]*\).*/\1/p' |
+      head -n 1
+  )"
 
-if [[ "$SIZE" =~ ^([0-9]+)x([0-9]+)$ ]]; then
-  WIDTH="${BASH_REMATCH[1]}"
-  HEIGHT="${BASH_REMATCH[2]}"
-  if [ "$WIDTH" -lt "$HEIGHT" ]; then
-    SHORT="$WIDTH"
+  if [[ "$SIZE" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    WIDTH="${BASH_REMATCH[1]}"
+    HEIGHT="${BASH_REMATCH[2]}"
+    if [ "$WIDTH" -lt "$HEIGHT" ]; then
+      SHORT="$WIDTH"
+    else
+      SHORT="$HEIGHT"
+    fi
+    DENSITY=$(( (SHORT * 160 + 350) / 700 ))
+    [ "$DENSITY" -lt 72 ] && DENSITY=72
+    if root "wm density $DENSITY"; then
+      sleep 2
+      ok "Đã đặt density=$DENSITY, gần 700 dp"
+    else
+      warn "Không đặt được density (bỏ qua)"
+    fi
   else
-    SHORT="$HEIGHT"
+    warn "Không đọc được Physical size; chưa đổi density"
   fi
-  DENSITY=$(( (SHORT * 160 + 350) / 700 ))
-  [ "$DENSITY" -lt 72 ] && DENSITY=72
-  root "wm density $DENSITY" ||
-    die "Không đặt được density"
-  sleep 2
-  ok "Đã đặt density=$DENSITY, gần 700 dp"
 else
-  warn "Không đọc được Physical size; chưa đổi density"
+  warn "Bỏ qua điều chỉnh wm density (cần root)"
 fi
 
 PKG="com.google.android.inputmethod.latin"
@@ -511,16 +541,20 @@ IME="$PKG/com.android.inputmethod.latin.LatinIME"
 echo
 echo "=== CẤU HÌNH GBOARD ==="
 
-if root "pm path $PKG" >/dev/null 2>&1; then
-  root "pm enable $PKG" >/dev/null 2>&1 || true
-  root "ime enable '$IME'" >/dev/null 2>&1 || true
-  if root "ime set '$IME'"; then
-    ok "Đã đặt Gboard làm mặc định"
+if [ "$HAVE_ROOT" = 1 ]; then
+  if root "pm path $PKG" >/dev/null 2>&1; then
+    root "pm enable $PKG" >/dev/null 2>&1 || true
+    root "ime enable '$IME'" >/dev/null 2>&1 || true
+    if root "ime set '$IME'"; then
+      ok "Đã đặt Gboard làm mặc định"
+    else
+      warn "Không đặt được Gboard làm mặc định"
+    fi
   else
-    warn "Không đặt được Gboard làm mặc định"
+    warn "Gboard chưa được cài"
   fi
 else
-  warn "Gboard chưa được cài"
+  warn "Bỏ qua cấu hình Gboard (cần root)"
 fi
 
 download_zip() {
@@ -1202,8 +1236,16 @@ install_termux_boot_app() {
   local install_source=""
   local version_code=""
 
-  if root "pm path $package" >/dev/null 2>&1; then
+  # Non-root check: pm list packages does not require root
+  if pm list packages 2>/dev/null | grep -Fqx "package:$package"; then
     ok "Termux:Boot đã được cài"
+    return 0
+  fi
+
+  if [ "$HAVE_ROOT" != 1 ]; then
+    warn "Termux:Boot chưa được cài và không có root để cài APK tự động"
+    warn "Relay vẫn có thể khởi động bằng tay hoặc qua Termux session"
+    warn "Để tự động khởi động khi boot: cài Termux:Boot thủ công từ F-Droid hoặc nguồn tương thích"
     return 0
   fi
 

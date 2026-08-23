@@ -265,6 +265,45 @@ class AotMsetupIntegrationTests(unittest.TestCase):
         self.assertTrue(fixture.target.is_symlink())
         self.assertEqual(fixture.target.resolve(), conflict)
 
+    def test_setup_m166_nonroot_graceful_continuation(self):
+        # When su does not exist or fails, running setup-m166.sh must continue non-root (HAVE_ROOT=0)
+        # without exiting or dying with "ROOT không hoạt động"
+        stub_dir = tempfile.mkdtemp(prefix="nonroot-test-")
+        self.addCleanup(shutil.rmtree, stub_dir, ignore_errors=True)
+        su_stub = Path(stub_dir) / "su"
+        su_stub.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        su_stub.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{stub_dir}:{env.get('PATH', '')}"
+        env["AOTSCRIPT_MSETUP_TEST_MODE"] = "1"
+
+        proc = run(("bash", str(SETUP), "m74", "2"), env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("AOTSCRIPT_MSETUP_TEST_HAVE_ROOT=0", proc.stdout)
+        self.assertIn("ROOT không có hoặc không hoạt động trên máy này", proc.stdout)
+        self.assertIn("Đăng ký AOT, Agent và relay KHÔNG cần root — tiếp tục", proc.stdout)
+        self.assertNotIn("ROOT hoạt động — tất cả bước sẽ chạy đầy đủ", proc.stdout)
+
+    def test_setup_m166_root_detected_when_available(self):
+        # When su succeeds, setup-m166.sh detects HAVE_ROOT=1 and reports full root capability
+        stub_dir = tempfile.mkdtemp(prefix="root-test-")
+        self.addCleanup(shutil.rmtree, stub_dir, ignore_errors=True)
+        su_stub = Path(stub_dir) / "su"
+        su_stub.write_text("#!/bin/sh\necho 'uid=0(root) gid=0(root)'\n", encoding="utf-8")
+        su_stub.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{stub_dir}:{env.get('PATH', '')}"
+        env["AOTSCRIPT_MSETUP_TEST_MODE"] = "1"
+
+        proc = run(("bash", str(SETUP), "m74", "2"), env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("AOTSCRIPT_MSETUP_TEST_HAVE_ROOT=1", proc.stdout)
+        self.assertIn("ROOT hoạt động — tất cả bước sẽ chạy đầy đủ", proc.stdout)
+        self.assertNotIn("ROOT không có hoặc không hoạt động trên máy này", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
