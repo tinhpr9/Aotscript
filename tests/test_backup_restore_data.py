@@ -887,7 +887,7 @@ class TestArchitectureConstraints(unittest.TestCase):
         self.assertIn("backup_restore_data_semantic", RELAY.WORKER_CAPABILITIES)
 
     def test_worker_version_bumped_to_12(self):
-        self.assertEqual("aot-worker-2026.08.18.01", RELAY.WORKER_VERSION)
+        self.assertEqual("aot-worker-2026.08.23.01", RELAY.WORKER_VERSION)
 
     def test_fleet_hub_html_page_removed(self):
         """The browser WebApp HTML page has been fully removed from the worker."""

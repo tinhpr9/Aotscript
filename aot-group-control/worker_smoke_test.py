@@ -35,18 +35,20 @@ if updater.normalize_channel("stable") != "stable":
 if updater.normalize_channel("other") is not None:
     raise SystemExit("invalid_channel_accepted")
 
-load("aot_release_smoke_controller", "controller.py")
+controller = load("aot_release_smoke_controller", "controller.py")
 load("aot_release_smoke_runtime", "runtime.py")
 relay = load("aot_release_smoke_relay", "relay.py")
-if relay.WORKER_VERSION != "aot-worker-2026.08.18.01":
+if relay.WORKER_VERSION != "aot-worker-2026.08.23.01":
     raise SystemExit("worker_version_mismatch")
 if "dynamic_update_channel" not in relay.WORKER_CAPABILITIES:
     raise SystemExit("dynamic_channel_capability_missing")
 if "backup_restore_data_semantic" not in relay.WORKER_CAPABILITIES:
     raise SystemExit("backup_restore_data_capability_missing")
+if "allocate_server_2pc" not in relay.WORKER_CAPABILITIES:
+    raise SystemExit("allocate_server_capability_missing")
 
 relay_source = (ROOT / "relay.py").read_text(encoding="utf-8")
-if 'WORKER_VERSION = "aot-worker-2026.08.18.01"' not in relay_source:
+if 'WORKER_VERSION = "aot-worker-2026.08.23.01"' not in relay_source:
     raise SystemExit("worker_version_mismatch")
 # Policy: standalone browser-controlled FILTER_RESTORE_DATA is banned.
 # BACKUP_RESTORE_DATA is permitted as the fixed, allowlisted, fail-closed
@@ -56,5 +58,59 @@ if "FILTER_RESTORE_DATA" in relay_source:
     raise SystemExit("forbidden_restore_action")
 if "BACKUP_RESTORE_DATA_ACTION" not in relay_source:
     raise SystemExit("backup_restore_data_action_missing")
+if "ALLOCATE_SERVER_ACTION" not in relay_source:
+    raise SystemExit("allocate_server_action_missing")
+
+# ALLOCATE_SERVER Smoke Guard:
+# 1. Test non-root dispatch path exercises userspace am start
+recorded_subproc_calls = []
+orig_subprocess_run = controller.subprocess.run
+orig_root_avail = controller.root_available
+orig_root_run = controller._root_run
+
+class MockCompletedProc:
+    def __init__(self, rc=0, stderr=""):
+        self.returncode = rc
+        self.stderr = stderr
+
+def mock_subproc_run(argv, *args, **kwargs):
+    recorded_subproc_calls.append(list(argv))
+    return MockCompletedProc(rc=0)
+
+try:
+    controller.root_available = lambda: False
+    controller.subprocess.run = mock_subproc_run
+    controller.open_roblox_servers([
+        {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111"}
+    ])
+    if len(recorded_subproc_calls) != 1:
+        raise SystemExit("allocate_server_nonroot_dispatch_missing")
+    if recorded_subproc_calls[0][:4] != ["am", "start", "-a", "android.intent.action.VIEW"]:
+        raise SystemExit("allocate_server_intent_format_invalid")
+
+    # 2. Non-root fail-closed on non-zero exit code
+    controller.subprocess.run = lambda argv, *args, **kwargs: MockCompletedProc(rc=1, stderr="ActivityNotFound")
+    try:
+        controller.open_roblox_servers([{"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/123"}])
+        raise SystemExit("allocate_server_nonroot_nonzero_not_fail_closed")
+    except controller.AotControllerError:
+        pass
+
+    # 3. Root path verification
+    recorded_root_calls = []
+    controller.root_available = lambda: True
+    controller._root_run = lambda cmd, *args, **kwargs: (
+        "uid=0(root) gid=0(root)" if cmd == "id" else recorded_root_calls.append(cmd) or "OK"
+    )
+    controller.open_roblox_servers([
+        {"pkg": "com.tinh.vv.hi", "url": "https://www.roblox.com/games/97598239454123?privateServerLinkCode=11111111111111111111111111111111"}
+    ])
+    if len(recorded_root_calls) != 1 or not recorded_root_calls[0].startswith("am start -a android.intent.action.VIEW"):
+        raise SystemExit("allocate_server_root_dispatch_failed")
+
+finally:
+    controller.subprocess.run = orig_subprocess_run
+    controller.root_available = orig_root_avail
+    controller._root_run = orig_root_run
 
 print("AOT_WORKER_SMOKE_TEST=OK")

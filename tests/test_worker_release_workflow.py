@@ -29,7 +29,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         (self.assets / "worker-bundle.zip").write_bytes(b"bundle")
         (self.assets / "worker-manifest.json").write_bytes(b"manifest")
         self.commit = "a" * 40
-        self.tag = "worker-v2026.08.18.01"
+        self.tag = "worker-v2026.08.23.01"
         self.release = {
             "id": 123,
             "tag_name": self.tag,
@@ -200,7 +200,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
             sys.executable,
             str(ROOT / "scripts/build-worker-release.py"),
             "--version",
-            "2026.08.18.01",
+            "2026.08.23.01",
             "--commit",
             self.commit,
             "--source-root",
@@ -231,7 +231,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
 
     def test_workflow_is_fail_closed_and_never_uses_admin_endpoint(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('test "$RELEASE_VERSION" = "2026.08.18.01"', text)
+        self.assertIn('test "$RELEASE_VERSION" = "2026.08.23.01"', text)
         self.assertIn("https://uploads.github.com/repos/${GITHUB_REPOSITORY}", text)
         self.assertNotIn("/immutable-releases", text)
         self.assertNotIn("len(data[\"assets\"])", text)
