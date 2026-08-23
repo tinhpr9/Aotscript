@@ -388,3 +388,94 @@ class TestFingerprintStrongStrategyFallbackBlocked(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFingerprintSeedPinning(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-seed-pin-"))
+        self.state_dir = self.tmp / "state" / "aotscript" / "setup-driver"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run_sourced(self, script_body: str, env_override: dict | None = None) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AOTSCRIPT_SETUP_SOURCE_ONLY"] = "1"
+        env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        env["HOME"] = str(self.tmp / "home")
+        if env_override:
+            env.update(env_override)
+        cmd = f"""
+        set -eu
+        die() {{ echo "DIE:$*" >&2; exit 1; }}
+        warn() {{ :; }}
+        ok() {{ :; }}
+        state_write() {{ :; }}
+        state_read() {{ echo "no"; }}
+        source "{REPO_ROOT / 'setup.sh'}"
+        {script_body}
+        """
+        return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False, env=env)
+
+    def test_seed_file_created_on_first_bind(self) -> None:
+        cmd = """
+        su() { return 1; }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertEqual(0, res.returncode, res.stderr)
+        seed_file = self.state_dir / "host_fingerprint_seed"
+        self.assertTrue(seed_file.exists(), "Seed file must be created on first bind")
+        seed = seed_file.read_text().strip()
+        self.assertTrue(seed.startswith("token:"), "Token-based seed must start with 'token:'")
+
+    def test_seed_pinned_across_runs_even_if_more_signals_appear(self) -> None:
+        # First run: only android_id available (partial strong signal)
+        cmd_partial = """
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "myandroidid" ;;
+            *"getprop ro.boot.serialno"*) echo "" ;;
+            *) echo "" ;;
+          esac
+        }
+        host_fingerprint
+        """
+        res1 = self._run_sourced(cmd_partial)
+        self.assertEqual(0, res1.returncode, res1.stderr)
+        fp1 = res1.stdout.strip()
+        seed_file = self.state_dir / "host_fingerprint_seed"
+        stored_seed = seed_file.read_text().strip()
+        self.assertEqual("myandroidid|", stored_seed)
+
+        # Second run: now serial also available → must NOT change fingerprint
+        cmd_full = """
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "myandroidid" ;;
+            *"getprop ro.boot.serialno"*) echo "myserial" ;;
+            *) echo "" ;;
+          esac
+        }
+        host_fingerprint
+        """
+        res2 = self._run_sourced(cmd_full)
+        self.assertEqual(0, res2.returncode, res2.stderr)
+        fp2 = res2.stdout.strip()
+        self.assertEqual(fp1, fp2, "Fingerprint must not change when additional hardware signals appear after first bind")
+
+    def test_seed_used_directly_skips_su_calls(self) -> None:
+        # Pre-populate seed file (simulates already-bound device)
+        seed_file = self.state_dir / "host_fingerprint_seed"
+        seed_file.write_text("myandroidid|myserial\n", encoding="utf-8")
+        # su should never be called since seed is already available
+        cmd = """
+        su() { echo "SU_CALLED" >&2; return 1; }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertEqual(0, res.returncode, res.stderr)
+        self.assertNotIn("SU_CALLED", res.stderr, "su must not be called when seed file exists")
+        expected = hashlib.sha256(b"myandroidid|myserial").hexdigest()
+        self.assertEqual(expected, res.stdout.strip())

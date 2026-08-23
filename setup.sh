@@ -445,65 +445,77 @@ ensure_packages() {
 
 host_fingerprint() {
   local raw="" android_id="" serial="" token_file="" token="" token_tmp=""
+  local seed_file="$SETUP_STATE_DIR/host_fingerprint_seed"
   local strategy_file="$SETUP_STATE_DIR/host_fingerprint_strategy"
   if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     raw="${AOTSCRIPT_SETUP_HOST_ID:-test-host}"
   else
-    # If device is already bound, honour the strategy used at bind time
-    # to prevent root-availability changes from generating a different hash.
-    local existing_strategy=""
-    if [ -f "$strategy_file" ]; then
-      existing_strategy="$(cat "$strategy_file" 2>/dev/null | tr -d '\r\n ' || true)"
+    # Primary path: reuse the exact raw seed stored at first bind so that
+    # partial hardware availability at bind time does not create a different
+    # hash if additional signals become readable on later runs.
+    if [ -f "$seed_file" ]; then
+      raw="$(cat "$seed_file" 2>/dev/null | tr -d '\r\n' || true)"
     fi
-    if [ "$existing_strategy" = "token" ]; then
-      # Was bound using token fallback — continue using it even if root now available
-      android_id=""
-      serial=""
-    else
-      android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-      serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-      case "$android_id" in null|unknown|"") android_id="" ;; esac
-      case "$serial" in null|unknown|"") serial="" ;; esac
-    fi
-    if [ -n "$android_id$serial" ]; then
-      raw="$android_id|$serial"
-      # Persist strategy if not yet recorded
-      if [ -z "$existing_strategy" ]; then
-        mkdir -p "$SETUP_STATE_DIR"
-        printf 'strong\n' > "$strategy_file"
+
+    if [ -z "$raw" ]; then
+      # Seed missing: fresh bind, or migration from older installs that only
+      # have a strategy file.  Compute raw using existing or detected strategy.
+      local existing_strategy=""
+      if [ -f "$strategy_file" ]; then
+        existing_strategy="$(cat "$strategy_file" 2>/dev/null | tr -d '\r\n ' || true)"
       fi
-    else
-      # Device was previously bound using strong hardware signals but those
-      # signals are now unavailable — falling through to token would produce
-      # a different hash, causing spurious NEEDS_CONFIRM / identity migration.
-      # Fail loudly so the operator can restore root access rather than
-      # silently adopting a token-derived fingerprint.
-      if [ "$existing_strategy" = "strong" ]; then
-        die "Thiết bị này đã bind bằng tín hiệu phần cứng (android_id/serial) nhưng su/Binder hiện không khả dụng. Kiểm tra quyền root và thử lại."
-      fi
-      token_file="$SETUP_STATE_DIR/host_token"
-      if [ -f "$token_file" ]; then
-        token="$(cat "$token_file" 2>/dev/null | tr -d '\r\n ' || true)"
-        if [ ${#token} -lt 8 ]; then
-          token=""
-          rm -f "$token_file"
+
+      if [ "$existing_strategy" = "token" ]; then
+        # Migrating from strategy-only state: restore token fingerprint
+        android_id=""
+        serial=""
+      elif [ "$existing_strategy" = "strong" ]; then
+        # Migrating from strategy-only state: root must be available
+        android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+        serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+        case "$android_id" in null|unknown|"") android_id="" ;; esac
+        case "$serial" in null|unknown|"") serial="" ;; esac
+        if [ -z "$android_id$serial" ]; then
+          die "Thiết bị này đã bind bằng tín hiệu phần cứng (android_id/serial) nhưng su/Binder hiện không khả dụng. Kiểm tra quyền root và thử lại."
         fi
+      else
+        # Fresh first bind: detect available signals
+        android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+        serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+        case "$android_id" in null|unknown|"") android_id="" ;; esac
+        case "$serial" in null|unknown|"") serial="" ;; esac
       fi
-      if [ -z "$token" ]; then
-        token="$(python -c 'import uuid, time; print(f"{uuid.uuid4().hex}-{int(time.time()*1000)}")' 2>/dev/null || date +%s%N 2>/dev/null || date +%s)-$$"
+
+      if [ -n "$android_id$serial" ]; then
+        raw="$android_id|$serial"
         mkdir -p "$SETUP_STATE_DIR"
-        token_tmp="${token_file}.tmp.$$"
-        printf '%s\n' "$token" > "$token_tmp"
-        mv -f "$token_tmp" "$token_file"
-      fi
-      [ -n "$token" ] || die "Không tạo được token host bền vững."
-      raw="token:$token"
-      # Persist strategy if not yet recorded
-      if [ -z "$existing_strategy" ]; then
+        [ -f "$strategy_file" ] || printf 'strong\n' > "$strategy_file"
+      else
+        token_file="$SETUP_STATE_DIR/host_token"
+        if [ -f "$token_file" ]; then
+          token="$(cat "$token_file" 2>/dev/null | tr -d '\r\n ' || true)"
+          if [ ${#token} -lt 8 ]; then
+            token=""
+            rm -f "$token_file"
+          fi
+        fi
+        if [ -z "$token" ]; then
+          token="$(python -c 'import uuid, time; print(f"{uuid.uuid4().hex}-{int(time.time()*1000)}")' 2>/dev/null || date +%s%N 2>/dev/null || date +%s)-$$"
+          mkdir -p "$SETUP_STATE_DIR"
+          token_tmp="${token_file}.tmp.$$"
+          printf '%s\n' "$token" > "$token_tmp"
+          mv -f "$token_tmp" "$token_file"
+        fi
+        [ -n "$token" ] || die "Không tạo được token host bền vững."
+        raw="token:$token"
         mkdir -p "$SETUP_STATE_DIR"
-        printf 'token\n' > "$strategy_file"
+        [ -f "$strategy_file" ] || printf 'token\n' > "$strategy_file"
       fi
+
+      # Pin the exact raw seed for deterministic reproduction on all future runs
+      mkdir -p "$SETUP_STATE_DIR"
+      printf '%s\n' "$raw" > "$seed_file"
     fi
   fi
   [ -n "$raw" ] || die "Không tạo được fingerprint ổn định cho máy hiện tại."
