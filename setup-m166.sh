@@ -1353,6 +1353,8 @@ PY
   unzip -t "$apk_part" >/dev/null 2>&1 ||
     die "APK Termux:Boot không hợp lệ"
 
+  mv -f "$apk_part" "$apk"
+
   if ! root "pm install -r '$apk'" >/dev/null 2>&1; then
     warn "Cài Termux:Boot tự động thất bại; relay vẫn hoạt động bình thường qua Termux session"
     return 0
@@ -1630,14 +1632,18 @@ printf '%s\n' "$BOOTSTRAP_STATUS" |
   }
 
 RUNTIME_STATUS=""
-for i in $(seq 1 15); do
-  RUNTIME_STATUS="$(
-    python "$HOME/.aot-group-control/current/runtime.py" status 2>&1
-  )" || true
-  if printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' &&
-     printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$'; then
-    break
+poll_i=1
+while [ "$poll_i" -le 15 ]; do
+  if [ -f "$HOME/.aot-group-control/current/runtime.py" ]; then
+    RUNTIME_STATUS="$(
+      python "$HOME/.aot-group-control/current/runtime.py" status 2>&1
+    )" || true
+    if printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' &&
+       printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$'; then
+      break
+    fi
   fi
+  poll_i=$((poll_i + 1))
   sleep 1
 done
 

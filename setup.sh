@@ -444,33 +444,35 @@ ensure_packages() {
 }
 
 host_fingerprint() {
-  local raw="" android_id="" serial="" fallback_id=""
+  local raw="" android_id="" serial="" token_file="" token="" token_tmp=""
   if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     raw="${AOTSCRIPT_SETUP_HOST_ID:-test-host}"
   else
     android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
     serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-    case "$android_id" in null|unknown) android_id="" ;; esac
-    case "$serial" in null|unknown) serial="" ;; esac
+    case "$android_id" in null|unknown|"") android_id="" ;; esac
+    case "$serial" in null|unknown|"") serial="" ;; esac
     if [ -n "$android_id$serial" ]; then
-      raw="$android_id|$serial"
+      raw="strong:$android_id|$serial"
     else
-      fallback_id="$(getprop ro.build.display.id 2>/dev/null | tr -d '\r\n ' || true)|$(getprop ro.product.model 2>/dev/null | tr -d '\r\n ' || true)|$(getprop ro.build.id 2>/dev/null | tr -d '\r\n ' || true)"
-      if [ "$fallback_id" = "||" ]; then
-        fallback_id=""
+      token_file="$SETUP_STATE_DIR/host_token"
+      if [ -f "$token_file" ]; then
+        token="$(cat "$token_file" 2>/dev/null | tr -d '\r\n ' || true)"
+        if [ ${#token} -lt 8 ]; then
+          token=""
+          rm -f "$token_file"
+        fi
       fi
-      if [ -n "$fallback_id" ]; then
-        raw="prop:$fallback_id"
-      elif [ -f "$SETUP_STATE_DIR/host_token" ]; then
-        raw="token:$(cat "$SETUP_STATE_DIR/host_token" 2>/dev/null | tr -d '\r\n ' || true)"
-      else
-        local token
-        token="$(date +%s%N 2>/dev/null || date +%s)-$$"
+      if [ -z "$token" ]; then
+        token="$(python -c 'import uuid, time; print(f"{uuid.uuid4().hex}-{int(time.time()*1000)}")' 2>/dev/null || date +%s%N 2>/dev/null || date +%s)-$$"
         mkdir -p "$SETUP_STATE_DIR"
-        printf '%s\n' "$token" > "$SETUP_STATE_DIR/host_token"
-        raw="token:$token"
+        token_tmp="${token_file}.tmp.$$"
+        printf '%s\n' "$token" > "$token_tmp"
+        mv -f "$token_tmp" "$token_file"
       fi
+      [ -n "$token" ] || die "Không tạo được token host bền vững."
+      raw="token:$token"
     fi
   fi
   [ -n "$raw" ] || die "Không tạo được fingerprint ổn định cho máy hiện tại."
@@ -1247,4 +1249,6 @@ main() {
   emit OK "AOT setup hoàn tất. Lần sau chỉ chạy aotsetup."
 }
 
-main "$@"
+if [ "${AOTSCRIPT_SETUP_SOURCE_ONLY:-0}" != 1 ] && [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
