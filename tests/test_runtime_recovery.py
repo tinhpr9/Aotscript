@@ -498,6 +498,27 @@ class TestFingerprintHardwareVerificationAndCloneDetection(unittest.TestCase):
         self.assertEqual(0, res.returncode, res.stderr)
         self.assertEqual(token_hash, res.stdout.strip(), "Token binding must be preserved even if root becomes available later")
 
+    def test_full_hardware_binding_fails_closed_when_one_probe_disappears(self) -> None:
+        # Device bound with both signals
+        full_hash = hashlib.sha256(b"aid_full|sno_full").hexdigest()
+        (self.state_dir / "host_fingerprint").write_text(full_hash + "\n", encoding="utf-8")
+        (self.state_dir / "host_fingerprint_signals").write_text("both\n", encoding="utf-8")
+
+        # On subsequent run, serial disappears (returns empty)
+        cmd = """
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "aid_full" ;;
+            *"getprop ro.boot.serialno"*) echo "" ;;
+            *) echo "" ;;
+          esac
+        }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertNotEqual(0, res.returncode, "Must fail closed when a required hardware probe disappears")
+        self.assertIn("android_id và serial", res.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

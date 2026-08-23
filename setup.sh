@@ -446,7 +446,8 @@ ensure_packages() {
 host_fingerprint() {
   local raw="" android_id="" serial="" token_file="" token="" token_tmp=""
   local binding_file="$SETUP_STATE_DIR/host_fingerprint"
-  local bound_hash=""
+  local signals_file="$SETUP_STATE_DIR/host_fingerprint_signals"
+  local bound_hash="" signals=""
 
   if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
@@ -454,6 +455,9 @@ host_fingerprint() {
   else
     if [ -f "$binding_file" ]; then
       bound_hash="$(cat "$binding_file" 2>/dev/null | tr -d '\r\n ' || true)"
+    fi
+    if [ -f "$signals_file" ]; then
+      signals="$(cat "$signals_file" 2>/dev/null | tr -d '\r\n ' || true)"
     fi
     token_file="$SETUP_STATE_DIR/host_token"
     if [ -f "$token_file" ]; then
@@ -464,64 +468,86 @@ host_fingerprint() {
       fi
     fi
 
-    # Check if this device was already bound with a valid token
-    if [ -n "$token" ] && [ -n "$bound_hash" ]; then
-      local token_hash
-      token_hash="$(printf '%s' "token:$token" | sha256sum | awk '{print $1}')"
-      if [ "$token_hash" = "$bound_hash" ]; then
+    # Check if this device was already bound with token strategy
+    if [ "$signals" = "token" ] || { [ -n "$token" ] && [ -n "$bound_hash" ] && [ "$(printf '%s' "token:$token" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; }; then
+      if [ -n "$token" ]; then
         raw="token:$token"
+        [ -n "$signals" ] || { mkdir -p "$SETUP_STATE_DIR"; printf 'token\n' > "$signals_file"; }
       fi
     fi
 
     if [ -z "$raw" ]; then
-      # Probe live hardware signals to detect cloned instances and fresh devices
+      # Probe live hardware signals to detect cloned instances and verify bindings
       android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
       serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
       case "$android_id" in null|unknown|"") android_id="" ;; esac
       case "$serial" in null|unknown|"") serial="" ;; esac
 
-      if [ -n "$android_id$serial" ]; then
-        # Live hardware signals are available.
-        # If already bound, check if bound hash matches any valid signal composition
-        # to preserve binding if one property was absent at bind time.
-        if [ -n "$bound_hash" ]; then
-          local full_h="" aid_h="" ser_h=""
-          full_h="$(printf '%s' "$android_id|$serial" | sha256sum | awk '{print $1}')"
-          [ -n "$android_id" ] && aid_h="$(printf '%s' "$android_id|" | sha256sum | awk '{print $1}')"
-          [ -n "$serial" ] && ser_h="$(printf '%s' "|$serial" | sha256sum | awk '{print $1}')"
-
-          if [ "$full_h" = "$bound_hash" ]; then
+      if [ -n "$signals" ]; then
+        # Known pinned signal composition: enforce presence of all required signals
+        case "$signals" in
+          both)
+            if [ -z "$android_id" ] || [ -z "$serial" ]; then
+              die "Thiết bị này yêu cầu cả android_id và serial nhưng một trong các tín hiệu hiện không khả dụng (android_id='$android_id', serial='$serial'). Kiểm tra quyền root và thử lại."
+            fi
             raw="$android_id|$serial"
-          elif [ -n "$aid_h" ] && [ "$aid_h" = "$bound_hash" ]; then
+            ;;
+          android_id)
+            if [ -z "$android_id" ]; then
+              die "Thiết bị này yêu cầu android_id nhưng tín hiệu hiện không khả dụng. Kiểm tra quyền root và thử lại."
+            fi
             raw="$android_id|"
-          elif [ -n "$ser_h" ] && [ "$ser_h" = "$bound_hash" ]; then
+            ;;
+          serial)
+            if [ -z "$serial" ]; then
+              die "Thiết bị này yêu cầu serial nhưng tín hiệu hiện không khả dụng. Kiểm tra quyền root và thử lại."
+            fi
             raw="|$serial"
-          else
-            # Hardware signals do not match the bound hash (e.g. cloned rooted device)
-            raw="$android_id|$serial"
-          fi
+            ;;
+        esac
+      elif [ -n "$bound_hash" ]; then
+        # Legacy bound installation without signals file: infer composition or fail closed
+        if [ -n "$android_id" ] && [ -n "$serial" ] && [ "$(printf '%s' "$android_id|$serial" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; then
+          signals="both"
+          raw="$android_id|$serial"
+        elif [ -n "$android_id" ] && [ "$(printf '%s' "$android_id|" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; then
+          signals="android_id"
+          raw="$android_id|"
+        elif [ -n "$serial" ] && [ "$(printf '%s' "|$serial" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; then
+          signals="serial"
+          raw="|$serial"
+        elif [ -z "$android_id$serial" ]; then
+          die "Thiết bị này đã bind bằng tín hiệu phần cứng (android_id/serial) nhưng su/Binder hiện không khả dụng. Kiểm tra quyền root và thử lại."
         else
-          # Fresh first bind with live hardware signals
+          # Hardware signals present but do not match legacy bound hash (e.g. cloned rooted device)
           raw="$android_id|$serial"
         fi
+        [ -z "$signals" ] || { mkdir -p "$SETUP_STATE_DIR"; printf '%s\n' "$signals" > "$signals_file"; }
       else
-        # No live hardware signals available
-        if [ -n "$bound_hash" ] && [ -z "$token" ]; then
-          # Device was previously bound using hardware signals, but su/Binder is currently unavailable.
-          # Fail closed to prevent creating an unintended token and breaking the binding.
-          die "Thiết bị này đã bind bằng tín hiệu phần cứng (android_id/serial) nhưng su/Binder hiện không khả dụng. Kiểm tra quyền root và thử lại."
+        # Fresh first bind: detect available signals and pin composition
+        if [ -n "$android_id" ] && [ -n "$serial" ]; then
+          signals="both"
+          raw="$android_id|$serial"
+        elif [ -n "$android_id" ]; then
+          signals="android_id"
+          raw="$android_id|"
+        elif [ -n "$serial" ]; then
+          signals="serial"
+          raw="|$serial"
+        else
+          signals="token"
+          if [ -z "$token" ]; then
+            token="$(python -c 'import uuid, time; print(f"{uuid.uuid4().hex}-{int(time.time()*1000)}")' 2>/dev/null || date +%s%N 2>/dev/null || date +%s)-$$"
+            mkdir -p "$SETUP_STATE_DIR"
+            token_tmp="${token_file}.tmp.$$"
+            printf '%s\n' "$token" > "$token_tmp"
+            mv -f "$token_tmp" "$token_file"
+          fi
+          [ -n "$token" ] || die "Không tạo được token host bền vững."
+          raw="token:$token"
         fi
-
-        # Non-root fallback: generate or use token
-        if [ -z "$token" ]; then
-          token="$(python -c 'import uuid, time; print(f"{uuid.uuid4().hex}-{int(time.time()*1000)}")' 2>/dev/null || date +%s%N 2>/dev/null || date +%s)-$$"
-          mkdir -p "$SETUP_STATE_DIR"
-          token_tmp="${token_file}.tmp.$$"
-          printf '%s\n' "$token" > "$token_tmp"
-          mv -f "$token_tmp" "$token_file"
-        fi
-        [ -n "$token" ] || die "Không tạo được token host bền vững."
-        raw="token:$token"
+        mkdir -p "$SETUP_STATE_DIR"
+        printf '%s\n' "$signals" > "$signals_file"
       fi
     fi
   fi
