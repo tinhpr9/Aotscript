@@ -38,7 +38,7 @@ if updater.normalize_channel("other") is not None:
 controller = load("aot_release_smoke_controller", "controller.py")
 load("aot_release_smoke_runtime", "runtime.py")
 relay = load("aot_release_smoke_relay", "relay.py")
-if relay.WORKER_VERSION != "aot-worker-2026.08.23.02":
+if relay.WORKER_VERSION != "aot-worker-2026.08.23.03":
     raise SystemExit("worker_version_mismatch")
 if "dynamic_update_channel" not in relay.WORKER_CAPABILITIES:
     raise SystemExit("dynamic_channel_capability_missing")
@@ -48,7 +48,7 @@ if "allocate_server_2pc" not in relay.WORKER_CAPABILITIES:
     raise SystemExit("allocate_server_capability_missing")
 
 relay_source = (ROOT / "relay.py").read_text(encoding="utf-8")
-if 'WORKER_VERSION = "aot-worker-2026.08.23.02"' not in relay_source:
+if 'WORKER_VERSION = "aot-worker-2026.08.23.03"' not in relay_source:
     raise SystemExit("worker_version_mismatch")
 # Policy: standalone browser-controlled FILTER_RESTORE_DATA is banned.
 # BACKUP_RESTORE_DATA is permitted as the fixed, allowlisted, fail-closed

@@ -52,6 +52,18 @@ HEALTH_TIMEOUT_SECONDS = 60
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_RELEASE_FILES = 32
 HUB_RELEASE_PROTOCOL = "github-release-v1"
+INITIAL_RELEASE_SPEC = {
+    "version": "aot-worker-2026.08.23.03",
+    "tag": "worker-v2026.08.23.03",
+    "commit_sha": "7ff02cee30791ceae8ed3a5ba88f1dbebb52a81e",
+    "manifest": {
+        "name": "worker-manifest.json",
+        "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.23.03/worker-manifest.json",
+        "size": 4410,
+        "sha256": "",
+        "github_digest": "",
+    },
+}
 
 
 class BootstrapError(RuntimeError):
@@ -193,17 +205,21 @@ def validate_manifest(raw: Any, expected_channel: str) -> dict[str, Any]:
     return clean
 
 
-def load_pinned_release(encoded: str, expected_channel: str) -> dict[str, Any]:
-    try:
-        metadata = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
-    except Exception as exc:
-        raise BootstrapError("invalid_release_metadata") from exc
-    if not isinstance(metadata, dict):
+def resolve_release_manifest(metadata: str | dict[str, Any], expected_channel: str) -> dict[str, Any]:
+    if isinstance(metadata, dict):
+        raw_meta = metadata
+    else:
+        encoded = str(metadata).strip()
+        try:
+            raw_meta = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        except Exception as exc:
+            raise BootstrapError("invalid_release_metadata") from exc
+    if not isinstance(raw_meta, dict):
         raise BootstrapError("invalid_release_metadata")
-    version = _valid_version(metadata.get("version"))
-    tag = str(metadata.get("tag") or "")
-    commit = str(metadata.get("commit_sha") or "").lower()
-    asset = metadata.get("manifest")
+    version = _valid_version(raw_meta.get("version"))
+    tag = str(raw_meta.get("tag") or "")
+    commit = str(raw_meta.get("commit_sha") or "").lower()
+    asset = raw_meta.get("manifest")
     if (
         not version or tag != "worker-v" + version.removeprefix("aot-worker-")
         or not re.fullmatch(r"[0-9a-f]{40}", commit)
@@ -217,14 +233,14 @@ def load_pinned_release(encoded: str, expected_channel: str) -> dict[str, Any]:
     github_digest = str(asset.get("github_digest") or "").lower()
     if (
         not isinstance(size, int) or size <= 0 or size > MAX_FILE_BYTES
-        or not re.fullmatch(r"[0-9a-f]{64}", digest)
-        or github_digest not in {"", "sha256:" + digest}
+        or (digest and not re.fullmatch(r"[0-9a-f]{64}", digest))
+        or (github_digest and github_digest not in {"", "sha256:" + digest})
     ):
         raise BootstrapError("invalid_release_manifest_asset")
     with tempfile.TemporaryDirectory(prefix="aot-release-manifest-") as folder:
         path = pathlib.Path(folder) / "worker-manifest.json"
         _download(url, path, size)
-        if _sha256(path) != digest:
+        if digest and _sha256(path) != digest:
             raise BootstrapError("manifest_sha256_mismatch")
         raw = _read_json(path)
     if (
@@ -244,6 +260,9 @@ def load_pinned_release(encoded: str, expected_channel: str) -> dict[str, Any]:
     if raw.get("bootstrap") is not None:
         converted["bootstrap"] = raw["bootstrap"]
     return validate_manifest(converted, expected_channel)
+
+
+load_pinned_release = resolve_release_manifest
 
 
 def _sha256(path: pathlib.Path) -> str:
@@ -347,17 +366,21 @@ def ensure_legacy_release() -> pathlib.Path | None:
     if current:
         return current
     legacy_names = {"relay.py", "runtime.py", "controller.py", "updater.py", "e2e.py"}
-    if not all((ROOT / name).is_file() for name in legacy_names):
-        return None
-    legacy = RELEASES / "legacy-pr13"
-    legacy.mkdir(parents=True, exist_ok=True)
-    for name in legacy_names:
-        destination = legacy / name
-        if not destination.exists():
-            destination.write_bytes((ROOT / name).read_bytes())
-    _atomic_link(CURRENT, legacy)
-    _atomic_link(LAST_GOOD, legacy)
-    return legacy
+    if all((ROOT / name).is_file() for name in legacy_names):
+        legacy = RELEASES / "legacy-pr13"
+        legacy.mkdir(parents=True, exist_ok=True)
+        for name in legacy_names:
+            destination = legacy / name
+            if not destination.exists():
+                destination.write_bytes((ROOT / name).read_bytes())
+        _atomic_link(CURRENT, legacy)
+        _atomic_link(LAST_GOOD, legacy)
+        return legacy
+    manifest = resolve_release_manifest(INITIAL_RELEASE_SPEC, DEFAULT_STARTUP_CHANNEL)
+    maybe_upgrade_bootstrap(manifest)
+    release_dir = stage_release(manifest, f"initial-{manifest['version']}")
+    _atomic_link(CURRENT, release_dir)
+    return release_dir
 
 
 def _config() -> tuple[dict[str, Any], str]:
@@ -614,6 +637,33 @@ def startup() -> int:
         stop_workers()
         if current is None:
             raise BootstrapError("current_release_missing")
+        last_good = _link_target(LAST_GOOD)
+        if last_good != current:
+            action_id = f"startup-{int(time.time()*1000)}"
+            pending = {
+                "action_id": action_id,
+                "version": current.name,
+                "channel": DEFAULT_STARTUP_CHANNEL,
+                "device_id": device_id,
+                "started_at": int(time.time()),
+            }
+            if last_good:
+                pending["previous_release"] = str(last_good)
+            _write_json(PENDING_PATH, pending)
+            start_worker(config)
+            if wait_for_health(pending, timeout=min(HEALTH_TIMEOUT_SECONDS, 10.0)):
+                _atomic_link(LAST_GOOD, current)
+                return 0
+            else:
+                stop_workers()
+                if last_good and last_good.is_dir() and last_good != current:
+                    rollback_release(pending)
+                    start_worker(config)
+                    raise BootstrapError("startup_health_failed_rolled_back")
+                else:
+                    CURRENT.unlink(missing_ok=True)
+                    PENDING_PATH.unlink(missing_ok=True)
+                    raise BootstrapError("startup_health_failed_no_last_good")
         start_worker(config)
         return 0
 
