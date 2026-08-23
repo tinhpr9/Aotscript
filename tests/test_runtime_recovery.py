@@ -69,7 +69,7 @@ class TestRuntimeRecoveryAndSetupGuards(unittest.TestCase):
         res = self._run_bash_sourced(cmd)
         self.assertEqual(0, res.returncode, f"Strong signal failed: {res.stderr}")
         fp = res.stdout.strip()
-        expected = hashlib.sha256(b"strong:android_12345|serial_abc").hexdigest()
+        expected = hashlib.sha256(b"android_12345|serial_abc").hexdigest()
         self.assertEqual(expected, fp)
 
     def test_empty_host_token_does_not_produce_constant_hash(self) -> None:

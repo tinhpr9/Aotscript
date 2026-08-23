@@ -454,7 +454,7 @@ host_fingerprint() {
     case "$android_id" in null|unknown|"") android_id="" ;; esac
     case "$serial" in null|unknown|"") serial="" ;; esac
     if [ -n "$android_id$serial" ]; then
-      raw="strong:$android_id|$serial"
+      raw="$android_id|$serial"
     else
       token_file="$SETUP_STATE_DIR/host_token"
       if [ -f "$token_file" ]; then
