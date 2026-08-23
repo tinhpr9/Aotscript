@@ -5,7 +5,7 @@ AOTSETUP_LOCAL_LAUNCHER_V1=1
 VERSION="one-command-setup-v2"
 PROVISION_VERSION="phase22-aot-registration-v1"
 # All provision/wizard/setup children use this exact tested revision.
-PROVISION_REF="a6be5200a0e3b75db20dca7c386c0fa70346ec8c"
+PROVISION_REF="a79cd775c75ad67c9d09cbfab557093246eb53e7"
 PROVISION_SHA256="a4435be33a5e4336004de9ce392935dc71f4ae62748a9340921f9b318aaa4965"
 RAW_BASE="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
 MAIN_SETUP_URL="https://raw.githubusercontent.com/tinhpr9/Aotscript/main/setup.sh"
