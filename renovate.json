@@ -9,6 +9,8 @@
   "enabledManagers": [
     "npm",
     "github-actions",
+    "nvm",
+    "nodenv",
     "custom.regex"
   ],
   "automerge": false,
@@ -47,6 +49,7 @@
     },
     {
       "description": "Require dashboard approval for runtime Node and Python version bumps",
+      "matchManagers": ["nvm", "nodenv"],
       "matchDepTypes": ["engines", "action-node-version"],
       "dependencyDashboardApproval": true,
       "labels": ["dependencies", "runtime-version"]

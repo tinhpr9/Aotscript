@@ -433,7 +433,7 @@ class Phase4DependencyAutomationGuards(unittest.TestCase):
         self.assertFalse(config.get("automerge", True), "automerge must be globally disabled")
         self.assertFalse(config.get("platformAutomerge", True), "platformAutomerge must be globally disabled")
         self.assertTrue(config.get("dependencyDashboard", False), "dependencyDashboard must be enabled")
-        self.assertEqual(["npm", "github-actions", "custom.regex"], config.get("enabledManagers"))
+        self.assertEqual(["npm", "github-actions", "nvm", "nodenv", "custom.regex"], config.get("enabledManagers"))
         
         package_rules = config.get("packageRules", [])
         major_rule = next((r for r in package_rules if "major" in r.get("matchUpdateTypes", [])), None)
