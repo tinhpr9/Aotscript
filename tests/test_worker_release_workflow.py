@@ -29,7 +29,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         (self.assets / "worker-bundle.zip").write_bytes(b"bundle")
         (self.assets / "worker-manifest.json").write_bytes(b"manifest")
         self.commit = "a" * 40
-        self.tag = "worker-v2026.08.23.02"
+        self.tag = "worker-v2026.08.23.03"
         self.release = {
             "id": 123,
             "tag_name": self.tag,
@@ -200,7 +200,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
             sys.executable,
             str(ROOT / "scripts/build-worker-release.py"),
             "--version",
-            "2026.08.23.02",
+            "2026.08.23.03",
             "--commit",
             self.commit,
             "--source-root",
@@ -231,7 +231,7 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
 
     def test_workflow_is_fail_closed_and_never_uses_admin_endpoint(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('test "$RELEASE_VERSION" = "2026.08.23.02"', text)
+        self.assertIn('test "$RELEASE_VERSION" = "2026.08.23.03"', text)
         self.assertIn("https://uploads.github.com/repos/${GITHUB_REPOSITORY}", text)
         self.assertNotIn("/immutable-releases", text)
         self.assertNotIn("len(data[\"assets\"])", text)
@@ -255,6 +255,99 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         resume_branch = create_block[resume_start:resume_end]
         self.assertIn('[[ "$asset_count" == 0 ]]', resume_branch)
         self.assertIn('upload_asset "$asset"', resume_branch)
+
+
+class BootstrapSupervisorReleaseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory(prefix="bootstrap-test-")
+        self.root = pathlib.Path(self.tmp.name)
+        
+        spec = importlib.util.spec_from_file_location("bootstrap_under_test", ROOT / "aot-group-control/bootstrap.py")
+        self.bootstrap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.bootstrap)
+        
+        self.bootstrap.ROOT = self.root
+        self.bootstrap.RELEASES = self.root / "releases"
+        self.bootstrap.CURRENT = self.root / "current"
+        self.bootstrap.LAST_GOOD = self.root / "last_good"
+        self.bootstrap.PENDING_PATH = self.root / "update_pending.json"
+        self.bootstrap.HEALTH_PATH = self.root / "update_health.json"
+        self.bootstrap.LOCK_PATH = self.root / "supervisor.lock"
+        self.bootstrap.VERSION_PATH = self.root / "worker_version.json"
+        self.bootstrap.LOG_PATH = self.root / "relay.log"
+        self.bootstrap.DEVICE_ID_PATH = self.root / "device_id.txt"
+        self.bootstrap.CONFIG_PATH = self.root / "aot_group_config.json"
+        self.bootstrap.AGENT_CONFIG_PATH = self.root / "agent_config.json"
+        
+        self.bootstrap.DEVICE_ID_PATH.write_text("m74\n", encoding="utf-8")
+        self.bootstrap.CONFIG_PATH.write_text(json.dumps({"device_id": "m74", "enabled": True}), encoding="utf-8")
+        self.bootstrap.AGENT_CONFIG_PATH.write_text(json.dumps({
+            "worker_report_url": "https://example.test/aot/report",
+            "agent_report_secret": "secret"
+        }), encoding="utf-8")
+        
+        self.bootstrap.RELEASES.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def create_fake_release(self, name: str) -> pathlib.Path:
+        rel = self.bootstrap.RELEASES / name
+        rel.mkdir(parents=True, exist_ok=True)
+        (rel / "relay.py").write_text("print('fake relay')\n", encoding="utf-8")
+        return rel
+
+    def test_fresh_install_healthy_promotes_last_good_only_after_health(self):
+        rel = self.create_fake_release("aot-worker-2026.08.23.03")
+        self.bootstrap._atomic_link(self.bootstrap.CURRENT, rel)
+        self.assertIsNone(self.bootstrap._link_target(self.bootstrap.LAST_GOOD))
+        
+        def mock_start_worker(cfg):
+            pending = json.loads(self.bootstrap.PENDING_PATH.read_text(encoding="utf-8"))
+            self.bootstrap.notify_health(pending["action_id"], pending["version"])
+            return None
+        self.bootstrap.start_worker = mock_start_worker
+        
+        rc = self.bootstrap.startup()
+        self.assertEqual(0, rc)
+        self.assertEqual(rel, self.bootstrap._link_target(self.bootstrap.LAST_GOOD))
+        self.assertEqual(rel, self.bootstrap._link_target(self.bootstrap.CURRENT))
+
+    def test_fresh_install_health_timeout_does_not_promote_last_good(self):
+        rel = self.create_fake_release("aot-worker-2026.08.23.03")
+        self.bootstrap._atomic_link(self.bootstrap.CURRENT, rel)
+        self.assertIsNone(self.bootstrap._link_target(self.bootstrap.LAST_GOOD))
+        
+        self.bootstrap.start_worker = lambda cfg: None
+        self.bootstrap.wait_for_health = lambda pending, timeout=0: False
+        
+        with self.assertRaises(self.bootstrap.BootstrapError):
+            self.bootstrap.startup()
+            
+        self.assertIsNone(self.bootstrap._link_target(self.bootstrap.LAST_GOOD))
+        self.assertIsNone(self.bootstrap._link_target(self.bootstrap.CURRENT))
+
+    def test_existing_last_good_survives_failed_candidate(self):
+        old_rel = self.create_fake_release("aot-worker-2026.08.23.01")
+        new_rel = self.create_fake_release("aot-worker-2026.08.23.03")
+        
+        self.bootstrap._atomic_link(self.bootstrap.CURRENT, new_rel)
+        self.bootstrap._atomic_link(self.bootstrap.LAST_GOOD, old_rel)
+        
+        self.bootstrap.start_worker = lambda cfg: None
+        self.bootstrap.wait_for_health = lambda pending, timeout=0: False
+        
+        with self.assertRaises(self.bootstrap.BootstrapError):
+            self.bootstrap.startup()
+            
+        self.assertEqual(old_rel, self.bootstrap._link_target(self.bootstrap.CURRENT))
+        self.assertEqual(old_rel, self.bootstrap._link_target(self.bootstrap.LAST_GOOD))
+
+    def test_immutable_release_provenance_enforced(self):
+        spec = copy.deepcopy(self.bootstrap.INITIAL_RELEASE_SPEC)
+        spec["commit_sha"] = "0" * 40
+        with self.assertRaises(self.bootstrap.BootstrapError):
+            self.bootstrap.resolve_release_manifest(spec, "stable")
 
 
 if __name__ == "__main__":
