@@ -37,6 +37,20 @@ worker actions in `cloudflare-worker/`.
   `2026.08.11.9` and later must use the schema-3 manifest asset from the exact
   GitHub Release and must not consult mutable transition manifests.
 
+## Release single source of truth and generated file policy
+
+- `aot-group-control/worker-release.json` is the EXACT and ONLY canonical source of truth for the AOT worker release version.
+- Feature and bug PRs do NOT manually update release versions, manifest files, or SHA-256 digests.
+- Release preparation is automated via `python3 scripts/prepare_worker_release.py [--bump | --version <YYYY.MM.DD.NN>]`, which:
+  1. Validates CalVer format (`YYYY.MM.DD.NN`) and sequence rules.
+  2. Updates derived mirrors (`relay.py`, `fleet-state.js`, `bootstrap.py`).
+  3. Deterministically builds release artifacts and computes SHA-256 digests.
+  4. Generates `worker-manifest-stable.json` and `worker-manifest-canary.json`.
+- The following files are DERIVED/GENERATED from `worker-release.json` and source code; do NOT edit their release metadata manually:
+  - `aot-group-control/worker-manifest-stable.json`
+  - `aot-group-control/worker-manifest-canary.json`
+- CI enforces repository release consistency automatically via `python3 scripts/prepare_worker_release.py --check`.
+
 ## Safety and compatibility
 
 - Download and validate every file in a staging directory. All Python files

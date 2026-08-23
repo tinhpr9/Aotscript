@@ -5,6 +5,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -18,6 +19,7 @@ FILES = [
     "msetup_registration.py", "legacy_relay_bridge.py",
 ]
 SUPERVISOR = ["bootstrap.py", "bootstrap_launcher.py"]
+CALVER_REGEX = re.compile(r"^([12]\d{3})\.(0[1-9]|1[0-2])\.(0[1-9]|[12]\d|3[01])\.([0-9]{2})$")
 
 
 def digest(path: pathlib.Path) -> str:
@@ -39,15 +41,27 @@ def _reproduction_metadata(folder: pathlib.Path | None) -> tuple[str | None, dic
     return built_at, infos
 
 
+def resolve_built_at(args_built_at: str | None, repro_built_at: str | None) -> str:
+    if args_built_at:
+        return args_built_at
+    if repro_built_at:
+        return repro_built_at
+    if "SOURCE_DATE_EPOCH" in os.environ:
+        epoch = int(os.environ["SOURCE_DATE_EPOCH"])
+        return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return "1980-01-01T00:00:00Z"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--source-root", type=pathlib.Path, default=ROOT)
+    parser.add_argument("--built-at")
     parser.add_argument("--reproduce-metadata-from", type=pathlib.Path)
     args = parser.parse_args()
-    if not re.fullmatch(r"2026\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}", args.version):
+    if not CALVER_REGEX.fullmatch(args.version):
         raise SystemExit("release_version_mismatch")
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
         raise SystemExit("release_commit_invalid")
@@ -63,8 +77,10 @@ def main() -> int:
     tag = "worker-v" + args.version
     base = f"https://github.com/tinhpr9/Aotscript/releases/download/{tag}"
     assets = []
-    built_at, zip_infos = _reproduction_metadata(args.reproduce_metadata_from)
-    for name in FILES + SUPERVISOR:
+    repro_built_at, zip_infos = _reproduction_metadata(args.reproduce_metadata_from)
+    built_at = resolve_built_at(args.built_at, repro_built_at)
+
+    for name in sorted(FILES + SUPERVISOR):
         source_path = source_dir / name
         target = output / name
         shutil.copyfile(source_path, target)
@@ -76,7 +92,7 @@ def main() -> int:
         })
     bundle = output / "worker-bundle.zip"
     with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in FILES + SUPERVISOR:
+        for name in sorted(FILES + SUPERVISOR):
             if zip_infos:
                 original = zip_infos[name]
                 info = zipfile.ZipInfo(name, original.date_time)
@@ -89,9 +105,12 @@ def main() -> int:
                 info.external_attr = original.external_attr
                 info.internal_attr = original.internal_attr
                 info.flag_bits = original.flag_bits
-                archive.writestr(info, (output / name).read_bytes())
             else:
-                archive.write(output / name, arcname=name)
+                info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = 0o644 << 16
+            archive.writestr(info, (output / name).read_bytes())
     manifest = {
         "schema_version": 3,
         "worker_version": worker_version,
@@ -102,8 +121,8 @@ def main() -> int:
         "asset_sha256": digest(bundle),
         "minimum_protocol": "github-release-v1",
         "minimum_bootstrap_version": 2,
-        "built_at": built_at or datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "files": [item for item in assets if item["path"] in FILES],
+        "built_at": built_at,
+        "files": [item for item in sorted(assets, key=lambda x: x["path"]) if item["path"] in FILES],
         "bootstrap": next(item for item in assets if item["path"] == "bootstrap.py") | {"version": 7},
     }
     manifest_path = output / "worker-manifest.json"

@@ -231,7 +231,8 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
 
     def test_workflow_is_fail_closed_and_never_uses_admin_endpoint(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('test "$RELEASE_VERSION" = "2026.08.23.03"', text)
+        self.assertIn('test "$RELEASE_VERSION" = "$CANONICAL_VERSION"', text)
+        self.assertIn("prepare_worker_release.py --check", text)
         self.assertIn("https://uploads.github.com/repos/${GITHUB_REPOSITORY}", text)
         self.assertNotIn("/immutable-releases", text)
         self.assertNotIn("len(data[\"assets\"])", text)
@@ -255,6 +256,100 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         resume_branch = create_block[resume_start:resume_end]
         self.assertIn('[[ "$asset_count" == 0 ]]', resume_branch)
         self.assertIn('upload_asset "$asset"', resume_branch)
+
+
+class CalVerEngineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import release_version
+        self.engine = release_version
+
+    def test_valid_calver_parsing(self) -> None:
+        cv = self.engine.parse_calver("2026.08.23.03")
+        self.assertEqual(2026, cv.year)
+        self.assertEqual(8, cv.month)
+        self.assertEqual(23, cv.day)
+        self.assertEqual(3, cv.seq)
+        self.assertEqual("2026.08.23.03", cv.serialize())
+
+        cv2027 = self.engine.parse_calver("2027.01.01.01")
+        self.assertEqual(2027, cv2027.year)
+        self.assertEqual("2027.01.01.01", cv2027.serialize())
+
+    def test_invalid_calver_rejections(self) -> None:
+        invalid_versions = [
+            "2026.8.23.03",       # non-zero-padded month
+            "2026.08.3.03",        # non-zero-padded day
+            "2026.08.23.3",        # non-zero-padded seq
+            "2026.13.01.01",       # month 13
+            "2026.02.29.01",       # non-leap year Feb 29
+            "2026.04.31.01",       # April 31
+            "2026.08.23.00",       # sequence 0
+            "2026.08.23.100",      # sequence 100
+            "v2026.08.23.01",      # prefix
+            "2026.08.23",          # missing seq
+        ]
+        for v in invalid_versions:
+            with self.subTest(version=v), self.assertRaises(ValueError):
+                self.engine.parse_calver(v)
+
+    def test_same_day_increment(self) -> None:
+        import datetime
+        cur_date = datetime.date(2026, 8, 23)
+        next_ver = self.engine.next_calver("2026.08.23.03", target_date=cur_date)
+        self.assertEqual("2026.08.23.04", next_ver.serialize())
+
+    def test_new_day_reset(self) -> None:
+        import datetime
+        next_day = datetime.date(2026, 8, 24)
+        next_ver = self.engine.next_calver("2026.08.23.03", target_date=next_day)
+        self.assertEqual("2026.08.24.01", next_ver.serialize())
+
+    def test_year_rollover(self) -> None:
+        import datetime
+        next_year = datetime.date(2027, 1, 1)
+        next_ver = self.engine.next_calver("2026.12.31.05", target_date=next_year)
+        self.assertEqual("2027.01.01.01", next_ver.serialize())
+
+
+class DeterministicReleaseBuilderTests(unittest.TestCase):
+    def test_clean_builds_are_byte_for_byte_identical(self) -> None:
+        import datetime
+        with tempfile.TemporaryDirectory(prefix="det-run1-") as d1, tempfile.TemporaryDirectory(prefix="det-run2-") as d2:
+            out1 = pathlib.Path(d1) / "release"
+            out2 = pathlib.Path(d2) / "release"
+            commit = "c" * 40
+            ver = "2026.08.23.03"
+            cmd = [
+                sys.executable,
+                str(ROOT / "scripts/build-worker-release.py"),
+                "--version", ver,
+                "--commit", commit,
+                "--source-root", str(ROOT),
+            ]
+            subprocess.run(cmd + ["--output", str(out1)], check=True, capture_output=True)
+            subprocess.run(cmd + ["--output", str(out2)], check=True, capture_output=True)
+
+            files1 = sorted(f.name for f in out1.iterdir())
+            files2 = sorted(f.name for f in out2.iterdir())
+            self.assertEqual(files1, files2)
+            self.assertEqual(14, len(files1))
+
+            for name in files1:
+                h1 = hashlib.sha256((out1 / name).read_bytes()).hexdigest()
+                h2 = hashlib.sha256((out2 / name).read_bytes()).hexdigest()
+                self.assertEqual(h1, h2, f"Artifact mismatch for {name}")
+
+
+class ReleasePreparationAndCoherenceTests(unittest.TestCase):
+    def test_prepare_worker_release_check_passes_on_clean_repo(self) -> None:
+        res = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/prepare_worker_release.py"), "--check", "--repo-root", str(ROOT)],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, res.returncode, f"Check failed: {res.stdout}\n{res.stderr}")
+        self.assertIn("RELEASE_COHERENCE_CHECK=PASS", res.stdout)
 
 
 class BootstrapSupervisorReleaseTests(unittest.TestCase):
