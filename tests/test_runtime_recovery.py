@@ -519,6 +519,30 @@ class TestFingerprintHardwareVerificationAndCloneDetection(unittest.TestCase):
         self.assertNotEqual(0, res.returncode, "Must fail closed when a required hardware probe disappears")
         self.assertIn("android_id và serial", res.stderr)
 
+    def test_legacy_full_hardware_binding_fails_closed_when_one_probe_disappears(self) -> None:
+        # Legacy device bound with both signals (no signals file)
+        legacy_full_hash = hashlib.sha256(b"legacy_aid|legacy_sno").hexdigest()
+        (self.state_dir / "host_fingerprint").write_text(legacy_full_hash + "\n", encoding="utf-8")
+
+        # On subsequent run, serial disappears (returns empty)
+        cmd = """
+        su() {
+          case "$*" in
+            *"settings get secure android_id"*) echo "legacy_aid" ;;
+            *"getprop ro.boot.serialno"*) echo "" ;;
+            *) echo "" ;;
+          esac
+        }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertNotEqual(0, res.returncode, "Legacy full binding must fail closed when one hardware probe is unavailable")
+        self.assertIn("không khớp hoặc thiếu tín hiệu", res.stderr)
+
+    def test_run_aot_setup_uses_dynamic_provision_ref_for_msetup_url(self) -> None:
+        setup_sh = (REPO_ROOT / "setup.sh").read_text(encoding="utf-8")
+        self.assertIn('AOTSCRIPT_SETUP_M166_URL:-https://raw.githubusercontent.com/tinhpr9/Aotscript/${AOTSCRIPT_PROVISION_REF:-main}/setup-m166.sh', setup_sh)
+
 
 if __name__ == "__main__":
     unittest.main()

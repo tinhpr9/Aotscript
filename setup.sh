@@ -488,19 +488,19 @@ host_fingerprint() {
         case "$signals" in
           both)
             if [ -z "$android_id" ] || [ -z "$serial" ]; then
-              die "Thiết bị này yêu cầu cả android_id và serial nhưng một trong các tín hiệu hiện không khả dụng (android_id='$android_id', serial='$serial'). Kiểm tra quyền root và thử lại."
+              die "Thiết bị này yêu cầu cả android_id và serial nhưng một trong các tín hiệu hiện không khả dụng (android_id='$android_id', serial='$serial'). Kiểm tra quyền root/su/Binder và thử lại."
             fi
             raw="$android_id|$serial"
             ;;
           android_id)
             if [ -z "$android_id" ]; then
-              die "Thiết bị này yêu cầu android_id nhưng tín hiệu hiện không khả dụng. Kiểm tra quyền root và thử lại."
+              die "Thiết bị này yêu cầu android_id nhưng tín hiệu hiện không khả dụng. Kiểm tra quyền root/su/Binder và thử lại."
             fi
             raw="$android_id|"
             ;;
           serial)
             if [ -z "$serial" ]; then
-              die "Thiết bị này yêu cầu serial nhưng tín hiệu hiện không khả dụng. Kiểm tra quyền root và thử lại."
+              die "Thiết bị này yêu cầu serial nhưng tín hiệu hiện không khả dụng. Kiểm tra quyền root/su/Binder và thử lại."
             fi
             raw="|$serial"
             ;;
@@ -516,11 +516,12 @@ host_fingerprint() {
         elif [ -n "$serial" ] && [ "$(printf '%s' "|$serial" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; then
           signals="serial"
           raw="|$serial"
-        elif [ -z "$android_id$serial" ]; then
-          die "Thiết bị này đã bind bằng tín hiệu phần cứng (android_id/serial) nhưng su/Binder hiện không khả dụng. Kiểm tra quyền root và thử lại."
-        else
-          # Hardware signals present but do not match legacy bound hash (e.g. cloned rooted device)
+        elif [ -n "$android_id" ] && [ -n "$serial" ]; then
+          # Both hardware probes are healthy but neither matches bound_hash -> this is a cloned or replaced rooted device
           raw="$android_id|$serial"
+        else
+          # Hardware probe is partial or completely unavailable and cannot satisfy legacy binding. Fail closed.
+          die "Thiết bị này đã bind bằng tín hiệu phần cứng nhưng probe hiện tại không khớp hoặc thiếu tín hiệu (android_id='$android_id', serial='$serial'). Kiểm tra quyền root/su/Binder và thử lại."
         fi
         [ -z "$signals" ] || { mkdir -p "$SETUP_STATE_DIR"; printf '%s\n' "$signals" > "$signals_file"; }
       else
@@ -1167,9 +1168,10 @@ run_aot_setup() {
     msetup_script="$AOTSCRIPT_SETUP_M166_SOURCE"
     bash -n "$msetup_script" || die "setup-m166.sh tải về sai cú pháp."
   else
+    local msetup_url="${AOTSCRIPT_SETUP_M166_URL:-https://raw.githubusercontent.com/tinhpr9/Aotscript/${AOTSCRIPT_PROVISION_REF:-main}/setup-m166.sh}"
     msetup_script="$(mktemp "$SETUP_STATE_DIR/.setup-m166.XXXXXX")"
     curl -fsSL --retry 3 --connect-timeout 15 \
-      "$RAW_BASE/setup-m166.sh?t=$(date +%s)" -o "$msetup_script" || {
+      "$msetup_url?t=$(date +%s)" -o "$msetup_script" || {
         rm -f "$msetup_script"
         die "Không tải được setup-m166.sh."
       }
