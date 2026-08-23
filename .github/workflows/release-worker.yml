@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: worker-release-${{ inputs.version }}
@@ -122,7 +124,8 @@ jobs:
               --commit "$TARGET_COMMIT" --output dist
           fi
 
-      - name: Create or verify draft by ID, then publish by ID
+      - name: Upload draft assets and verify draft release
+        id: draft
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: worker-v${{ inputs.version }}
@@ -169,6 +172,31 @@ jobs:
           python3 scripts/verify_worker_release.py verify \
             "$TARGET_COMMIT" "$TAG" dist draft.json - draft
           cp draft.json verified-draft.json
+          printf 'release_id=%s\n' "$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Generate signed artifact attestations (SLSA provenance)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'dist/*'
+
+      - name: Verify artifact attestations before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for asset in dist/*; do
+            echo "Verifying attestation for $asset..."
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}"
+          done
+
+      - name: Publish immutable release by ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: worker-v${{ inputs.version }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          TARGET_COMMIT: ${{ steps.prepare.outputs.target_commit }}
+        run: |
+          set -euo pipefail
           gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false > /dev/null
           gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > published-by-id.json
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > published-by-tag.json
@@ -185,3 +213,6 @@ jobs:
           if by_id.get("id") != expected or by_tag.get("id") != expected:
               raise SystemExit("published_release_identity_mismatch")
           PY
+          for asset in dist/*; do
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}"
+          done

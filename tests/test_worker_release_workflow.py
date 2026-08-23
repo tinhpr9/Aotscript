@@ -260,6 +260,22 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('[[ "$asset_count" == 0 ]]', resume_branch)
         self.assertIn('upload_asset "$asset"', resume_branch)
 
+    def test_workflow_has_artifact_attestation_and_pinned_action(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2", text)
+        self.assertIn("subject-path: 'dist/*'", text)
+        self.assertIn("id-token: write", text)
+        self.assertIn("attestations: write", text)
+        self.assertIn('gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}"', text)
+        self.assertLess(text.index("actions/attest-build-provenance"), text.index("-F draft=false"))
+        self.assertLess(text.index('gh attestation verify "$asset"'), text.index("-F draft=false"))
+
+    def test_ci_workflow_has_no_attestation_signing_permissions(self) -> None:
+        ci_text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertNotIn("id-token: write", ci_text)
+        self.assertNotIn("attestations: write", ci_text)
+        self.assertNotIn("actions/attest", ci_text)
+
 
 class CalVerEngineTests(unittest.TestCase):
     def setUp(self) -> None:
