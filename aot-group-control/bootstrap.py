@@ -376,13 +376,11 @@ def ensure_legacy_release() -> pathlib.Path | None:
         _atomic_link(CURRENT, legacy)
         _atomic_link(LAST_GOOD, legacy)
         return legacy
-    try:
-        manifest = resolve_release_manifest(INITIAL_RELEASE_SPEC, DEFAULT_STARTUP_CHANNEL)
-        release_dir = stage_release(manifest, f"initial-{manifest['version']}")
-        _atomic_link(CURRENT, release_dir)
-        return release_dir
-    except Exception:
-        return None
+    manifest = resolve_release_manifest(INITIAL_RELEASE_SPEC, DEFAULT_STARTUP_CHANNEL)
+    maybe_upgrade_bootstrap(manifest)
+    release_dir = stage_release(manifest, f"initial-{manifest['version']}")
+    _atomic_link(CURRENT, release_dir)
+    return release_dir
 
 
 def _config() -> tuple[dict[str, Any], str]:
