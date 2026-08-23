@@ -394,6 +394,16 @@ class ArtifactPolicyAndSupplyChainGuards(unittest.TestCase):
         self.assertIn("actions/attest-build-provenance", agents_md)
         self.assertIn("gh attestation verify", agents_md)
 
+    def test_agents_md_persists_all_six_durable_invariants(self) -> None:
+        agents_md = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("Current Evidence Priority", agents_md)
+        self.assertIn("Exact Provenance Source Binding", agents_md)
+        self.assertIn("--source-digest", agents_md)
+        self.assertIn("Resumable Immutable Drafts", agents_md)
+        self.assertIn("Final Pre-Publish Recheck Gate", agents_md)
+        self.assertIn("Deployment Authority and PR Isolation", agents_md)
+        self.assertIn("Cross-Chat Review Safety", agents_md)
+
     def test_gitignore_protects_against_zip_reintroduction(self) -> None:
         gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("/pr*_changes.zip", gitignore)

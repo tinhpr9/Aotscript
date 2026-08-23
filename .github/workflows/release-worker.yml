@@ -189,8 +189,8 @@ jobs:
         run: |
           set -euo pipefail
           for asset in dist/*; do
-            echo "Verifying attestation for $asset against source repo ${GITHUB_REPOSITORY}..."
-            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}"
+            echo "Verifying attestation for $asset against source digest $TARGET_COMMIT..."
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}" --source-digest "${TARGET_COMMIT}"
           done
 
       - name: Final pre-publish recheck and immediate publication
@@ -212,7 +212,7 @@ jobs:
 
           # 2. Re-verify attestations right before publish
           for asset in dist/*; do
-            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}"
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}" --source-digest "${TARGET_COMMIT}"
           done
 
           # 3. Publish immediately (zero mutation gap)
@@ -235,5 +235,5 @@ jobs:
               raise SystemExit("published_release_identity_mismatch")
           PY
           for asset in dist/*; do
-            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}"
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}" --source-digest "${TARGET_COMMIT}"
           done

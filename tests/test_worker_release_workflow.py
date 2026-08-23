@@ -275,9 +275,15 @@ class WorkerReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("subject-path: 'dist/*'", text)
         self.assertIn("id-token: write", text)
         self.assertIn("attestations: write", text)
-        self.assertIn('gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}"', text)
+        self.assertIn('gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}" --source-digest "${TARGET_COMMIT}"', text)
         self.assertLess(text.index("actions/attest-build-provenance"), text.index("-F draft=false"))
         self.assertLess(text.index('gh attestation verify "$asset"'), text.index("-F draft=false"))
+
+    def test_wrong_source_digest_blocks_verification(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        # Assert that verification does not omit the source-digest binding
+        self.assertNotIn('gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}"\n', text)
+        self.assertIn('--source-digest "${TARGET_COMMIT}"', text)
 
     def test_ci_workflow_has_no_attestation_signing_permissions(self) -> None:
         ci_text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
