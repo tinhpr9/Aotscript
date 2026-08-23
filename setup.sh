@@ -1168,7 +1168,7 @@ run_aot_setup() {
     msetup_script="$AOTSCRIPT_SETUP_M166_SOURCE"
     bash -n "$msetup_script" || die "setup-m166.sh tải về sai cú pháp."
   else
-    local msetup_url="${AOTSCRIPT_SETUP_M166_URL:-https://raw.githubusercontent.com/tinhpr9/Aotscript/${AOTSCRIPT_PROVISION_REF:-main}/setup-m166.sh}"
+    local msetup_url="${AOTSCRIPT_SETUP_M166_URL:-$RAW_BASE/setup-m166.sh}"
     msetup_script="$(mktemp "$SETUP_STATE_DIR/.setup-m166.XXXXXX")"
     curl -fsSL --retry 3 --connect-timeout 15 \
       "$msetup_url?t=$(date +%s)" -o "$msetup_script" || {
