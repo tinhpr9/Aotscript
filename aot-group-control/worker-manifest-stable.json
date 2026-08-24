@@ -44,7 +44,7 @@
     {
       "path": "updater.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.24.01/updater.py",
-      "sha256": "e1eebf2c171f522d2a2d85c10c518c14c4c4ce31490e20f34f0de643c19690bf"
+      "sha256": "814a706a045842efb12b217af2ec9e2e7ce4981e916fd900ef1cba07668028a1"
     },
     {
       "path": "worker-release-schema.json",

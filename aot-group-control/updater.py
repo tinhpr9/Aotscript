@@ -33,15 +33,20 @@ def _pending_path() -> pathlib.Path:
     return _supervisor_root() / "update_pending.json"
 
 
+BOOTSTRAP_LAUNCHER = _bootstrap_launcher()
+PENDING_PATH = _pending_path()
+
+
 def normalize_channel(value: object) -> str | None:
     channel = str(value or "").strip().lower()
     return channel if channel in VALID_CHANNELS else None
 
 
 def notify_healthy(action_id: str, version: str) -> bool:
+    launcher = getattr(sys.modules.get(__name__), "BOOTSTRAP_LAUNCHER", None) or _bootstrap_launcher()
     result = subprocess.run(
         [
-            sys.executable, str(_bootstrap_launcher()), "health",
+            sys.executable, str(launcher), "health",
             "--action-id", action_id, "--version", version,
         ],
         stdin=subprocess.DEVNULL,
@@ -55,7 +60,8 @@ def notify_healthy(action_id: str, version: str) -> bool:
 
 def notify_pending_healthy(running_version: str | None = None) -> bool:
     try:
-        pending = json.loads(_pending_path().read_text(encoding="utf-8"))
+        pending_path = getattr(sys.modules.get(__name__), "PENDING_PATH", None) or _pending_path()
+        pending = json.loads(pathlib.Path(pending_path).read_text(encoding="utf-8"))
         action_id = str(pending["action_id"])
         version = str(pending["version"])
         if running_version is not None and running_version != version:
