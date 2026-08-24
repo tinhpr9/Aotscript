@@ -416,5 +416,113 @@ class ArtifactPolicyAndSupplyChainGuards(unittest.TestCase):
         self.assertIn("/aot-*.zip", gitignore)
 
 
+class Phase4DependencyAutomationGuards(unittest.TestCase):
+    def test_renovate_json_exists_and_parses_valid_schema(self) -> None:
+        import json
+        renovate_file = REPO_ROOT / "renovate.json"
+        self.assertTrue(renovate_file.is_file(), "renovate.json must exist at repository root")
+        config = json.loads(renovate_file.read_text(encoding="utf-8"))
+        self.assertEqual("https://docs.renovatebot.com/renovate-schema.json", config.get("$schema"))
+        self.assertIn("config:recommended", config.get("extends", []))
+        self.assertIn("helpers:pinGitHubActionDigests", config.get("extends", []))
+        self.assertIn(":dependencyDashboard", config.get("extends", []))
+
+    def test_renovate_no_automerge_and_enabled_managers(self) -> None:
+        import json
+        config = json.loads((REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
+        self.assertFalse(config.get("automerge", True), "automerge must be globally disabled")
+        self.assertFalse(config.get("platformAutomerge", True), "platformAutomerge must be globally disabled")
+        self.assertTrue(config.get("dependencyDashboard", False), "dependencyDashboard must be enabled")
+        self.assertEqual(["npm", "github-actions", "nvm", "nodenv", "custom.regex"], config.get("enabledManagers"))
+        
+        package_rules = config.get("packageRules", [])
+        major_rule = next((r for r in package_rules if "major" in r.get("matchUpdateTypes", [])), None)
+        self.assertIsNotNone(major_rule, "Must have a package rule for major updates")
+        self.assertTrue(major_rule.get("dependencyDashboardApproval"), "Major updates must require dashboard approval")
+
+    def test_promptfoo_regex_custom_manager_scope_and_matching(self) -> None:
+        import json
+        config = json.loads((REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
+        custom_managers = config.get("customManagers", [])
+        self.assertEqual(1, len(custom_managers))
+        cm = custom_managers[0]
+        self.assertEqual("regex", cm.get("customType"))
+        self.assertEqual(["^\\.github/workflows/promptfoo-benchmark\\.yml$"], cm.get("fileMatch"))
+        
+        match_pattern = cm.get("matchStrings", [])[0]
+        promptfoo_content = (REPO_ROOT / ".github/workflows/promptfoo-benchmark.yml").read_text(encoding="utf-8")
+        
+        # Convert JS named capture group (?<name>...) to Python (?P<name>...) for test verification
+        py_match_pattern = re.sub(r"\(\?<([a-zA-Z_][a-zA-Z0-9_]*)>", r"(?P<\1>", match_pattern)
+        
+        # Match real promptfoo workflow
+        match = re.search(py_match_pattern, promptfoo_content)
+        self.assertIsNotNone(match, f"Custom regex {match_pattern} must match promptfoo installation")
+        extracted_version = match.group("currentValue")
+        self.assertTrue(
+            bool(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", extracted_version)),
+            f"Extracted version {extracted_version} must be a valid semver string"
+        )
+        self.assertIn(f"npm install -g promptfoo@{extracted_version}", promptfoo_content)
+        
+        # Failure test: Must NOT match unrelated npm install
+        unrelated_npm = "npm install -g other-tool@1.0.0"
+        self.assertIsNone(re.search(py_match_pattern, unrelated_npm))
+        unrelated_npm_ci = "npm ci"
+        self.assertIsNone(re.search(py_match_pattern, unrelated_npm_ci))
+
+    def test_all_github_actions_are_sha_pinned_with_version_comments(self) -> None:
+        workflows_dir = REPO_ROOT / ".github/workflows"
+        workflow_files = list(workflows_dir.glob("*.yml")) + list(workflows_dir.glob("*.yaml"))
+        self.assertGreater(len(workflow_files), 0)
+        
+        uses_pattern = re.compile(r'^\s*(?:-\s*)?uses:\s*([^\s#]+)(?:\s*#\s*(v[^\s]+))?')
+        found_actions = 0
+        
+        for wf in workflow_files:
+            lines = wf.read_text(encoding="utf-8").splitlines()
+            for i, line in enumerate(lines, 1):
+                m = uses_pattern.match(line)
+                if not m:
+                    continue
+                action_ref = m.group(1)
+                version_comment = m.group(2)
+                found_actions += 1
+                
+                # Skip local actions if any
+                if action_ref.startswith("./"):
+                    continue
+                
+                self.assertIn("@", action_ref, f"Action reference {action_ref} at {wf.name}:{i} lacks @")
+                owner_action, sha = action_ref.split("@", 1)
+                
+                # Must be 40-character hex SHA
+                self.assertTrue(
+                    re.fullmatch(r"[0-9a-f]{40}", sha),
+                    f"Action reference {action_ref} at {wf.name}:{i} must be a 40-hex commit SHA, got: {sha}"
+                )
+                
+                # Must not use mutable tags
+                for forbidden in ["main", "master", "latest", "v1", "v2", "v3", "v4", "v5"]:
+                    self.assertNotEqual(forbidden, sha, f"Mutable ref {forbidden} forbidden at {wf.name}:{i}")
+                
+                # Must have verified version comment
+                self.assertIsNotNone(
+                    version_comment,
+                    f"Action reference {action_ref} at {wf.name}:{i} must have a verified version comment (e.g. # vX.Y.Z)"
+                )
+        
+        self.assertGreaterEqual(found_actions, 13, f"Expected at least 13 action references, found {found_actions}")
+
+    def test_agents_md_persists_phase4_dependency_invariants(self) -> None:
+        agents_md = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("Automated Dependency Management and Renovate Policy (Phase 4)", agents_md)
+        self.assertIn("Renovate is the single dependency version-update authority", agents_md)
+        self.assertIn("Renovate NEVER automerges", agents_md)
+        self.assertIn("Full 40-hex commit SHA pinning", agents_md)
+        self.assertIn("High-risk production deployment and supply-chain dependencies remain isolated", agents_md)
+        self.assertIn("Phase 4 (In Progress — configuration)", agents_md)
+
+
 if __name__ == "__main__":
     unittest.main()
