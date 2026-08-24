@@ -1190,36 +1190,7 @@ resume_pending_migration() {
   return 0
 }
 
-download_provision() {
-  local target sidecar stage actual_sha
-  target="$SETUP_STATE_DIR/provision-device-$PROVISION_REF.sh"
-  sidecar="$target.sha256"
-  if [ -s "$target" ] && [ "$(cat "$sidecar" 2>/dev/null || true)" = "$PROVISION_SHA256" ] &&
-     [ "$(sha256sum "$target" | awk '{print $1}')" = "$PROVISION_SHA256" ] && bash -n "$target"; then
-    printf '%s\n' "$target"
-    return 0
-  fi
-  stage="$SETUP_STATE_DIR/.provision-device.tmp.$$"
-  rm -f "$stage"
-  curl -fsSL --retry 3 --connect-timeout 15 </dev/null \
-    "$RAW_BASE/provision-device.sh?t=$(date +%s)" -o "$stage" || {
-      rm -f "$stage"
-      die "Không tải được provision-device.sh revision pin."
-    }
-  [ -s "$stage" ] && bash -n "$stage" || {
-    rm -f "$stage"
-    die "Provision tải về rỗng hoặc sai cú pháp."
-  }
-  actual_sha="$(sha256sum "$stage" | awk '{print $1}')"
-  [ "$actual_sha" = "$PROVISION_SHA256" ] || {
-    rm -f "$stage"
-    die "Provision SHA-256 không khớp."
-  }
-  chmod 700 "$stage"
-  mv -f "$stage" "$target"
-  state_write "provision-device-$PROVISION_REF.sh.sha256" "$PROVISION_SHA256"
-  printf '%s\n' "$target"
-}
+
 
 read_mprovision_phase() {
   python - "$MPROVISION_STATE" "$1" "$2" <<'PY'

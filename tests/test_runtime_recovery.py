@@ -155,14 +155,13 @@ class TestRuntimeRecoveryAndSetupGuards(unittest.TestCase):
         finally:
             shutil.rmtree(tmp2, ignore_errors=True)
 
-    def test_termux_boot_promotes_apk_part_to_apk_before_install(self) -> None:
+    def test_termux_boot_apk_auto_install_removed_and_boot_script_retained(self) -> None:
         setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
-        # Ensure mv -f "$apk_part" "$apk" occurs before pm install -r "$apk"
-        mv_idx = setup_m166.find('mv -f "$apk_part" "$apk"')
-        pm_idx = setup_m166.find("pm install -r '$apk'")
-        self.assertNotEqual(-1, mv_idx, "mv -f $apk_part $apk not found in setup-m166.sh")
-        self.assertNotEqual(-1, pm_idx, "pm install not found in setup-m166.sh")
-        self.assertLess(mv_idx, pm_idx, "mv -f $apk_part $apk must execute before pm install")
+        # Ensure automatic APK download and installation are removed
+        self.assertNotIn("install_termux_boot_app", setup_m166)
+        self.assertNotIn("Termux-Boot.apk", setup_m166)
+        # Ensure boot script generation is retained
+        self.assertIn('AGENT_BOOT="$HOME/.termux/boot/01-agent.sh"', setup_m166)
 
     def test_readiness_polling_without_seq(self) -> None:
         setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
@@ -353,18 +352,13 @@ class TestFingerprintStrategyPersistence(unittest.TestCase):
         fp2 = res2.stdout.strip()
         self.assertEqual(fp1, fp2, "Fingerprint must not change when root becomes available after token-based bind")
 
-    def test_cached_zip_source_binding_rejects_stale(self) -> None:
-        # Simulate a stale zip (no .driveid file) → should trigger re-download
+    def test_zip_payload_download_and_cache_removed(self) -> None:
         setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
-        # Verify the Drive ID binding logic is present
-        self.assertIn('local id_file="${out}.driveid"', setup_m166)
-        self.assertIn('[ "$cached_id" = "$id" ]', setup_m166)
-        self.assertIn('printf \'%s\\n\' "$id" > "$id_file"', setup_m166)
-
-    def test_cached_zip_source_binding_accepts_correct_source(self) -> None:
-        # Verify that same drive ID + intact digest results in cache hit message
-        setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
-        self.assertIn("ZIP đã có sẵn, hợp lệ và nguyên vẹn:", setup_m166)
+        self.assertNotIn("download_zip", setup_m166)
+        self.assertNotIn("extract_safe", setup_m166)
+        self.assertNotIn("Shouko.zip", setup_m166)
+        self.assertNotIn("Delta.zip", setup_m166)
+        self.assertIn('SHOUKO_DIR="$DL/Shouko"', setup_m166)
 
 
 class TestFingerprintStrongStrategyFallbackBlocked(unittest.TestCase):
@@ -425,12 +419,10 @@ class TestFingerprintStrongStrategyFallbackBlocked(unittest.TestCase):
         self.assertEqual(0, res.returncode, res.stderr)
         self.assertEqual(bound_hash, res.stdout.strip())
 
-    def test_zip_sha256_sidecar_stored_and_verified(self) -> None:
+    def test_lean_setup_no_dead_zip_sidecars(self) -> None:
         setup_m166 = (REPO_ROOT / "setup-m166.sh").read_text(encoding="utf-8")
-        self.assertIn('local sha_file="${out}.sha256"', setup_m166)
-        self.assertIn('sha256sum "$out" > "$sha_file"', setup_m166)
-        self.assertIn('stored_sha="$(cat "$sha_file"', setup_m166)
-        self.assertIn('[ "$stored_sha" = "$current_sha" ]', setup_m166)
+        self.assertNotIn('.driveid', setup_m166)
+        self.assertNotIn('.sha256', setup_m166)
 
 
 class TestFingerprintHardwareVerificationAndCloneDetection(unittest.TestCase):

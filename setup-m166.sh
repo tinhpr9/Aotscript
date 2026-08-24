@@ -399,7 +399,7 @@ if root id 2>/dev/null | grep -q 'uid=0(root)'; then
 else
   HAVE_ROOT=0
   warn "ROOT không có hoặc không hoạt động trên máy này"
-  warn "Các bước cần root (wm density, settings, Gboard, Termux:Boot cài APK) sẽ bị bỏ qua"
+  warn "Các bước cần root (wm density, settings) sẽ bị bỏ qua"
   warn "Đăng ký AOT, Agent và relay KHÔNG cần root — tiếp tục"
 fi
 
@@ -463,22 +463,10 @@ else
   warn "Bỏ qua developer settings (cần root): ${KEYS[*]}"
 fi
 
-for command in python curl unzip; do
+for command in python curl; do
   command -v "$command" >/dev/null 2>&1 ||
     die "Thiếu lệnh bắt buộc: $command"
 done
-
-if command -v gdown >/dev/null 2>&1; then
-  ok "gdown đã có"
-else
-  echo "[*] Đang cài gdown..."
-  python -m pip install --upgrade gdown ||
-    die "Cài gdown thất bại"
-  hash -r
-  command -v gdown >/dev/null 2>&1 ||
-    die "Đã cài nhưng không tìm thấy gdown"
-  ok "Cài gdown thành công"
-fi
 
 mkdir -p "$HOME/bin" "$HOME/.termux/boot"
 
@@ -595,100 +583,7 @@ else
   warn "Bỏ qua điều chỉnh wm density (cần root)"
 fi
 
-PKG="com.google.android.inputmethod.latin"
-IME="$PKG/com.android.inputmethod.latin.LatinIME"
 
-echo
-echo "=== CẤU HÌNH GBOARD ==="
-
-if [ "$HAVE_ROOT" = 1 ]; then
-  if root "pm path $PKG" >/dev/null 2>&1; then
-    root "pm enable $PKG" >/dev/null 2>&1 || true
-    root "ime enable '$IME'" >/dev/null 2>&1 || true
-    if root "ime set '$IME'"; then
-      ok "Đã đặt Gboard làm mặc định"
-    else
-      warn "Không đặt được Gboard làm mặc định"
-    fi
-  else
-    warn "Gboard chưa được cài"
-  fi
-else
-  warn "Bỏ qua cấu hình Gboard (cần root)"
-fi
-
-download_zip() {
-  local id="$1"
-  local out="$2"
-  local part="${out}.part.$$"
-  local id_file="${out}.driveid"
-  local sha_file="${out}.sha256"
-  # Validate cache: Drive ID match + content digest + structural integrity.
-  # NOTE: This guards against on-disk corruption and foreign file substitution.
-  # It cannot detect a legitimate update of the file behind the same Drive ID;
-  # such Drive-side updates require a new Drive ID or an out-of-band hash manifest.
-  local cached_id="" stored_sha="" current_sha=""
-  [ -f "$id_file" ] && cached_id="$(cat "$id_file" 2>/dev/null | tr -d '\r\n ' || true)"
-  [ -f "$sha_file" ] && stored_sha="$(cat "$sha_file" 2>/dev/null | awk '{print $1}' || true)"
-  if [ -f "$out" ] && [ "$cached_id" = "$id" ] && [ -n "$stored_sha" ]; then
-    current_sha="$(sha256sum "$out" 2>/dev/null | awk '{print $1}' || true)"
-    if [ "$stored_sha" = "$current_sha" ] && unzip -t "$out" >/dev/null 2>&1; then
-      ok "ZIP đã có sẵn, hợp lệ và nguyên vẹn: $(basename "$out")"
-      return 0
-    fi
-  fi
-  # Cache invalid: wrong Drive ID, digest mismatch, or structurally corrupt
-  [ -f "$out" ] && rm -f "$out" "$id_file" "$sha_file"
-  echo
-  echo "[*] Đang tải: $(basename "$out")"
-  rm -f "$part"
-  local try_count=0
-  while [ "$try_count" -lt 3 ]; do
-    if gdown "$id" -O "$part" && [ -s "$part" ] && unzip -t "$part" >/dev/null 2>&1; then
-      break
-    fi
-    try_count=$((try_count + 1))
-    rm -f "$part"
-    [ "$try_count" -lt 3 ] && sleep 2
-  done
-  if [ ! -s "$part" ] || ! unzip -t "$part" >/dev/null 2>&1; then
-    rm -f "$part"
-    die "Tải thất bại hoặc ZIP bị lỗi: $(basename "$out")"
-  fi
-  mv -f "$part" "$out" ||
-    die "Không lưu được: $(basename "$out")"
-  # Record Drive ID and content digest for future cache validation
-  printf '%s\n' "$id" > "$id_file"
-  sha256sum "$out" > "$sha_file"
-  ok "ZIP hợp lệ: $(basename "$out")"
-}
-
-extract_safe() {
-  local zip="$1"
-  local dest="$2"
-  local expected="$3"
-  local target="$dest/$expected"
-  local list
-  list="$(unzip -Z1 "$zip")" ||
-    die "Không đọc được $(basename "$zip")"
-  printf '%s\n' "$list" |
-    grep -q "^${expected}/" ||
-    die "$(basename "$zip") không có thư mục $expected"
-  if [ -e "$target" ] && [ ! -d "$target" ]; then
-    die "$target tồn tại nhưng không phải thư mục"
-  fi
-  if [ -d "$target" ] &&
-     [ -n "$(find "$target" -mindepth 1 -print -quit 2>/dev/null)" ]; then
-    warn "$target đã có dữ liệu; giữ nguyên để tránh ghi đè"
-    return 0
-  fi
-  mkdir -p "$dest"
-  unzip -q "$zip" -d "$dest" ||
-    die "Giải nén thất bại: $(basename "$zip")"
-  [ -d "$target" ] ||
-    die "Giải nén xong nhưng không thấy $target"
-  ok "Đã giải nén: $target"
-}
 
 pair_agent_config() {
   local output="$1"
@@ -1082,19 +977,7 @@ install_agent_config() {
   ok "Đã cài agent_config.json từ $source_name; không hiển thị nội dung"
 }
 
-SHOUKO_ZIP="$DL/Shouko.zip"
-DELTA_ZIP="$DL/Delta.zip"
-
-download_zip \
-  "1vDjK3hNCyT0B_rbAcsPlelD-TJJKzwG1" \
-  "$SHOUKO_ZIP"
-
-download_zip \
-  "1BkHn3hyDfobTcy5tqhT9LePe01OzEHQ-" \
-  "$DELTA_ZIP"
-
-extract_safe "$SHOUKO_ZIP" "$DL" "Shouko"
-extract_safe "$DELTA_ZIP" "$SD" "Delta"
+mkdir -p "$SHOUKO_DIR"
 install_agent_config
 
 TOOLCHECK_CMD="$HOME/bin/toolcheck"
@@ -1307,147 +1190,7 @@ fi
 "$SETDEVICE_CMD" "$DEVICE_ID" "$DEVICE_GROUP" ||
   die "setdevice thất bại"
 
-install_termux_boot_app() {
-  local package="com.termux.boot"
-  local meta="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/termux-boot-meta.$$"
-  local apk="$DL/Termux-Boot.apk"
-  local apk_part="${apk}.part.$$"
-  local apk_url=""
-  local archive_entry=""
-  local source_name=""
-  local install_source=""
-  local version_code=""
 
-  # Non-root check: pm list packages does not require root
-  if pm list packages 2>/dev/null | grep -Fqx "package:$package"; then
-    ok "Termux:Boot đã được cài"
-    return 0
-  fi
-
-  if [ "$HAVE_ROOT" != 1 ]; then
-    warn "Termux:Boot chưa được cài và không có root để cài APK tự động"
-    warn "Relay vẫn có thể khởi động bằng tay hoặc qua Termux session"
-    warn "Để tự động khởi động khi boot: cài Termux:Boot thủ công từ F-Droid hoặc nguồn tương thích"
-    return 0
-  fi
-
-  rm -f "$meta" "$apk_part"
-
-  archive_entry="$(
-    unzip -Z1 "$SHOUKO_ZIP" |
-      awk 'tolower($0) ~ /termux[^/]*boot[^/]*\.apk$/ {print; exit}'
-  )"
-
-  if [ -n "$archive_entry" ]; then
-    unzip -p "$SHOUKO_ZIP" "$archive_entry" > "$apk_part" ||
-      die "Không lấy được Termux:Boot từ Shouko.zip"
-    source_name="Shouko.zip riêng tư"
-  else
-    install_source="$(
-      root "cmd package get-install-source com.termux" 2>/dev/null || true
-    )"
-
-    if printf '%s\n' "$install_source" |
-         grep -q 'org\.fdroid\.fdroid'; then
-      echo "[*] Đang lấy Termux:Boot từ F-Droid..."
-      curl -fsSL \
-        --retry 3 \
-        --connect-timeout 15 \
-        "https://f-droid.org/api/v1/packages/com.termux.boot" \
-        -o "$meta" ||
-          die "Không lấy được metadata Termux:Boot từ F-Droid"
-
-      version_code="$(
-        python - "$meta" <<'PY'
-import json
-import pathlib
-import sys
-
-data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-value = data.get("suggestedVersionCode")
-if not isinstance(value, int) or value <= 0:
-    raise SystemExit(1)
-print(value)
-PY
-      )" || {
-        rm -f "$meta"
-        die "Metadata F-Droid của Termux:Boot không hợp lệ"
-      }
-
-      apk_url="https://f-droid.org/repo/com.termux.boot_${version_code}.apk"
-      source_name="F-Droid"
-    else
-      echo "[*] Đang lấy Termux:Boot từ GitHub chính thức..."
-      curl -fsSL \
-        --retry 3 \
-        --connect-timeout 15 \
-        "https://api.github.com/repos/termux/termux-boot/releases/latest" \
-        -o "$meta" ||
-          die "Không lấy được metadata Termux:Boot từ GitHub"
-
-      apk_url="$(
-        python - "$meta" <<'PY'
-import json
-import pathlib
-import sys
-
-data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-assets = data.get("assets") or []
-apks = [
-    item for item in assets
-    if str(item.get("name", "")).lower().endswith(".apk")
-    and item.get("browser_download_url")
-]
-if not apks:
-    raise SystemExit(1)
-preferred = [
-    item for item in apks
-    if "universal" in str(item.get("name", "")).lower()
-]
-print((preferred or apks)[0]["browser_download_url"])
-PY
-      )" || {
-        rm -f "$meta"
-        die "Không tìm thấy APK Termux:Boot trên GitHub"
-      }
-
-      source_name="GitHub chính thức"
-    fi
-
-    rm -f "$meta"
-
-    curl -fsSL \
-      --retry 3 \
-      --connect-timeout 15 \
-      "$apk_url" \
-      -o "$apk_part" ||
-        die "Tải Termux:Boot thất bại"
-  fi
-
-  [ -s "$apk_part" ] ||
-    die "APK Termux:Boot bị trống"
-
-  unzip -t "$apk_part" >/dev/null 2>&1 ||
-    die "APK Termux:Boot không hợp lệ"
-
-  mv -f "$apk_part" "$apk"
-
-  if ! root "pm install -r '$apk'" >/dev/null 2>&1; then
-    warn "Cài Termux:Boot tự động thất bại; relay vẫn hoạt động bình thường qua Termux session"
-    return 0
-  fi
-
-  if ! root "pm path $package" >/dev/null 2>&1; then
-    warn "Không xác nhận được Termux:Boot sau khi cài; bỏ qua"
-    return 0
-  fi
-
-  root "monkey -p $package -c android.intent.category.LAUNCHER 1" \
-    >/dev/null 2>&1 || true
-
-  ok "Đã cài và mở Termux:Boot từ $source_name"
-}
-install_termux_boot_app
 
 AGENT_BOOT="$HOME/.termux/boot/01-agent.sh"
 AGENT_BOOT_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/01-agent.sh.$$"
