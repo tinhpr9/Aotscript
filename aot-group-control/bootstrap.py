@@ -23,7 +23,7 @@ import urllib.request
 from typing import Any, Iterator
 
 BOOTSTRAP_VERSION = 2
-BOOTSTRAP_RELEASE_VERSION = 7
+BOOTSTRAP_RELEASE_VERSION = 8
 ROOT = pathlib.Path(__file__).resolve().parent
 RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
@@ -53,12 +53,12 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_RELEASE_FILES = 32
 HUB_RELEASE_PROTOCOL = "github-release-v1"
 INITIAL_RELEASE_SPEC = {
-    "version": "aot-worker-2026.08.24.01",
-    "tag": "worker-v2026.08.24.01",
+    "version": "aot-worker-2026.08.24.02",
+    "tag": "worker-v2026.08.24.02",
     "commit_sha": "f21667ef549a37d495fdd834020e247f8e6fb1c6",
     "manifest": {
         "name": "worker-manifest.json",
-        "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.24.01/worker-manifest.json",
+        "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.24.02/worker-manifest.json",
         "size": 4410,
         "sha256": "55de7493aa1337880f69e3b63344f1f84b905a74c598fd9cd5f104ad0e1edd4e",
         "github_digest": "sha256:55de7493aa1337880f69e3b63344f1f84b905a74c598fd9cd5f104ad0e1edd4e",

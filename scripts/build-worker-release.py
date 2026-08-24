@@ -61,6 +61,15 @@ def resolve_built_at(args_built_at: str | None, repro_built_at: str | None) -> s
     return "1980-01-01T00:00:00Z"
 
 
+def get_bootstrap_release_version(source_dir: pathlib.Path) -> int:
+    bootstrap_file = source_dir / "bootstrap.py"
+    if bootstrap_file.is_file():
+        match = re.search(r'BOOTSTRAP_RELEASE_VERSION\s*=\s*([0-9]+)', bootstrap_file.read_text(encoding="utf-8"))
+        if match:
+            return int(match.group(1))
+    return 8
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
@@ -137,7 +146,7 @@ def main() -> int:
         "minimum_bootstrap_version": 2,
         "built_at": built_at,
         "files": [item for item in sorted(assets, key=lambda x: x["path"]) if item["path"] in FILES],
-        "bootstrap": next(item for item in assets if item["path"] == "bootstrap.py") | {"version": 7},
+        "bootstrap": next(item for item in assets if item["path"] == "bootstrap.py") | {"version": get_bootstrap_release_version(source_dir)},
     }
     manifest_path = output / "worker-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
