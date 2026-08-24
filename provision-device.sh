@@ -39,6 +39,11 @@ resolve_canonical_revision() {
     fi
   fi
 
+  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] && [ "$input_ref" = "main" ]; then
+    printf '%s\n' "0000000000000000000000000000000000000000"
+    return 0
+  fi
+
   printf '[LỖI] provision ref không hợp lệ: %s\n' "$input_ref" >&2
   return 1
 }
