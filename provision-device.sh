@@ -2,11 +2,48 @@
 set -Eeuo pipefail
 
 VERSION="phase21-one-brain-core-v1"
-PROVISION_REF="${AOTSCRIPT_PROVISION_REF:-main}"
-[[ "$PROVISION_REF" =~ ^(main|[0-9a-f]{40})$ ]] || {
-  printf '[LỖI] provision ref không hợp lệ: %s\n' "$PROVISION_REF" >&2
-  exit 1
+resolve_canonical_revision() {
+  local input_ref="${1:-${AOTSCRIPT_PROVISION_REF:-main}}"
+  local resolved=""
+  input_ref="$(printf '%s' "$input_ref" | tr -d '[:space:]')"
+  [ -n "$input_ref" ] || input_ref="main"
+
+  if [[ "$input_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$input_ref" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if [ -n "${AOTSCRIPT_RESOLVED_REVISION:-}" ] && [[ "$AOTSCRIPT_RESOLVED_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$AOTSCRIPT_RESOLVED_REVISION" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    resolved="$(curl -fsSL --retry 3 --connect-timeout 10 \
+      -H "User-Agent: Aotscript-Setup" \
+      -H "Accept: application/vnd.github.sha" \
+      "https://api.github.com/repos/tinhpr9/Aotscript/commits/$input_ref" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  printf '[LỖI] provision ref không hợp lệ: %s\n' "$input_ref" >&2
+  return 1
 }
+
+PROVISION_REF="$(resolve_canonical_revision "${AOTSCRIPT_PROVISION_REF:-main}")" || exit 1
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
 SWIFT_FILE_ID="1-5O8rQI9zzeVTIZcYoFmgj0gm8LW4nYI"
 SD="${MPROVISION_SD:-/storage/emulated/0}"

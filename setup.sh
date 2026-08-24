@@ -4,9 +4,48 @@ set -Eeuo pipefail
 AOTSETUP_LOCAL_LAUNCHER_V1=1
 VERSION="one-command-setup-v2"
 PROVISION_VERSION="phase22-aot-registration-v1"
-# All provision/wizard/setup children use this exact tested revision.
-PROVISION_REF="3b481f02a88cabd9cc4a819206ad152f27d4cce8"
-PROVISION_SHA256="a4435be33a5e4336004de9ce392935dc71f4ae62748a9340921f9b318aaa4965"
+resolve_canonical_revision() {
+  local input_ref="${1:-${AOTSCRIPT_PROVISION_REF:-main}}"
+  local resolved=""
+  input_ref="$(printf '%s' "$input_ref" | tr -d '[:space:]')"
+  [ -n "$input_ref" ] || input_ref="main"
+
+  if [[ "$input_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$input_ref" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if [ -n "${AOTSCRIPT_RESOLVED_REVISION:-}" ] && [[ "$AOTSCRIPT_RESOLVED_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$AOTSCRIPT_RESOLVED_REVISION" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    resolved="$(curl -fsSL --retry 3 --connect-timeout 10 \
+      -H "User-Agent: Aotscript-Setup" \
+      -H "Accept: application/vnd.github.sha" \
+      "https://api.github.com/repos/tinhpr9/Aotscript/commits/$input_ref" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  printf '[LỖI] provision ref không hợp lệ: %s\n' "$input_ref" >&2
+  return 1
+}
+
+PROVISION_REF="$(resolve_canonical_revision "${AOTSCRIPT_PROVISION_REF:-main}")" || exit 1
 RAW_BASE="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
 MAIN_SETUP_URL="https://raw.githubusercontent.com/tinhpr9/Aotscript/main/setup.sh"
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
@@ -593,7 +632,7 @@ test_su_stdin_isolation() {
 
 identity_tool() {
   python - "$STATE_BASE" "$SETUP_STATE_DIR" "$STORAGE_ROOT" \
-    "$PROVISION_REF" "$PROVISION_SHA256" "$PROVISION_VERSION" "$@" <<'PY'
+    "$PROVISION_REF" "${PROVISION_SHA256:-}" "$PROVISION_VERSION" "$@" <<'PY'
 import datetime
 import hashlib
 import json
@@ -1213,7 +1252,7 @@ run_aot_setup() {
       die "setup-m166.sh tải về sai cú pháp."
     }
   fi
-  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" bash "$msetup_script" "$device_id" "$group" </dev/null || {
+  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" AOTSCRIPT_AOT_REF="$PROVISION_REF" bash "$msetup_script" "$device_id" "$group" </dev/null || {
     [ -n "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ] || rm -f "$msetup_script"
     die "AOT msetup không hoàn tất."
   }

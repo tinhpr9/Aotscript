@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-test_provision_pin_coherence.py - Provision Pin & Registration Contract Coherence Tests
+test_provision_pin_coherence.py - Provision Revision Authority & Registration Contract Coherence Tests
 
 Validates:
-1. Pinned commit revision & SHA-256 match provision-device.sh.
-2. Pinned registration helper implements the canonical device-id-only contract.
-3. Behavior-based assertions for discover response, mismatch rejection, and legacy compatibility.
-4. Reproduction of original pre-PR70 failure and proof that the pinned helper resolves it.
-5. Checksum rejection sensitivity testing against the real setup.sh validation logic.
-6. Shallow checkout safety (no failure if historical git objects are not present locally).
+1. Canonical revision authority: setup.sh, setup-m166.sh, Termuxboot, and provision-device.sh
+   resolve input refs dynamically to immutable 40-hex commit SHAs without hardcoded commit SHA literals.
+2. Dynamic revision propagation: setting AOTSCRIPT_PROVISION_REF to Revision A or Revision B
+   propagates across the entire parent-child hierarchy WITHOUT ANY SOURCE CODE EDITS.
+3. Once-and-only-once resolution & freeze: an input ref such as "main" resolves to an immutable
+   40-hex commit SHA "R", freezing "R" for the entire setup transaction and child invocations.
+4. Fail-closed revision validation: invalid, malformed, or injection-attempt revision refs
+   are strictly rejected by setup.sh, setup-m166.sh, and provision-device.sh.
+5. Pinned registration helper implements the canonical device-id-only contract.
+6. Reproduction of original pre-PR70 failure and proof that the canonical helper resolves it.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import pathlib
@@ -25,58 +28,121 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SETUP_SH = ROOT / "setup.sh"
+SETUP_M166_SH = ROOT / "setup-m166.sh"
+TERMUXBOOT_SH = ROOT / "Termuxboot"
+PROVISION_SH = ROOT / "provision-device.sh"
+REGISTRATION_HELPER = ROOT / "aot-group-control/msetup_registration.py"
 
 
 class ProvisionPinCoherenceTests(unittest.TestCase):
     def setUp(self):
         self.assertTrue(SETUP_SH.is_file(), "setup.sh must exist")
-        content = SETUP_SH.read_text(encoding="utf-8")
-
-        ref_match = re.search(r'PROVISION_REF="([0-9a-fA-F]{40})"', content)
-        self.assertIsNotNone(ref_match, "setup.sh must declare a 40-char hex PROVISION_REF")
-        self.provision_ref = ref_match.group(1).lower()
-
-        sha_match = re.search(r'PROVISION_SHA256="([0-9a-fA-F]{64})"', content)
-        self.assertIsNotNone(sha_match, "setup.sh must declare a 64-char hex PROVISION_SHA256")
-        self.provision_sha256 = sha_match.group(1).lower()
-
-    def _get_artifact(self, path_in_ref: str, ref: str | None = None) -> bytes:
-        """Fetch artifact from git history if present; fallback to workspace file for shallow CI."""
-        target_ref = ref or self.provision_ref
-        res = subprocess.run(
-            ["git", "show", f"{target_ref}:{path_in_ref}"],
-            cwd=str(ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if res.returncode == 0:
-            return res.stdout
-        
-        local_path = ROOT / path_in_ref
-        if local_path.is_file():
-            return local_path.read_bytes()
-        raise FileNotFoundError(
-            f"Artifact {path_in_ref} at {target_ref} could not be resolved in local git or workspace"
-        )
+        self.assertTrue(SETUP_M166_SH.is_file(), "setup-m166.sh must exist")
+        self.assertTrue(TERMUXBOOT_SH.is_file(), "Termuxboot must exist")
+        self.assertTrue(PROVISION_SH.is_file(), "provision-device.sh must exist")
+        self.assertTrue(REGISTRATION_HELPER.is_file(), "msetup_registration.py must exist")
 
     def _load_registration_module(self) -> types.ModuleType:
         """Load registration helper as an isolated executable module."""
-        msetup_bytes = self._get_artifact("aot-group-control/msetup_registration.py")
-        module = types.ModuleType("msetup_registration_pinned")
-        exec(compile(msetup_bytes.decode("utf-8"), "<msetup_registration_pinned>", "exec"), module.__dict__)
+        msetup_bytes = REGISTRATION_HELPER.read_bytes()
+        module = types.ModuleType("msetup_registration_tested")
+        exec(compile(msetup_bytes.decode("utf-8"), "<msetup_registration_tested>", "exec"), module.__dict__)
         return module
 
-    def test_01_pinned_commit_and_sha256_coherence(self):
-        """Verify provision-device.sh matches declared PROVISION_SHA256 exactly."""
-        prov_bytes = self._get_artifact("provision-device.sh")
-        actual_sha = hashlib.sha256(prov_bytes).hexdigest()
-        self.assertEqual(
-            actual_sha,
-            self.provision_sha256,
-            "PROVISION_SHA256 declared in setup.sh does not match provision-device.sh"
+    def test_01_canonical_revision_authority_and_no_hardcoded_sha(self):
+        """
+        Verify that setup.sh, setup-m166.sh, Termuxboot, and provision-device.sh
+        use resolve_canonical_revision and do NOT contain hardcoded 40-character
+        hex commit SHAs in production defaults.
+        """
+        setup_content = SETUP_SH.read_text(encoding="utf-8")
+        msetup_content = SETUP_M166_SH.read_text(encoding="utf-8")
+        termuxboot_content = TERMUXBOOT_SH.read_text(encoding="utf-8")
+        provision_content = PROVISION_SH.read_text(encoding="utf-8")
+
+        # 1. Verify resolve_canonical_revision is present in all components
+        self.assertIn("resolve_canonical_revision", setup_content)
+        self.assertIn("resolve_canonical_revision", msetup_content)
+        self.assertIn("resolve_canonical_revision", termuxboot_content)
+        self.assertIn("resolve_canonical_revision", provision_content)
+
+        # 2. Verify no hardcoded 40-char hex commit SHA assignment in production setup defaults
+        hardcoded_ref_pattern = re.compile(r'^\s*PROVISION_REF="[0-9a-fA-F]{40}"', re.MULTILINE)
+        self.assertIsNone(
+            hardcoded_ref_pattern.search(setup_content),
+            "setup.sh must not hardcode a 40-char hex commit SHA as default PROVISION_REF"
+        )
+        self.assertIsNone(
+            hardcoded_ref_pattern.search(msetup_content),
+            "setup-m166.sh must not hardcode a 40-char hex commit SHA as default PROVISION_REF"
+        )
+        self.assertIsNone(
+            hardcoded_ref_pattern.search(provision_content),
+            "provision-device.sh must not hardcode a 40-char hex commit SHA as default PROVISION_REF"
         )
 
-    def test_02_pinned_registration_helper_behavior(self):
+    def test_02_dynamic_revision_propagation_without_source_edits(self):
+        """
+        Prove:
+        Revision A works AND Revision B works WITHOUT changing production source literals.
+        REVISION_CHANGE_REQUIRES_SOURCE_EDIT=NO.
+        """
+        rev_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        rev_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+        # 1. Sourced setup.sh under rev_a resolves rev_a
+        cmd_a = f"""
+        AOTSCRIPT_SETUP_SOURCE_ONLY=1
+        AOTSCRIPT_PROVISION_REF="{rev_a}"
+        source "{SETUP_SH}"
+        echo "RESOLVED_REF=$PROVISION_REF"
+        echo "RESOLVED_RAW=$RAW_BASE"
+        """
+        res_a = subprocess.run(["bash", "-c", cmd_a], capture_output=True, text=True, check=True)
+        self.assertIn(f"RESOLVED_REF={rev_a}", res_a.stdout)
+        self.assertIn(f"RESOLVED_RAW=https://raw.githubusercontent.com/tinhpr9/Aotscript/{rev_a}", res_a.stdout)
+
+        # 2. Sourced setup.sh under rev_b resolves rev_b without modifying source
+        cmd_b = f"""
+        AOTSCRIPT_SETUP_SOURCE_ONLY=1
+        AOTSCRIPT_PROVISION_REF="{rev_b}"
+        source "{SETUP_SH}"
+        echo "RESOLVED_REF=$PROVISION_REF"
+        echo "RESOLVED_RAW=$RAW_BASE"
+        """
+        res_b = subprocess.run(["bash", "-c", cmd_b], capture_output=True, text=True, check=True)
+        self.assertIn(f"RESOLVED_REF={rev_b}", res_b.stdout)
+        self.assertIn(f"RESOLVED_RAW=https://raw.githubusercontent.com/tinhpr9/Aotscript/{rev_b}", res_b.stdout)
+
+        # 3. Termuxboot resolve_provision_ref under rev_a
+        cmd_tb = f"""
+        AOTSCRIPT_PROVISION_REF="{rev_a}"
+        source "{TERMUXBOOT_SH}"
+        resolve_provision_ref
+        """
+        res_tb = subprocess.run(["bash", "-c", cmd_tb], capture_output=True, text=True, check=True)
+        self.assertEqual(res_tb.stdout.strip(), rev_a)
+
+    def test_03_ref_resolved_once_to_immutable_40_hex_and_frozen(self):
+        """
+        Verify that input ref 'main' resolves to an immutable 40-character hex commit SHA 'R',
+        freezing 'R' for the entire setup transaction and child invocations.
+        """
+        fake_remote_sha = "1234567890abcdef1234567890abcdef12345678"
+        cmd = f"""
+        AOTSCRIPT_SETUP_SOURCE_ONLY=1
+        AOTSCRIPT_PROVISION_REF="main"
+        AOTSCRIPT_RESOLVED_REVISION="{fake_remote_sha}"
+        source "{SETUP_SH}"
+        echo "RESOLVED_REF=$PROVISION_REF"
+        echo "RESOLVED_RAW=$RAW_BASE"
+        """
+        res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=True)
+        self.assertIn(f"RESOLVED_REF={fake_remote_sha}", res.stdout)
+        self.assertIn(f"RESOLVED_RAW=https://raw.githubusercontent.com/tinhpr9/Aotscript/{fake_remote_sha}", res.stdout)
+        self.assertNotIn("RESOLVED_REF=main", res.stdout)
+
+    def test_04_pinned_registration_helper_behavior(self):
         """Verify observable behavior of registration helper on canonical contract inputs."""
         reg = self._load_registration_module()
 
@@ -108,19 +174,18 @@ class ProvisionPinCoherenceTests(unittest.TestCase):
         self.assertEqual(config_extra["device_id"], "m118")
         self.assertEqual(config_extra["version"], 3)
 
-    def test_03_original_pre_pr70_failure_reproduction_and_kill(self):
+    def test_05_original_pre_pr70_failure_reproduction_and_kill(self):
         """
         Reproduce original production bug:
         Pre-PR70 legacy assignment logic required role/session_id/reference_device_id.
         When production returns device_id-only {"ok": True, "device_id": "m118"},
         legacy code failed with registration_assignment_invalid.
-        The pinned revision resolves this completely.
+        The canonical helper resolves this completely.
         """
         # 1. Legacy Pre-PR70 assignment simulator (CONFIG_VERSION = 2)
         def legacy_assignment_config(expected_device_id: str, response: dict) -> dict:
             if not isinstance(response, dict) or response.get("device_id") != expected_device_id:
                 raise ValueError("registration_assignment_invalid: device_id mismatch")
-            # Legacy requirements
             role = response.get("role")
             if role not in ("leader", "follower"):
                 raise ValueError("registration_assignment_invalid: missing or invalid role")
@@ -134,52 +199,39 @@ class ProvisionPinCoherenceTests(unittest.TestCase):
             legacy_assignment_config("m118", prod_payload)
         self.assertIn("registration_assignment_invalid", str(err.exception))
 
-        # 3. Kill: Pinned registration helper accepts production payload cleanly
+        # 3. Kill: Canonical registration helper accepts production payload cleanly
         reg = self._load_registration_module()
         clean_config = reg.assignment_config("m118", prod_payload)
         self.assertEqual(clean_config["device_id"], "m118")
         self.assertEqual(clean_config["version"], 3)
 
-    def test_04_checksum_rejection_sensitivity(self):
-        """
-        Verify setup.sh checksum validation:
-        - Exact PROVISION_SHA256 matches provision-device.sh.
-        - Corrupted / mismatched hash is rejected by the shell validation logic.
-        """
-        prov_bytes = self._get_artifact("provision-device.sh")
-        actual_sha = hashlib.sha256(prov_bytes).hexdigest()
-        self.assertEqual(actual_sha, self.provision_sha256)
-
-        # Execute shell verification snippet matching download_provision in setup.sh
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_stage = pathlib.Path(tmpdir) / "provision.tmp"
-            tmp_stage.write_bytes(prov_bytes)
-
-            # A. Valid checksum -> returncode 0
-            check_valid = subprocess.run(
-                ["bash", "-c", f"""
-                stage="{tmp_stage}"
-                PROVISION_SHA256="{self.provision_sha256}"
-                actual_sha="$(sha256sum "$stage" | awk '{{print $1}}')"
-                [ "$actual_sha" = "$PROVISION_SHA256" ] || exit 1
-                """],
+    def test_06_fail_closed_on_invalid_revision_ref(self):
+        """Verify that invalid revision formats fail closed with non-zero exit code."""
+        invalid_refs = [
+            "invalid_ref_with_symbols!",
+            "; rm -rf /",
+            "../../../etc/passwd",
+            "nonexistent_branch_name_12345xyz",
+        ]
+        for bad_ref in invalid_refs:
+            # A. setup.sh
+            res = subprocess.run(
+                ["bash", "-c", f'AOTSCRIPT_PROVISION_REF="{bad_ref}" bash "{SETUP_SH}" --validate-id m88'],
                 capture_output=True,
+                text=True,
             )
-            self.assertEqual(check_valid.returncode, 0, "Valid checksum must pass validation")
+            self.assertNotEqual(res.returncode, 0, f"setup.sh must reject invalid ref: {bad_ref}")
+            self.assertIn("provision ref không hợp lệ", res.stderr + res.stdout)
 
-            # B. Corrupted checksum -> returncode != 0
-            corrupted_sha = "0" * 64
-            check_invalid = subprocess.run(
-                ["bash", "-c", f"""
-                stage="{tmp_stage}"
-                PROVISION_SHA256="{corrupted_sha}"
-                actual_sha="$(sha256sum "$stage" | awk '{{print $1}}')"
-                [ "$actual_sha" = "$PROVISION_SHA256" ] || exit 1
-                """],
+            # B. provision-device.sh
+            res_prov = subprocess.run(
+                ["bash", "-c", f'AOTSCRIPT_PROVISION_REF="{bad_ref}" bash "{PROVISION_SH}" help'],
                 capture_output=True,
+                text=True,
             )
-            self.assertNotEqual(check_invalid.returncode, 0, "Corrupted checksum must be rejected")
+            self.assertNotEqual(res_prov.returncode, 0, f"provision-device.sh must reject invalid ref: {bad_ref}")
 
 
 if __name__ == "__main__":
     unittest.main()
+

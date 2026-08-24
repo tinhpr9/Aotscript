@@ -7,9 +7,48 @@ warn() { echo "⚠️ $*"; }
 die()  { echo "❌ $*"; exit 1; }
 root() { su -c "$1"; }
 
-PROVISION_REF="${AOTSCRIPT_PROVISION_REF:-main}"
-[[ "$PROVISION_REF" =~ ^(main|[0-9a-f]{40})$ ]] ||
-  die "Provision ref không hợp lệ"
+resolve_canonical_revision() {
+  local input_ref="${1:-${AOTSCRIPT_PROVISION_REF:-main}}"
+  local resolved=""
+  input_ref="$(printf '%s' "$input_ref" | tr -d '[:space:]')"
+  [ -n "$input_ref" ] || input_ref="main"
+
+  if [[ "$input_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$input_ref" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if [ -n "${AOTSCRIPT_RESOLVED_REVISION:-}" ] && [[ "$AOTSCRIPT_RESOLVED_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$AOTSCRIPT_RESOLVED_REVISION" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    resolved="$(curl -fsSL --retry 3 --connect-timeout 10 \
+      -H "User-Agent: Aotscript-Setup" \
+      -H "Accept: application/vnd.github.sha" \
+      "https://api.github.com/repos/tinhpr9/Aotscript/commits/$input_ref" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  printf '[LỖI] provision ref không hợp lệ: %s\n' "$input_ref" >&2
+  return 1
+}
+
+PROVISION_REF="$(resolve_canonical_revision "${AOTSCRIPT_PROVISION_REF:-main}")" || die "Provision ref không hợp lệ"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
 
 aot_launcher_structure_check() {
@@ -1631,7 +1670,7 @@ if [ -n "$PREVIOUS_DEVICE_ID" ] &&
     }
 fi
 
-bash "$AGENT_BOOT" || {
+AOTSCRIPT_PROVISION_REF="$PROVISION_REF" AOTSCRIPT_AOT_REF="$PROVISION_REF" bash "$AGENT_BOOT" || {
   rm -f "$AOT_REGISTER_HELPER"
   die "Termuxboot không cài/start được AOT Bootstrap v2"
 }
