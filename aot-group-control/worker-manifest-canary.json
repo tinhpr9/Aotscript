@@ -8,7 +8,7 @@
   "bootstrap": {
     "version": 7,
     "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.24.01/bootstrap.py",
-    "sha256": "e1aa557875f55f1fcc44ba174fc4c400d7bdccf29629927c030244cc678dd95e"
+    "sha256": "a80bbb1b781cbd2565dbe39a08295bce88b940faba50e0eda2c4a8492a6e660e"
   },
   "files": [
     {
@@ -44,7 +44,7 @@
     {
       "path": "updater.py",
       "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.24.01/updater.py",
-      "sha256": "84f9d4c84b6129fa96d46196bcd49569b40b553c4ac45eebcda247c6cc5d7b76"
+      "sha256": "e1eebf2c171f522d2a2d85c10c518c14c4c4ce31490e20f34f0de643c19690bf"
     },
     {
       "path": "worker-release-schema.json",

@@ -55,13 +55,13 @@ HUB_RELEASE_PROTOCOL = "github-release-v1"
 INITIAL_RELEASE_SPEC = {
     "version": "aot-worker-2026.08.24.01",
     "tag": "worker-v2026.08.24.01",
-    "commit_sha": "7ff02cee30791ceae8ed3a5ba88f1dbebb52a81e",
+    "commit_sha": "f21667ef549a37d495fdd834020e247f8e6fb1c6",
     "manifest": {
         "name": "worker-manifest.json",
         "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.24.01/worker-manifest.json",
         "size": 4410,
-        "sha256": "8e89a16bd52e47b58b0bba6bbf489a9a723d7d2b02d4cf3a72fe96f5cabd9c47",
-        "github_digest": "sha256:8e89a16bd52e47b58b0bba6bbf489a9a723d7d2b02d4cf3a72fe96f5cabd9c47",
+        "sha256": "55de7493aa1337880f69e3b63344f1f84b905a74c598fd9cd5f104ad0e1edd4e",
+        "github_digest": "sha256:55de7493aa1337880f69e3b63344f1f84b905a74c598fd9cd5f104ad0e1edd4e",
     },
 }
 
@@ -432,10 +432,14 @@ def stop_workers(except_pid: int | None = None) -> None:
 
 def start_worker(config: dict[str, Any]) -> subprocess.Popen[bytes]:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["HOME"] = str(ROOT.parent)
+    env["AOT_RUNTIME_ROOT"] = str(ROOT)
     with LOG_PATH.open("ab") as log:
         return subprocess.Popen(
             relay_command(config), stdin=subprocess.DEVNULL, stdout=log,
             stderr=subprocess.STDOUT, start_new_session=True, close_fds=True,
+            env=env,
         )
 
 
@@ -651,7 +655,7 @@ def startup() -> int:
                 pending["previous_release"] = str(last_good)
             _write_json(PENDING_PATH, pending)
             start_worker(config)
-            if wait_for_health(pending, timeout=min(HEALTH_TIMEOUT_SECONDS, 10.0)):
+            if wait_for_health(pending, timeout=HEALTH_TIMEOUT_SECONDS):
                 _atomic_link(LAST_GOOD, current)
                 return 0
             else:
