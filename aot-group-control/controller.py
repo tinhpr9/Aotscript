@@ -157,6 +157,20 @@ def _root_run(command: str, *, binary: bool = False, timeout: int = 12):
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise AotControllerError(f"root command failed: {type(exc).__name__}") from exc
     if proc.returncode != 0:
+        try:
+            adb_proc = subprocess.run(
+                ["adb", "shell", _root_shell_command(command)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                check=False,
+                text=not binary,
+            )
+            if adb_proc.returncode == 0:
+                return adb_proc.stdout
+        except Exception:
+            pass
+
         if binary:
             detail = proc.stderr.decode("utf-8", errors="replace").strip()
         else:
