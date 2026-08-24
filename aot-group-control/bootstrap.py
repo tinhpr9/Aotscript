@@ -53,12 +53,12 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_RELEASE_FILES = 32
 HUB_RELEASE_PROTOCOL = "github-release-v1"
 INITIAL_RELEASE_SPEC = {
-    "version": "aot-worker-2026.08.23.02",
-    "tag": "worker-v2026.08.23.02",
+    "version": "aot-worker-2026.08.24.01",
+    "tag": "worker-v2026.08.24.01",
     "commit_sha": "7ff02cee30791ceae8ed3a5ba88f1dbebb52a81e",
     "manifest": {
         "name": "worker-manifest.json",
-        "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.23.02/worker-manifest.json",
+        "url": "https://github.com/tinhpr9/Aotscript/releases/download/worker-v2026.08.24.01/worker-manifest.json",
         "size": 4410,
         "sha256": "8e89a16bd52e47b58b0bba6bbf489a9a723d7d2b02d4cf3a72fe96f5cabd9c47",
         "github_digest": "sha256:8e89a16bd52e47b58b0bba6bbf489a9a723d7d2b02d4cf3a72fe96f5cabd9c47",
