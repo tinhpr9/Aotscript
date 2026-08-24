@@ -23,7 +23,23 @@ resolve_canonical_revision() {
     return 0
   fi
 
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git ls-remote https://github.com/tinhpr9/Aotscript.git "refs/heads/$input_ref" "refs/tags/$input_ref" "$input_ref" 2>/dev/null | awk '{print $1; exit}')"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
   if command -v curl >/dev/null 2>&1; then
+    resolved="$(curl -fsSL --retry 3 --connect-timeout 10 "https://github.com/tinhpr9/Aotscript.git/info/refs?service=git-upload-pack" 2>/dev/null | grep -a -oE "[0-9a-fA-F]{40}[[:space:]]+refs/(heads|tags)/$input_ref" 2>/dev/null | head -n 1 | awk '{print $1}')"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+
     resolved="$(curl -fsSL --retry 3 --connect-timeout 10 \
       -H "User-Agent: Aotscript-Setup" \
       -H "Accept: application/vnd.github.sha" \
