@@ -4,11 +4,71 @@ set -Eeuo pipefail
 AOTSETUP_LOCAL_LAUNCHER_V1=1
 VERSION="one-command-setup-v2"
 PROVISION_VERSION="phase22-aot-registration-v1"
-# All provision/wizard/setup children use this exact tested revision.
-PROVISION_REF="7ff02cee30791ceae8ed3a5ba88f1dbebb52a81e"
-PROVISION_SHA256="a4435be33a5e4336004de9ce392935dc71f4ae62748a9340921f9b318aaa4965"
+resolve_canonical_revision() {
+  local input_ref="${1:-${AOTSCRIPT_PROVISION_REF:-main}}"
+  local resolved=""
+  input_ref="$(printf '%s' "$input_ref" | tr -d '[:space:]')"
+  [ -n "$input_ref" ] || input_ref="main"
+
+  if [[ "$input_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$input_ref" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if [ -n "${AOTSCRIPT_RESOLVED_REVISION:-}" ] && [[ "$AOTSCRIPT_RESOLVED_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$AOTSCRIPT_RESOLVED_REVISION" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git ls-remote https://github.com/tinhpr9/Aotscript.git "refs/heads/$input_ref" "refs/tags/$input_ref" "$input_ref" 2>/dev/null | awk '{print $1; exit}')"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    resolved="$(curl -fsSL --retry 3 --connect-timeout 10 "https://github.com/tinhpr9/Aotscript.git/info/refs?service=git-upload-pack" 2>/dev/null | grep -a -oE "[0-9a-fA-F]{40}[[:space:]]+refs/(heads|tags)/$input_ref" 2>/dev/null | head -n 1 | awk '{print $1}')"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+
+    resolved="$(curl -fsSL --retry 3 --connect-timeout 10 \
+      -H "User-Agent: Aotscript-Setup" \
+      -H "Accept: application/vnd.github.sha" \
+      "https://api.github.com/repos/tinhpr9/Aotscript/commits/$input_ref" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] && [ "$input_ref" = "main" ]; then
+    printf '%s\n' "0000000000000000000000000000000000000000"
+    return 0
+  fi
+
+  printf '[LỖI] provision ref không hợp lệ: %s\n' "$input_ref" >&2
+  return 1
+}
+
+PROVISION_REF="$(resolve_canonical_revision "${AOTSCRIPT_PROVISION_REF:-main}")" || exit 1
 RAW_BASE="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
-MAIN_SETUP_URL="https://raw.githubusercontent.com/tinhpr9/Aotscript/main/setup.sh"
+MAIN_SETUP_URL="${AOTSCRIPT_SETUP_URL:-$RAW_BASE/setup.sh}"
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/aotscript"
 SETUP_STATE_DIR="$STATE_BASE/setup-driver"
@@ -107,8 +167,43 @@ install_candidate() {
 }
 
 install_local_launcher() {
+  local source="${1:-}"
   CURRENT_STEP="install-local-launcher"
-  install_candidate "$1" "$LAUNCHER"
+  if [ -n "${AOTSCRIPT_SETUP_SOURCE_PATH:-}" ] && [ -f "${AOTSCRIPT_SETUP_SOURCE_PATH:-}" ]; then
+    source="$AOTSCRIPT_SETUP_SOURCE_PATH"
+  fi
+  if [ -n "$source" ] && [ -f "$source" ]; then
+    install_candidate "$source" "$LAUNCHER"
+  else
+    # Executed from stdin pipe (curl ... | bash): download clean launcher from MAIN_SETUP_URL
+    local stage
+    stage="$(mktemp "$(dirname "$LAUNCHER")/.aotsetup.bootstrap.XXXXXX")" || die "Không tạo được launcher bootstrap tạm."
+    if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] && [ -n "${AOTSCRIPT_SETUP_UPDATE_SOURCE:-}" ]; then
+      cp -p "$AOTSCRIPT_SETUP_UPDATE_SOURCE" "$stage" || { rm -f "$stage"; die "Không copy được fixture bootstrap."; }
+    elif [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
+      # In dry-run mode without source file, install placeholder candidate
+      mkdir -p "$(dirname "$LAUNCHER")"
+      rm -f "$stage"
+      return 0
+    else
+      local bootstrap_url="${AOTSCRIPT_SETUP_URL:-$RAW_BASE/setup.sh}"
+      curl -fsSL --retry 3 --connect-timeout 15 </dev/null \
+        "$bootstrap_url?t=$(date +%s)" -o "$stage" || {
+          rm -f "$stage"
+          die "Không tải được setup.sh cho local launcher."
+        }
+    fi
+    [ -s "$stage" ] || {
+      rm -f "$stage"
+      die "setup.sh tải về bị rỗng."
+    }
+    bash -n "$stage" && launcher_structure_check "$stage" || {
+      rm -f "$stage"
+      die "setup.sh tải về không qua syntax/structure gate."
+    }
+    install_candidate "$stage" "$LAUNCHER"
+    rm -f "$stage"
+  fi
 }
 
 update_local_launcher() {
@@ -444,16 +539,107 @@ ensure_packages() {
 }
 
 host_fingerprint() {
-  local raw="" android_id="" serial=""
+  local raw="" android_id="" serial="" token_file="" token="" token_tmp=""
+  local binding_file="$SETUP_STATE_DIR/host_fingerprint"
+  local signals_file="$SETUP_STATE_DIR/host_fingerprint_signals"
+  local bound_hash="" signals=""
+
   if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] ||
      [ "${AOTSCRIPT_SETUP_DRY_RUN:-0}" = 1 ]; then
     raw="${AOTSCRIPT_SETUP_HOST_ID:-test-host}"
   else
-    android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-    serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
-    case "$android_id" in null|unknown) android_id="" ;; esac
-    case "$serial" in null|unknown) serial="" ;; esac
-    [ -n "$android_id$serial" ] && raw="$android_id|$serial"
+    if [ -s "$binding_file" ]; then
+      bound_hash="$(cat "$binding_file" 2>/dev/null | tr -d '\r\n ' || true)"
+      if [ -s "$signals_file" ]; then
+        signals="$(cat "$signals_file" 2>/dev/null | tr -d '\r\n ' || true)"
+      fi
+    fi
+    token_file="$SETUP_STATE_DIR/host_token"
+    if [ -f "$token_file" ]; then
+      token="$(cat "$token_file" 2>/dev/null | tr -d '\r\n ' || true)"
+      if [ ${#token} -lt 8 ]; then
+        token=""
+        rm -f "$token_file"
+      fi
+    fi
+
+    # Check if this device was already bound with token strategy
+    if [ "$signals" = "token" ] || { [ -n "$token" ] && [ -n "$bound_hash" ] && [ "$(printf '%s' "token:$token" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; }; then
+      if [ -n "$token" ]; then
+        raw="token:$token"
+        [ -z "$bound_hash" ] || { mkdir -p "$SETUP_STATE_DIR"; printf 'token\n' > "$signals_file"; }
+      fi
+    fi
+
+    if [ -z "$raw" ]; then
+      # Probe live hardware signals to detect cloned instances and verify bindings
+      android_id="$(su -c 'settings get secure android_id' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+      serial="$(su -c 'getprop ro.boot.serialno' </dev/null 2>/dev/null | tr -d '\r\n ' || true)"
+      case "$android_id" in null|unknown|"") android_id="" ;; esac
+      case "$serial" in null|unknown|"") serial="" ;; esac
+
+      if [ -n "$signals" ]; then
+        # Known pinned signal composition: enforce presence of all required signals
+        case "$signals" in
+          both)
+            if [ -z "$android_id" ] || [ -z "$serial" ]; then
+              die "Thiết bị này yêu cầu cả android_id và serial nhưng một trong các tín hiệu hiện không khả dụng (android_id='$android_id', serial='$serial'). Kiểm tra quyền root/su/Binder và thử lại."
+            fi
+            raw="$android_id|$serial"
+            ;;
+          android_id)
+            if [ -z "$android_id" ]; then
+              die "Thiết bị này yêu cầu android_id nhưng tín hiệu hiện không khả dụng. Kiểm tra quyền root/su/Binder và thử lại."
+            fi
+            raw="$android_id|"
+            ;;
+          serial)
+            if [ -z "$serial" ]; then
+              die "Thiết bị này yêu cầu serial nhưng tín hiệu hiện không khả dụng. Kiểm tra quyền root/su/Binder và thử lại."
+            fi
+            raw="|$serial"
+            ;;
+        esac
+      elif [ -n "$bound_hash" ]; then
+        # Legacy bound installation without signals file: infer composition or fail closed
+        if [ -n "$android_id" ] && [ -n "$serial" ] && [ "$(printf '%s' "$android_id|$serial" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; then
+          signals="both"
+          raw="$android_id|$serial"
+        elif [ -n "$android_id" ] && [ "$(printf '%s' "$android_id|" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; then
+          signals="android_id"
+          raw="$android_id|"
+        elif [ -n "$serial" ] && [ "$(printf '%s' "|$serial" | sha256sum | awk '{print $1}')" = "$bound_hash" ]; then
+          signals="serial"
+          raw="|$serial"
+        elif [ -n "$android_id" ] && [ -n "$serial" ]; then
+          # Both hardware probes are healthy but neither matches bound_hash -> this is a cloned or replaced rooted device
+          raw="$android_id|$serial"
+        else
+          # Hardware probe is partial or completely unavailable and cannot satisfy legacy binding. Fail closed.
+          die "Thiết bị này đã bind bằng tín hiệu phần cứng nhưng probe hiện tại không khớp hoặc thiếu tín hiệu (android_id='$android_id', serial='$serial'). Kiểm tra quyền root/su/Binder và thử lại."
+        fi
+        [ -z "$signals" ] || { mkdir -p "$SETUP_STATE_DIR"; printf '%s\n' "$signals" > "$signals_file"; }
+      else
+        # Fresh first bind (unbound): detect available signals for initial inspection
+        if [ -n "$android_id" ] && [ -n "$serial" ]; then
+          raw="$android_id|$serial"
+        elif [ -n "$android_id" ]; then
+          raw="$android_id|"
+        elif [ -n "$serial" ]; then
+          raw="|$serial"
+        else
+          if [ -z "$token" ]; then
+            token="$(python -c 'import uuid, time; print(f"{uuid.uuid4().hex}-{int(time.time()*1000)}")' 2>/dev/null || date +%s%N 2>/dev/null || date +%s)-$$"
+            mkdir -p "$SETUP_STATE_DIR"
+            token_tmp="${token_file}.tmp.$$"
+            printf '%s\n' "$token" > "$token_tmp"
+            mv -f "$token_tmp" "$token_file"
+          fi
+          [ -n "$token" ] || die "Không tạo được token host bền vững."
+          raw="token:$token"
+        fi
+      fi
+    fi
   fi
   [ -n "$raw" ] || die "Không tạo được fingerprint ổn định cho máy hiện tại."
   printf '%s' "$raw" | sha256sum | awk '{print $1}'
@@ -467,7 +653,7 @@ test_su_stdin_isolation() {
 
 identity_tool() {
   python - "$STATE_BASE" "$SETUP_STATE_DIR" "$STORAGE_ROOT" \
-    "$PROVISION_REF" "$PROVISION_SHA256" "$PROVISION_VERSION" "$@" <<'PY'
+    "$PROVISION_REF" "${PROVISION_SHA256:-}" "$PROVISION_VERSION" "$@" <<'PY'
 import datetime
 import hashlib
 import json
@@ -1071,9 +1257,10 @@ run_aot_setup() {
     msetup_script="$AOTSCRIPT_SETUP_M166_SOURCE"
     bash -n "$msetup_script" || die "setup-m166.sh tải về sai cú pháp."
   else
+    local msetup_url="${AOTSCRIPT_SETUP_M166_URL:-$RAW_BASE/setup-m166.sh}"
     msetup_script="$(mktemp "$SETUP_STATE_DIR/.setup-m166.XXXXXX")"
     curl -fsSL --retry 3 --connect-timeout 15 \
-      "$RAW_BASE/setup-m166.sh?t=$(date +%s)" -o "$msetup_script" || {
+      "$msetup_url?t=$(date +%s)" -o "$msetup_script" || {
         rm -f "$msetup_script"
         die "Không tải được setup-m166.sh."
       }
@@ -1086,7 +1273,7 @@ run_aot_setup() {
       die "setup-m166.sh tải về sai cú pháp."
     }
   fi
-  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" bash "$msetup_script" "$device_id" "$group" </dev/null || {
+  AOTSCRIPT_PROVISION_REF="$PROVISION_REF" AOTSCRIPT_AOT_REF="$PROVISION_REF" bash "$msetup_script" "$device_id" "$group" </dev/null || {
     [ -n "${AOTSCRIPT_SETUP_M166_SOURCE:-}" ] || rm -f "$msetup_script"
     die "AOT msetup không hoàn tất."
   }
@@ -1122,6 +1309,7 @@ choose_identity() {
     fi
     confirm_once "Xác nhận identity $device_id / $group"
     identity_call bind "$device_id" "$group" "$host_hash" >/dev/null || die "Không bind được identity."
+    host_fingerprint >/dev/null || true
     SELECTED_DEVICE_ID="$device_id"
     SELECTED_DEVICE_GROUP="$group"
     return 0
@@ -1131,6 +1319,7 @@ choose_identity() {
   identity_call plan "$source_id" "$device_id" "$group" "$host_hash" >/dev/null ||
     die "Clone state không đủ điều kiện migration an toàn."
   if resume_pending_migration "$host_hash"; then
+    host_fingerprint >/dev/null || true
     SELECTED_DEVICE_ID="$device_id"
     SELECTED_DEVICE_GROUP="$group"
     return 0
@@ -1229,4 +1418,6 @@ main() {
   emit OK "AOT setup hoàn tất. Lần sau chỉ chạy aotsetup."
 }
 
-main "$@"
+if [ "${AOTSCRIPT_SETUP_SOURCE_ONLY:-0}" != 1 ] && [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+  main "$@"
+fi

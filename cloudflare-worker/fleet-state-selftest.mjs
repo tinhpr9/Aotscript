@@ -259,7 +259,7 @@ if (afterHeartbeatRecord.devices["MARMOT-01"].device_group !== "MARMOT") {
 // Test dynamic and explicit canary/stable targets
 sRecord.last_update = null;
 sRecord.canary_release = null;
-fleet.resolveWorkerRelease = async () => ({ version: "aot-worker-2026.08.23.03", hash: "mock" });
+fleet.resolveWorkerRelease = async () => ({ version: "aot-worker-2026.08.24.01", hash: "mock" });
 sRecord.devices = sRecord.devices || {};
 sRecord.devices[ids[2]] = { device_id: ids[2], role: "follower", added_at: Date.now() };
 sRecord.followers = sRecord.followers || {};
@@ -276,7 +276,7 @@ if (dynamicCanaryBody.ok !== true || dynamicCanaryBody.update.selected_device_id
 const canarySelected = dynamicCanaryBody.update.selected_device_ids;
 for (const cid of canarySelected) {
   sRecord.last_update.devices[cid].status = "HEALTHY";
-  sRecord.last_update.devices[cid].worker_version = "aot-worker-2026.08.23.03";
+  sRecord.last_update.devices[cid].worker_version = "aot-worker-2026.08.24.01";
 }
 fleet.refreshCanaryReleaseGate(sRecord);
 if (sRecord.canary_release?.status !== "HEALTHY") {
@@ -658,13 +658,13 @@ const fbValidPayload = {
   type: "aot_status",
   protocol: "fleet-batch-v1",
   device_id: "m999",
-  worker_version: "aot-worker-2026.08.23.03",
+  worker_version: "aot-worker-2026.08.24.01",
   capabilities: ["allocate_server_2pc", "swift_apps_semantic"],
   fallback: true,
   updated_at: Date.now(),
 };
 const fbSanitized = test16Fleet.sanitizeAotLiveStatus(fbIdentity, fbValidPayload);
-if (!fbSanitized || fbSanitized.fallback !== true || fbSanitized.worker_version !== "aot-worker-2026.08.23.03") {
+if (!fbSanitized || fbSanitized.fallback !== true || fbSanitized.worker_version !== "aot-worker-2026.08.24.01") {
   throw new Error("Failed to sanitize valid fallback status frame");
 }
 if (fbSanitized.fingerprint !== null || fbSanitized.width !== null || fbSanitized.height !== null) {
@@ -689,7 +689,7 @@ const normalInvalidFp = test16Fleet.sanitizeAotLiveStatus(fbIdentity, {
   type: "aot_status",
   protocol: "fleet-batch-v1",
   device_id: "m999",
-  worker_version: "aot-worker-2026.08.23.03",
+  worker_version: "aot-worker-2026.08.24.01",
   capabilities: ["allocate_server_2pc"],
   fingerprint: "shortfp",
   package: "com.test",

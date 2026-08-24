@@ -7,9 +7,69 @@ warn() { echo "⚠️ $*"; }
 die()  { echo "❌ $*"; exit 1; }
 root() { su -c "$1"; }
 
-PROVISION_REF="${AOTSCRIPT_PROVISION_REF:-main}"
-[[ "$PROVISION_REF" =~ ^(main|[0-9a-f]{40})$ ]] ||
-  die "Provision ref không hợp lệ"
+resolve_canonical_revision() {
+  local input_ref="${1:-${AOTSCRIPT_PROVISION_REF:-main}}"
+  local resolved=""
+  input_ref="$(printf '%s' "$input_ref" | tr -d '[:space:]')"
+  [ -n "$input_ref" ] || input_ref="main"
+
+  if [[ "$input_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$input_ref" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if [ -n "${AOTSCRIPT_RESOLVED_REVISION:-}" ] && [[ "$AOTSCRIPT_RESOLVED_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$AOTSCRIPT_RESOLVED_REVISION" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git ls-remote https://github.com/tinhpr9/Aotscript.git "refs/heads/$input_ref" "refs/tags/$input_ref" "$input_ref" 2>/dev/null | awk '{print $1; exit}')"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    resolved="$(curl -fsSL --retry 3 --connect-timeout 10 "https://github.com/tinhpr9/Aotscript.git/info/refs?service=git-upload-pack" 2>/dev/null | grep -a -oE "[0-9a-fA-F]{40}[[:space:]]+refs/(heads|tags)/$input_ref" 2>/dev/null | head -n 1 | awk '{print $1}')"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+
+    resolved="$(curl -fsSL --retry 3 --connect-timeout 10 \
+      -H "User-Agent: Aotscript-Setup" \
+      -H "Accept: application/vnd.github.sha" \
+      "https://api.github.com/repos/tinhpr9/Aotscript/commits/$input_ref" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] && [ "$input_ref" = "main" ]; then
+    printf '%s\n' "0000000000000000000000000000000000000000"
+    return 0
+  fi
+
+  printf '[LỖI] provision ref không hợp lệ: %s\n' "$input_ref" >&2
+  return 1
+}
+
+PROVISION_REF="$(resolve_canonical_revision "${AOTSCRIPT_PROVISION_REF:-main}")" || die "Provision ref không hợp lệ"
 RAW="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
 
 aot_launcher_structure_check() {
@@ -561,23 +621,45 @@ download_zip() {
   local id="$1"
   local out="$2"
   local part="${out}.part.$$"
+  local id_file="${out}.driveid"
+  local sha_file="${out}.sha256"
+  # Validate cache: Drive ID match + content digest + structural integrity.
+  # NOTE: This guards against on-disk corruption and foreign file substitution.
+  # It cannot detect a legitimate update of the file behind the same Drive ID;
+  # such Drive-side updates require a new Drive ID or an out-of-band hash manifest.
+  local cached_id="" stored_sha="" current_sha=""
+  [ -f "$id_file" ] && cached_id="$(cat "$id_file" 2>/dev/null | tr -d '\r\n ' || true)"
+  [ -f "$sha_file" ] && stored_sha="$(cat "$sha_file" 2>/dev/null | awk '{print $1}' || true)"
+  if [ -f "$out" ] && [ "$cached_id" = "$id" ] && [ -n "$stored_sha" ]; then
+    current_sha="$(sha256sum "$out" 2>/dev/null | awk '{print $1}' || true)"
+    if [ "$stored_sha" = "$current_sha" ] && unzip -t "$out" >/dev/null 2>&1; then
+      ok "ZIP đã có sẵn, hợp lệ và nguyên vẹn: $(basename "$out")"
+      return 0
+    fi
+  fi
+  # Cache invalid: wrong Drive ID, digest mismatch, or structurally corrupt
+  [ -f "$out" ] && rm -f "$out" "$id_file" "$sha_file"
   echo
   echo "[*] Đang tải: $(basename "$out")"
   rm -f "$part"
-  if ! gdown "$id" -O "$part"; then
+  local try_count=0
+  while [ "$try_count" -lt 3 ]; do
+    if gdown "$id" -O "$part" && [ -s "$part" ] && unzip -t "$part" >/dev/null 2>&1; then
+      break
+    fi
+    try_count=$((try_count + 1))
     rm -f "$part"
-    die "Tải thất bại: $(basename "$out")"
-  fi
-  [ -s "$part" ] || {
+    [ "$try_count" -lt 3 ] && sleep 2
+  done
+  if [ ! -s "$part" ] || ! unzip -t "$part" >/dev/null 2>&1; then
     rm -f "$part"
-    die "File tải về trống: $(basename "$out")"
-  }
-  if ! unzip -t "$part" >/dev/null 2>&1; then
-    rm -f "$part"
-    die "ZIP bị lỗi: $(basename "$out")"
+    die "Tải thất bại hoặc ZIP bị lỗi: $(basename "$out")"
   fi
   mv -f "$part" "$out" ||
     die "Không lưu được: $(basename "$out")"
+  # Record Drive ID and content digest for future cache validation
+  printf '%s\n' "$id" > "$id_file"
+  sha256sum "$out" > "$sha_file"
   ok "ZIP hợp lệ: $(basename "$out")"
 }
 
@@ -1350,11 +1432,15 @@ PY
 
   mv -f "$apk_part" "$apk"
 
-  root "pm install -r '$apk'" >/dev/null ||
-    die "Cài Termux:Boot thất bại; hãy dùng APK cùng nguồn ký với ứng dụng Termux"
+  if ! root "pm install -r '$apk'" >/dev/null 2>&1; then
+    warn "Cài Termux:Boot tự động thất bại; relay vẫn hoạt động bình thường qua Termux session"
+    return 0
+  fi
 
-  root "pm path $package" >/dev/null 2>&1 ||
-    die "Không xác nhận được Termux:Boot sau khi cài"
+  if ! root "pm path $package" >/dev/null 2>&1; then
+    warn "Không xác nhận được Termux:Boot sau khi cài; bỏ qua"
+    return 0
+  fi
 
   root "monkey -p $package -c android.intent.category.LAUNCHER 1" \
     >/dev/null 2>&1 || true
@@ -1605,7 +1691,7 @@ if [ -n "$PREVIOUS_DEVICE_ID" ] &&
     }
 fi
 
-bash "$AGENT_BOOT" || {
+AOTSCRIPT_PROVISION_REF="$PROVISION_REF" AOTSCRIPT_AOT_REF="$PROVISION_REF" bash "$AGENT_BOOT" || {
   rm -f "$AOT_REGISTER_HELPER"
   die "Termuxboot không cài/start được AOT Bootstrap v2"
 }
@@ -1622,21 +1708,30 @@ printf '%s\n' "$BOOTSTRAP_STATUS" |
     die "AOT Bootstrap không phải version 2"
   }
 
-RUNTIME_STATUS="$(
-  python "$HOME/.aot-group-control/current/runtime.py" status 2>&1
-)" || {
+RUNTIME_STATUS=""
+runtime_ready=false
+poll_i=1
+while [ "$poll_i" -le 15 ]; do
+  if [ -f "$HOME/.aot-group-control/current/runtime.py" ]; then
+    RUNTIME_STATUS="$(
+      python "$HOME/.aot-group-control/current/runtime.py" status 2>&1
+    )" || true
+    if printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' &&
+       printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$'; then
+      runtime_ready=true
+      break
+    fi
+  fi
+  poll_i=$((poll_i + 1))
+  sleep 1
+done
+
+[ "$runtime_ready" = true ] || {
+  [ -n "$RUNTIME_STATUS" ] && printf '%s\n' "$RUNTIME_STATUS"
   rm -f "$AOT_REGISTER_HELPER"
   die "AOT runtime status thất bại"
 }
 printf '%s\n' "$RUNTIME_STATUS"
-printf '%s\n' "$RUNTIME_STATUS" | grep -qx 'AOT_CONFIG=OK' || {
-  rm -f "$AOT_REGISTER_HELPER"
-  die "AOT_CONFIG chưa OK"
-}
-printf '%s\n' "$RUNTIME_STATUS" | grep -Eq '^PIDS=[0-9]+(,[0-9]+)*$' || {
-  rm -f "$AOT_REGISTER_HELPER"
-  die "AOT runtime không có PID relay hợp lệ"
-}
 
 AOT_SERVER_STATUS="$(
   python "$AOT_REGISTER_HELPER" verify \

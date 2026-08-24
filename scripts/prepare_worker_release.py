@@ -94,6 +94,17 @@ def sync_release_mirrors(repo_root: pathlib.Path, version: str) -> None:
     )
     boot_path.write_text(boot_text, encoding="utf-8")
 
+    # 5. fleet-state-selftest.mjs
+    selftest_path = repo_root / "cloudflare-worker" / "fleet-state-selftest.mjs"
+    if selftest_path.is_file():
+        selftest_text = selftest_path.read_text(encoding="utf-8")
+        selftest_text = re.sub(
+            r'aot-worker-[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}',
+            worker_version,
+            selftest_text,
+        )
+        selftest_path.write_text(selftest_text, encoding="utf-8")
+
 
 def generate_expected_manifests(repo_root: pathlib.Path, version: str, commit_sha: str) -> dict[str, dict]:
     worker_version = f"aot-worker-{version}"

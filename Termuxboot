@@ -16,7 +16,69 @@ LOCK_DIR="${AOTSCRIPT_LOCK_DIR:-$HOME/.cache/aotscript-agent-start.lock}"
 AOT_CONFIG_FILE="${AOTSCRIPT_AOT_CONFIG_FILE:-/sdcard/Download/Shouko/aot_group_config.json}"
 AOT_RUNTIME_DIR="${AOTSCRIPT_AOT_RUNTIME_DIR:-$HOME/.aot-group-control}"
 AOT_LOG="${AOTSCRIPT_AOT_LOG:-/sdcard/Download/AOT_Group_Control.log}"
-AOT_REF="${AOTSCRIPT_AOT_REF:-main}"
+resolve_canonical_revision() {
+  local input_ref="${1:-${AOTSCRIPT_AOT_REF:-${AOTSCRIPT_PROVISION_REF:-main}}}"
+  local resolved=""
+  input_ref="$(printf '%s' "$input_ref" | tr -d '[:space:]')"
+  [ -n "$input_ref" ] || input_ref="main"
+
+  if [[ "$input_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$input_ref" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if [ -n "${AOTSCRIPT_RESOLVED_REVISION:-}" ] && [[ "$AOTSCRIPT_RESOLVED_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "$(printf '%s' "$AOTSCRIPT_RESOLVED_REVISION" | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git ls-remote https://github.com/tinhpr9/Aotscript.git "refs/heads/$input_ref" "refs/tags/$input_ref" "$input_ref" 2>/dev/null | awk '{print $1; exit}')"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  local curl_cmd="${CURL:-curl}"
+  if command -v "$curl_cmd" >/dev/null 2>&1 || command -v curl >/dev/null 2>&1; then
+    resolved="$("$curl_cmd" -fsSL --retry 3 --connect-timeout 10 "https://github.com/tinhpr9/Aotscript.git/info/refs?service=git-upload-pack" 2>/dev/null | grep -a -oE "[0-9a-fA-F]{40}[[:space:]]+refs/(heads|tags)/$input_ref" 2>/dev/null | head -n 1 | awk '{print $1}')"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+
+    resolved="$("$curl_cmd" -fsSL --retry 3 --connect-timeout 10 \
+      -H "User-Agent: Aotscript-Setup" \
+      -H "Accept: application/vnd.github.sha" \
+      "https://api.github.com/repos/tinhpr9/Aotscript/commits/$input_ref" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    resolved="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null || true)"
+    resolved="$(printf '%s' "$resolved" | tr -d '[:space:]')"
+    if [[ "$resolved" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      printf '%s\n' "$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+      return 0
+    fi
+  fi
+
+  if [ "${AOTSCRIPT_SETUP_TEST_MODE:-0}" = 1 ] && [ "$input_ref" = "main" ]; then
+    printf '%s\n' "0000000000000000000000000000000000000000"
+    return 0
+  fi
+
+  printf '%s\n' "$input_ref"
+}
+
+AOT_REF="$(resolve_canonical_revision "${AOTSCRIPT_AOT_REF:-${AOTSCRIPT_PROVISION_REF:-main}}")"
 
 mkdir -p "$(dirname "$ID_FILE")" "$HOME/.cache"
 
@@ -63,6 +125,14 @@ __AOTSCRIPT_AGENT_PID_SCAN_V2_PY__
 }
 
 resolve_provision_ref() {
+  local ref=""
+  if [ -n "${AOTSCRIPT_PROVISION_REF:-}" ]; then
+    ref="$(resolve_canonical_revision "$AOTSCRIPT_PROVISION_REF")"
+    if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      echo "$ref"
+      return 0
+    fi
+  fi
   "$PYTHON" - "$STATE_FILE" <<'PY_AOTSCRIPT_BOOT_REF'
 import json
 import pathlib
