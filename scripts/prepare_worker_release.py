@@ -142,7 +142,7 @@ def generate_expected_manifests(repo_root: pathlib.Path, version: str, commit_sh
                 "legacy_asset_url": f"https://github.com/tinhpr9/Aotscript/releases/download/{tag}/legacy_relay_bridge.py",
                 "legacy_asset_sha256": next(f["sha256"] for f in schema3_manifest["files"] if f["path"] == "legacy_relay_bridge.py"),
                 "bootstrap": {
-                    "version": 7,
+                    "version": schema3_manifest.get("bootstrap", {}).get("version", 8),
                     "url": f"https://github.com/tinhpr9/Aotscript/releases/download/{tag}/bootstrap.py",
                     "sha256": schema3_manifest["bootstrap"]["sha256"],
                 },
