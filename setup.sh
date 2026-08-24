@@ -52,7 +52,7 @@ resolve_canonical_revision() {
 
 PROVISION_REF="$(resolve_canonical_revision "${AOTSCRIPT_PROVISION_REF:-main}")" || exit 1
 RAW_BASE="https://raw.githubusercontent.com/tinhpr9/Aotscript/$PROVISION_REF"
-MAIN_SETUP_URL="https://raw.githubusercontent.com/tinhpr9/Aotscript/main/setup.sh"
+MAIN_SETUP_URL="${AOTSCRIPT_SETUP_URL:-$RAW_BASE/setup.sh}"
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/aotscript"
 SETUP_STATE_DIR="$STATE_BASE/setup-driver"
