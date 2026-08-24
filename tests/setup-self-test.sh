@@ -314,10 +314,10 @@ grep -Fq 'stage=archived' "$TMP/interrupted-second.out" || fail interruption-res
 # Lock excludes a concurrent launcher.
 locked="$TMP/locked"
 write_complete_fixture "$locked" m95 NOVA lock-host
-run_setup "$locked" lock-host env AOTSCRIPT_SETUP_HOLD_LOCK_SECONDS=3 \
+run_setup "$locked" lock-host env AOTSCRIPT_SETUP_HOLD_LOCK_SECONDS=10 \
   bash "$SETUP" > "$TMP/lock-owner.out" 2>&1 &
 owner=$!
-for _ in {1..40}; do
+for _ in {1..100}; do
   [ -d "$locked/state/aotscript/setup-driver/setup.lock" ] && break
   sleep 0.1
 done

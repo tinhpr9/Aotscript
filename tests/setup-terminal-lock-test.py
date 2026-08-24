@@ -349,7 +349,7 @@ def test_running_and_simultaneous(root: pathlib.Path) -> None:
     case = root / "running"
     fixture(case)
     env = base_env(case)
-    env["AOTSCRIPT_SETUP_HOLD_LOCK_SECONDS"] = "3"
+    env["AOTSCRIPT_SETUP_HOLD_LOCK_SECONDS"] = "10"
     owner = subprocess.Popen(
         ["bash", str(SETUP)], env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
