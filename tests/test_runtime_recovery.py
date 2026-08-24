@@ -533,13 +533,13 @@ class TestFingerprintHardwareVerificationAndCloneDetection(unittest.TestCase):
         self.assertEqual(0, res.returncode, res.stderr)
         self.assertEqual(token_hash, res.stdout.strip(), "Token binding must be preserved even if root becomes available later")
 
-    def test_full_hardware_binding_fails_closed_when_one_probe_disappears(self) -> None:
+    def test_full_hardware_binding_falls_back_when_serial_disappears(self) -> None:
         # Device bound with both signals
         full_hash = hashlib.sha256(b"aid_full|sno_full").hexdigest()
         (self.state_dir / "host_fingerprint").write_text(full_hash + "\n", encoding="utf-8")
         (self.state_dir / "host_fingerprint_signals").write_text("both\n", encoding="utf-8")
 
-        # On subsequent run, serial disappears (returns empty)
+        # On subsequent run, serial disappears (returns empty), android_id remains
         cmd = """
         su() {
           case "$*" in
@@ -551,10 +551,27 @@ class TestFingerprintHardwareVerificationAndCloneDetection(unittest.TestCase):
         host_fingerprint
         """
         res = self._run_sourced(cmd)
-        self.assertNotEqual(0, res.returncode, "Must fail closed when a required hardware probe disappears")
-        self.assertIn("android_id và serial", res.stderr)
+        self.assertEqual(0, res.returncode, res.stderr)
+        expected_fallback = hashlib.sha256(b"aid_full|").hexdigest()
+        self.assertEqual(expected_fallback, res.stdout.strip(), "Must fall back to android_id without dying when serial disappears")
 
-    def test_legacy_full_hardware_binding_fails_closed_when_one_probe_disappears(self) -> None:
+    def test_full_hardware_binding_fails_closed_when_all_probes_disappear(self) -> None:
+        full_hash = hashlib.sha256(b"aid_full|sno_full").hexdigest()
+        (self.state_dir / "host_fingerprint").write_text(full_hash + "\n", encoding="utf-8")
+        (self.state_dir / "host_fingerprint_signals").write_text("both\n", encoding="utf-8")
+
+        # On subsequent run, both signals disappear
+        cmd = """
+        su() {
+          echo ""
+        }
+        host_fingerprint
+        """
+        res = self._run_sourced(cmd)
+        self.assertNotEqual(0, res.returncode, "Must fail closed when all hardware signals disappear")
+        self.assertIn("không có tín hiệu phần cứng nào khả dụng", res.stderr)
+
+    def test_legacy_full_hardware_binding_falls_back_when_serial_disappears(self) -> None:
         # Legacy device bound with both signals (no signals file)
         legacy_full_hash = hashlib.sha256(b"legacy_aid|legacy_sno").hexdigest()
         (self.state_dir / "host_fingerprint").write_text(legacy_full_hash + "\n", encoding="utf-8")
@@ -571,8 +588,9 @@ class TestFingerprintHardwareVerificationAndCloneDetection(unittest.TestCase):
         host_fingerprint
         """
         res = self._run_sourced(cmd)
-        self.assertNotEqual(0, res.returncode, "Legacy full binding must fail closed when one hardware probe is unavailable")
-        self.assertIn("không khớp hoặc thiếu tín hiệu", res.stderr)
+        self.assertEqual(0, res.returncode, res.stderr)
+        expected_fallback = hashlib.sha256(b"legacy_aid|").hexdigest()
+        self.assertEqual(expected_fallback, res.stdout.strip())
 
     def test_run_aot_setup_uses_dynamic_provision_ref_for_msetup_url(self) -> None:
         setup_sh = (REPO_ROOT / "setup.sh").read_text(encoding="utf-8")
