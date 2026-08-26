@@ -16,8 +16,22 @@ FACE_TARGET_CONFIG = os.path.join(BASE_DIR, "Face_Target_File.txt")
 DB_COOKIES_FILE = os.path.join(BASE_DIR, "Data_Tong_Cookies.txt") 
 FOUND_RESULT_FILE = os.path.join(BASE_DIR, "Ket_Qua_Tim_Duoc.txt") 
 
-FACE_API_KEY = "ZP_FaceUnlock_0DLuB8BEqFpLM0bssjSPFqGwnRkgXm7p"
-COOKIE_API_KEY = "ZP_CookieChecker_gCvFnk1LOTPh2ysCcTcZhjCwuYVnwoYT"
+def get_face_api_key():
+    return (
+        os.environ.get("ZEROPOINT_FACE_API_KEY", "").strip()
+        or os.environ.get("FACE_API_KEY", "").strip()
+        or os.environ.get("SHOUKO_ZEROPOINT_FACE_API_KEY", "").strip()
+    )
+
+def get_cookie_api_key():
+    return (
+        os.environ.get("ZEROPOINT_COOKIE_API_KEY", "").strip()
+        or os.environ.get("COOKIE_API_KEY", "").strip()
+        or os.environ.get("SHOUKO_ZEROPOINT_COOKIE_API_KEY", "").strip()
+    )
+
+FACE_API_KEY = get_face_api_key()
+COOKIE_API_KEY = get_cookie_api_key()
 
 # LINK WEBHOOK MỚI CỦA BẠN ĐÃ ĐƯỢC DÁN VÀO ĐÂY
 SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbzA6mgOH2EYopubDRIZKxFNn_WJJXKAFq4ESonltsV3h8Xv_l9wc3YW_OTywKYvv11bZQ/exec"
@@ -53,14 +67,22 @@ def toggle_priority():
     except Exception as e: print(f"\n[!] LỖI LƯU TRẠNG THÁI: {e}")
 
 def face_balance():
+    api_key = get_face_api_key()
+    if not api_key:
+        print("[!] LỖI: Chưa cấu hình ZEROPOINT_FACE_API_KEY.")
+        return
     try:
-        res = requests.get(f"{FACE_URL}/balance", headers={"X-API-Key": FACE_API_KEY})
+        res = requests.get(f"{FACE_URL}/balance", headers={"X-API-Key": api_key})
         if res.status_code == 200: print(f"\n[+] Số dư khả dụng Face Unlock: ${res.json().get('effective', 0)}")
         else: print(f"[!] LỖI API: Mã {res.status_code}")
     except Exception as e: print(f"[!] LỖI KẾT NỐI: {e}")
 
 def force_clear_jobs():
-    headers = {"X-API-Key": FACE_API_KEY, "Content-Type": "application/json"}
+    api_key = get_face_api_key()
+    if not api_key:
+        print("[!] LỖI: Chưa cấu hình ZEROPOINT_FACE_API_KEY.")
+        return False
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
     print("\n[*] Đang quét các Job treo trên server ZeroPoint...")
     try:
         res = requests.get(f"{FACE_URL}/active", headers=headers)
@@ -84,6 +106,9 @@ def force_clear_jobs():
         return False
 
 def face_unlock():
+    api_key = get_face_api_key()
+    if not api_key:
+        return print("\n[!] LỖI: Chưa cấu hình ZEROPOINT_FACE_API_KEY.")
     target_file = FACE_ACC_FILE 
     if os.path.exists(FACE_TARGET_CONFIG):
         try:
@@ -99,7 +124,7 @@ def face_unlock():
         print(f"\n[*] Đang nhắm mục tiêu vào file: {target_file}")
         print(f"[*] Đang Submit lên Face Unlock (Luồng Ưu Tiên: {'BẬT' if is_prio else 'TẮT'})...")
         
-        headers = {"X-API-Key": FACE_API_KEY, "Content-Type": "application/json"}
+        headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
         res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": is_prio})
         
         if res.status_code == 409:
@@ -196,6 +221,9 @@ def face_unlock():
     except Exception as e: print(f"\n[!] LỖI HỆ THỐNG: {e}")
 
 def check_zeropoint_db():
+    api_key = get_face_api_key()
+    if not api_key:
+        return print("\n[!] LỖI: Chưa cấu hình ZEROPOINT_FACE_API_KEY.")
     target_file = FACE_ACC_FILE 
     if os.path.exists(FACE_TARGET_CONFIG):
         try:
@@ -210,7 +238,7 @@ def check_zeropoint_db():
         lines_count = len([line for line in acc_text.splitlines() if line.strip()])
         print(f"\n[*] Đang gửi {lines_count} acc lên ZeroPoint để soi Database...")
         
-        headers = {"X-API-Key": FACE_API_KEY, "Content-Type": "application/json"}
+        headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
         res = requests.post(f"{FACE_URL}/submit", headers=headers, json={"accounts": acc_text, "priority": False})
         
         if res.status_code == 409:
@@ -385,12 +413,15 @@ def sync_dead_accounts_direct(mapped_lines):
 
 
 def cookie_checker():
+    api_key = get_cookie_api_key()
+    if not api_key:
+        return print("\n[!] LỖI: Chưa cấu hình ZEROPOINT_COOKIE_API_KEY.")
     try:
         cookies_text = open(COOKIE_FILE, "r", encoding="utf-8").read().strip()
         if not cookies_text: return print(f"\n[!] LỖI: File trống.")
 
         print("\n[*] Đang Submit lên Cookie Checker...")
-        headers = {"X-API-Key": COOKIE_API_KEY, "Content-Type": "application/json"}
+        headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
         res = requests.post(f"{COOKIE_URL}/submit", headers=headers, json={"cookies": cookies_text})
         
         if res.status_code in [401, 403]: return print(f"[!] LỖI API: Key không hợp lệ.")
@@ -483,6 +514,9 @@ def cookie_checker():
     except Exception as e: print(f"\n[!] LỖI HỆ THỐNG: {e}")
 
 def check_all_data_tong():
+    api_key = get_cookie_api_key()
+    if not api_key:
+        return print("\n[!] LỖI: Chưa cấu hình ZEROPOINT_COOKIE_API_KEY.")
     if not os.path.exists(DB_COOKIES_FILE):
         return print(f"\n[!] LỖI: Không tìm thấy file Data Tổng. Hãy vào Mode 4 bấm 'y' để tải về trước!")
         
@@ -503,7 +537,7 @@ def check_all_data_tong():
         cookies_text = "\n".join(cookies_to_check)
         print(f"\n[*] Đang Submit {len(cookies_to_check)} Cookies từ Data Tổng lên Cookie Checker...")
         
-        headers = {"X-API-Key": COOKIE_API_KEY, "Content-Type": "application/json"}
+        headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
         res = requests.post(f"{COOKIE_URL}/submit", headers=headers, json={"cookies": cookies_text})
         
         if res.status_code in [401, 403]: return print(f"[!] LỖI API: Key không hợp lệ.")
