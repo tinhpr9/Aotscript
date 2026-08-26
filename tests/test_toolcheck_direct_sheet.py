@@ -1,8 +1,11 @@
 import importlib.machinery
 import importlib.util
 import os
+import sys
+import types
 from pathlib import Path
 from unittest import TestCase, mock
+from urllib.parse import quote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,10 +13,17 @@ TOOLCHECK_PATH = ROOT / "Toolcheck"
 
 
 def load_toolcheck():
+    fake_requests = types.SimpleNamespace(
+        get=mock.Mock(),
+        post=mock.Mock(),
+        Session=mock.Mock(),
+        utils=types.SimpleNamespace(quote=quote),
+    )
     loader = importlib.machinery.SourceFileLoader("toolcheck_direct_sheet_test", str(TOOLCHECK_PATH))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
+    with mock.patch.dict(sys.modules, {"requests": fake_requests}):
+        loader.exec_module(module)
     return module
 
 
