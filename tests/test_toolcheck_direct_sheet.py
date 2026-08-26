@@ -248,10 +248,12 @@ class ToolcheckDirectSheetTests(TestCase):
             cookie_file.write_text("live_val\n", encoding="utf-8")
             found_file = Path(tmpdir) / "Ket_Qua_Tim_Duoc.txt"
             found_file.write_text("live_user:live_pw:live_val\nface_user:face_pw:face_val\n", encoding="utf-8")
+            face_target = Path(tmpdir) / "Face_Target_File.txt"
 
             with mock.patch.dict(os.environ, env, clear=False), \
                  mock.patch.object(self.tool, "COOKIE_FILE", str(cookie_file)), \
                  mock.patch.object(self.tool, "FOUND_RESULT_FILE", str(found_file)), \
+                 mock.patch.object(self.tool, "FACE_TARGET_CONFIG", str(face_target)), \
                  mock.patch.object(self.tool, "BASE_DIR", tmpdir), \
                  mock.patch.object(self.tool, "SHEET_WEBHOOK", webhook_url), \
                  mock.patch.object(self.tool.requests, "get", side_effect=[fake_cookie_status, fake_cookie_dl_live, fake_cookie_dl_face]) as get_mock, \
