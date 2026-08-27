@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: tinhpr9/phanserver-delta
-          ref: 132ffa7248a309c6f8ec9cc2bd9bb91a646d0c8f
+          ref: b8d333c2b52cfbd412c99a31c1ce66cad47c4282
           path: phanserver-delta
           persist-credentials: false
 
@@ -52,8 +52,20 @@ jobs:
           workingDirectory: phanserver-delta
           command: deploy --config wrangler.jsonc
 
-      - name: Verify Worker health
+      - name: Verify deployed Worker boundary
         run: |
+          set -euo pipefail
           curl -fsSL --retry 5 --retry-delay 2 \
             https://phanserver-delta-worker.tinh1020pr.workers.dev/health \
             | grep -F '"status":"healthy"'
+          code="$(curl -sS -o /tmp/public-state.json -w '%{http_code}' \
+            https://phanserver-delta-worker.tinh1020pr.workers.dev/aot/hub/state)"
+          test "$code" = "404"
+          grep -F '"error":"not_found"' /tmp/public-state.json
+
+      - name: List configured Worker secret names
+        working-directory: phanserver-delta
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler secret list --config wrangler.jsonc
