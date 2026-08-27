@@ -1,0 +1,59 @@
+name: One-shot Deploy Phanserver Onboarding
+
+on:
+  push:
+    branches:
+      - ops/deploy-phanserver-onboarding
+    paths:
+      - '.github/workflows/deploy-phanserver-onboarding.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phanserver-delta-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout exact phanserver-delta commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: tinhpr9/phanserver-delta
+          ref: 132ffa7248a309c6f8ec9cc2bd9bb91a646d0c8f
+          path: phanserver-delta
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Run exact commit regression suite
+        working-directory: phanserver-delta
+        run: |
+          chmod +x tests/run_all_tests.sh
+          ./tests/run_all_tests.sh
+
+      - name: Deploy existing phanserver-delta Worker
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: phanserver-delta
+          command: deploy --config wrangler.jsonc
+
+      - name: Verify Worker health
+        run: |
+          curl -fsSL --retry 5 --retry-delay 2 \
+            https://phanserver-delta-worker.tinh1020pr.workers.dev/health \
+            | grep -F '"status":"healthy"'
