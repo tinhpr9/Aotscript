@@ -1,11 +1,6 @@
 name: One-shot Deploy Phanserver Onboarding
 
 on:
-  push:
-    branches:
-      - ops/deploy-phanserver-onboarding
-    paths:
-      - '.github/workflows/deploy-phanserver-onboarding.yml'
   workflow_dispatch:
 
 permissions:
