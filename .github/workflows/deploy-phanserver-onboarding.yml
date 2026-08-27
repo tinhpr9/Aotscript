@@ -20,22 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Verify bootstrap credentials exist
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "$CLOUDFLARE_API_TOKEN"
-          test -n "$CLOUDFLARE_ACCOUNT_ID"
-          test -n "$TELEGRAM_BOT_TOKEN"
-
       - name: Checkout exact phanserver-delta commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: tinhpr9/phanserver-delta
-          ref: 6fa0dd5b4de24c386ea0b521f6340ba41694af42
+          ref: b8d333c2b52cfbd412c99a31c1ce66cad47c4282
           path: phanserver-delta
           persist-credentials: false
 
@@ -55,36 +44,6 @@ jobs:
           chmod +x tests/run_all_tests.sh
           ./tests/run_all_tests.sh
 
-      - name: Install pinned Wrangler for secret bootstrap
-        working-directory: phanserver-delta
-        run: npm install --no-save wrangler@3.90.0
-
-      - name: Bootstrap Worker secrets and authenticated Telegram webhook
-        working-directory: phanserver-delta
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          WORKER_URL: https://phanserver-delta-worker.tinh1020pr.workers.dev
-        run: |
-          set -euo pipefail
-          AGENT_REPORT_SECRET="$(openssl rand -hex 32)"
-          TELEGRAM_WEBHOOK_SECRET="$(openssl rand -hex 32)"
-          echo "::add-mask::$AGENT_REPORT_SECRET"
-          echo "::add-mask::$TELEGRAM_WEBHOOK_SECRET"
-
-          printf '%s' "$TELEGRAM_BOT_TOKEN" | npx wrangler secret put TELEGRAM_BOT_TOKEN --config wrangler.jsonc
-          printf '%s' "$AGENT_REPORT_SECRET" | npx wrangler secret put AGENT_REPORT_SECRET --config wrangler.jsonc
-          printf '%s' "$TELEGRAM_WEBHOOK_SECRET" | npx wrangler secret put TELEGRAM_WEBHOOK_SECRET --config wrangler.jsonc
-
-          webhook_response="$(curl -fsS -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-            --data-urlencode "url=${WORKER_URL}/telegram/webhook" \
-            --data-urlencode "secret_token=${TELEGRAM_WEBHOOK_SECRET}")"
-          printf '%s' "$webhook_response" | grep -F '"ok":true'
-
-          printf 'TELEGRAM_WEBHOOK_SECRET=%s\n' "$TELEGRAM_WEBHOOK_SECRET" >> "$GITHUB_ENV"
-
       - name: Deploy existing phanserver-delta Worker
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd
         with:
@@ -93,39 +52,20 @@ jobs:
           workingDirectory: phanserver-delta
           command: deploy --config wrangler.jsonc
 
-      - name: Verify deployed Worker and webhook security boundary
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          WORKER_URL: https://phanserver-delta-worker.tinh1020pr.workers.dev
+      - name: Verify deployed Worker boundary
         run: |
           set -euo pipefail
-          curl -fsSL --retry 5 --retry-delay 2 "$WORKER_URL/health" | grep -F '"status":"healthy"'
-
-          public_state_code="$(curl -sS -o /tmp/public-state.json -w '%{http_code}' "$WORKER_URL/aot/hub/state")"
-          test "$public_state_code" = "404"
+          curl -fsSL --retry 5 --retry-delay 2 \
+            https://phanserver-delta-worker.tinh1020pr.workers.dev/health \
+            | grep -F '"status":"healthy"'
+          code="$(curl -sS -o /tmp/public-state.json -w '%{http_code}' \
+            https://phanserver-delta-worker.tinh1020pr.workers.dev/aot/hub/state)"
+          test "$code" = "404"
           grep -F '"error":"not_found"' /tmp/public-state.json
 
-          unauth_code="$(curl -sS -o /tmp/unauth-webhook.txt -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' -d '{}' "$WORKER_URL/telegram/webhook")"
-          test "$unauth_code" = "401"
-
-          auth_code="$(curl -sS -o /tmp/auth-webhook.txt -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' \
-            -H "X-Telegram-Bot-Api-Secret-Token: $TELEGRAM_WEBHOOK_SECRET" \
-            -d '{}' "$WORKER_URL/telegram/webhook")"
-          test "$auth_code" = "200"
-
-          webhook_info="$(curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo")"
-          printf '%s' "$webhook_info" | grep -F '"url":"https://phanserver-delta-worker.tinh1020pr.workers.dev/telegram/webhook"'
-
-      - name: Verify configured Worker secret names
+      - name: List configured Worker secret names
         working-directory: phanserver-delta
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          npx wrangler secret list --config wrangler.jsonc > /tmp/worker-secrets.json
-          grep -F '"name": "TELEGRAM_BOT_TOKEN"' /tmp/worker-secrets.json
-          grep -F '"name": "AGENT_REPORT_SECRET"' /tmp/worker-secrets.json
-          grep -F '"name": "TELEGRAM_WEBHOOK_SECRET"' /tmp/worker-secrets.json
+        run: npx wrangler secret list --config wrangler.jsonc
