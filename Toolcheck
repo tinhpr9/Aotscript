@@ -17,7 +17,7 @@ DB_COOKIES_FILE = os.path.join(BASE_DIR, "Data_Tong_Cookies.txt")
 FOUND_RESULT_FILE = os.path.join(BASE_DIR, "Ket_Qua_Tim_Duoc.txt") 
 
 FACE_API_KEY = "ZP_FaceUnlock_0DLuB8BEqFpLM0bssjSPFqGwnRkgXm7p"
-COOKIE_API_KEY = "ZP_CookieChecker_gCvFnk1LOTPh2ysCcTcZhjCwuYVnwoYT"
+COOKIE_API_KEY = "ZP_CookieChecker_kJsuxA5ChWOboN3TsV1XzY4Jy7aBU1rJ"
 
 # LINK WEBHOOK MỚI CỦA BẠN ĐÃ ĐƯỢC DÁN VÀO ĐÂY
 SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbzA6mgOH2EYopubDRIZKxFNn_WJJXKAFq4ESonltsV3h8Xv_l9wc3YW_OTywKYvv11bZQ/exec"
